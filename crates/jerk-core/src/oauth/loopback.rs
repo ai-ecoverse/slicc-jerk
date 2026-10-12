@@ -122,10 +122,7 @@ pub fn run(
 
     if config.relay.is_some() {
         if let Some(received_nonce) = result.params.get("nonce") {
-            let expected = relay::nonce_from_state(&state).map_err(|e| OAuthError {
-                exit: Exit::Error,
-                message: e.to_string(),
-            })?;
+            let expected = relay::nonce_from_bytes(random_16);
             relay::verify_nonce(&expected, received_nonce).map_err(|e| OAuthError {
                 exit: Exit::Error,
                 message: e.to_string(),
@@ -195,38 +192,23 @@ fn wait_for_callback(
 
         let stream = match listener.accept() {
             Ok((s, _)) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(_) => {
                 std::thread::sleep(POLL_INTERVAL);
                 continue;
-            }
-            Err(e) => {
-                return Err(OAuthError {
-                    exit: Exit::Error,
-                    message: format!("accept failed: {e}"),
-                })
             }
         };
 
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
         let mut reader = BufReader::new(&stream);
         let mut request_line = String::new();
-        if reader.read_line(&mut request_line).is_err() {
-            continue;
-        }
+        let _ = reader.read_line(&mut request_line);
 
         let parts: Vec<&str> = request_line.split_whitespace().collect();
-        if parts.len() < 2 {
+        if parts.len() < 2 || parts[0] != "GET" {
             continue;
         }
 
-        let method = parts[0];
-        let path = parts[1];
-
-        if method != "GET" {
-            continue;
-        }
-
-        let full_url = format!("http://127.0.0.1{path}");
+        let full_url = format!("http://127.0.0.1{}", parts[1]);
 
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

@@ -82,6 +82,10 @@ const HEX: [char; 16] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
 ];
 
+pub fn nonce_from_bytes(bytes: &[u8; 16]) -> String {
+    hex_encode(bytes)
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
