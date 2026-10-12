@@ -1,4 +1,6 @@
 use serde_json::Value;
+#[cfg(target_os = "wasi")]
+use std::io::{Read, Write};
 
 pub trait Sealed: Send + Sync {
     fn request(&self, body: &Value) -> Result<Value, SealedError>;
