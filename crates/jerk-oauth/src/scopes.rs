@@ -19,7 +19,7 @@ const IMPLIED_SCOPES: &[(&str, &[&str])] = &[
 const PRIVILEGE_LADDER: &[(&str, &[&str])] =
     &[("admin:", &["write:", "read:"]), ("write:", &["read:"])];
 
-fn normalize_scopes(raw: &str) -> BTreeSet<String> {
+pub fn normalize_scopes(raw: &str) -> BTreeSet<String> {
     raw.split(|c: char| c.is_whitespace() || c == ',')
         .map(|s| s.trim().to_ascii_lowercase())
         .filter(|s| !s.is_empty())

@@ -61,7 +61,9 @@ test('jerk list shows the built-in providers and finds their CLIs on PATH', () =
 
 test('a user file replaces a built-in provider as a unit', () => {
   const sb = sandbox();
-  sb.writeUser('[providers.github]\nenv = ["MY_GH"]\noauth = { mode = "device" }\n');
+  sb.writeUser(
+    '[providers.github]\nenv = ["MY_GH"]\n[providers.github.oauth]\nmode = "device"\nflow = "pkce"\nauthorize_url = "https://example.com/device"\ntoken_url = "https://example.com/token"\nclient_id = "c"\nredirect_uri = "http://127.0.0.1:1/cb"\n[providers.github.oauth.capture]\nat = "request"\nfrom = "query"\nparam = "code"\n'
+  );
   const json = JSON.parse(sb.jerk(['list', '--json']).stdout);
   const github = json.find((p) => p.provider === 'github');
   assert.equal(github.source, 'user');

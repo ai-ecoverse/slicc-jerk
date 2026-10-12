@@ -12,7 +12,6 @@ pub mod oauth;
 pub mod output;
 pub mod paths;
 pub mod run;
-pub mod scopes;
 pub mod source;
 pub mod state;
 pub mod template;

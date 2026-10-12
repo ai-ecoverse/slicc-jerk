@@ -1,10 +1,11 @@
 use crate::cli::{usage, Ctx, Io};
 use crate::config::{parse_duration, parse_version, Entry, Verb};
 use crate::exit::Exit;
+use crate::oauth;
 use crate::output::{choose, Shown};
 use crate::run::{Opts, Outcome};
 use crate::template::{render_args, render_text, Vars};
-use crate::{extract, mask, scopes, source, state, time, which};
+use crate::{extract, mask, source, state, time, which};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -201,6 +202,7 @@ pub struct Token {
     pub value: String,
     pub source: &'static str,
     pub expires_at: Option<u64>,
+    pub scope: Option<String>,
 }
 
 pub fn fetch(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<Token, Exit> {
@@ -209,16 +211,13 @@ pub fn fetch(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Resu
             expires_at: None,
             value: value.to_string(),
             source: "env",
+            scope: None,
         });
     }
-    let Some(verb) = &entry.provider.get else {
-        let _ = writeln!(
-            io.err,
-            "jerk {} get: OAuth sign-in is not implemented yet",
-            entry.id
-        );
-        return Err(Exit::Unsupported);
-    };
+    if let Some(oauth_config) = &entry.oauth_config {
+        return fetch_oauth(entry, oauth_config, vars, ctx, io);
+    }
+    let verb = entry.provider.get.as_ref().expect("validated");
     if let Some(read) = &verb.read {
         return read_token(entry, read, vars, ctx, io);
     }
@@ -257,6 +256,7 @@ pub fn fetch(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Resu
         value,
         source: "cli",
         expires_at,
+        scope: None,
     })
 }
 
@@ -277,11 +277,89 @@ fn read_token(
             value,
             source: "file",
             expires_at: None,
+            scope: None,
         }),
         None => {
             let _ = writeln!(io.err, "jerk: {}: no token in {}", entry.id, path.display());
             sign_in_hint(entry, io);
             Err(Exit::SignIn)
+        }
+    }
+}
+
+fn fetch_oauth(
+    entry: &Entry,
+    config: &jerk_oauth::config::OAuthConfig,
+    _vars: &Vars,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<Token, Exit> {
+    let user = entry
+        .provider
+        .params
+        .get("user")
+        .map(String::as_str)
+        .unwrap_or("default");
+    let host = ctx.oauth;
+    let grants = host.grants(entry.provider.store.as_deref());
+    let grant = grants.get(&entry.id, user);
+    let Some(grant) = grant else {
+        sign_in_hint(entry, io);
+        return Err(Exit::SignIn);
+    };
+    if let Some(at) = &grant.access_token {
+        let fresh = grant
+            .expires_at
+            .map(|exp| ctx.now + 300 < exp)
+            .unwrap_or(true);
+        if fresh {
+            return Ok(Token {
+                value: at.clone(),
+                source: "oauth",
+                expires_at: grant.expires_at,
+                scope: grant.scope.clone(),
+            });
+        }
+        sign_in_hint(entry, io);
+        return Err(Exit::SignIn);
+    }
+    if grant.refresh_token.is_empty() {
+        sign_in_hint(entry, io);
+        return Err(Exit::SignIn);
+    }
+    match oauth::oauth_refresh(config, &grant.refresh_token, host, ctx.now) {
+        Ok(token) => {
+            if let Some(new_rt) = &token.refresh_token {
+                let updated = crate::grants::Grant {
+                    provider: entry.id.clone(),
+                    user: user.to_string(),
+                    refresh_token: new_rt.clone(),
+                    access_token: None,
+                    expires_at: token.expires_at,
+                    scope: token.scope.clone(),
+                };
+                if let Err(e) = grants.store(&updated) {
+                    let _ = writeln!(
+                        io.err,
+                        "jerk: {}: cannot store rotated grant: {e}",
+                        entry.id
+                    );
+                }
+            }
+            Ok(Token {
+                value: token.access_token,
+                source: "oauth",
+                expires_at: token.expires_at,
+                scope: token.scope.or(grant.scope),
+            })
+        }
+        Err(e) if e.exit == Exit::SignIn => {
+            sign_in_hint(entry, io);
+            Err(Exit::SignIn)
+        }
+        Err(e) => {
+            let _ = writeln!(io.err, "jerk: {}: refresh failed: {e}", entry.id);
+            Err(e.exit)
         }
     }
 }
@@ -329,7 +407,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
             Ok(token) => token,
             Err(Exit::SignIn) if login && !signed_in => {
                 signed_in = true;
-                let code = create_run(entry, &vars, ctx, io);
+                let code = do_create(entry, &vars, ctx, io);
                 if code != Exit::Ok {
                     return code;
                 }
@@ -340,13 +418,17 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
         let Some(requested) = requested else {
             break (token, None);
         };
-        let scopes_now = granted(entry, &token, &vars, ctx, io);
-        if scopes::satisfied(scopes_now.as_deref(), requested) {
+        let scopes_now = if token.scope.is_some() {
+            token.scope.clone()
+        } else {
+            granted(entry, &token, &vars, ctx, io)
+        };
+        if jerk_oauth::scopes::scopes_satisfied(scopes_now.as_deref(), requested) {
             break (token, scopes_now);
         }
         if login && !signed_in {
             signed_in = true;
-            let code = create_run(entry, &vars, ctx, io);
+            let code = do_create(entry, &vars, ctx, io);
             if code != Exit::Ok {
                 return code;
             }
@@ -434,6 +516,14 @@ pub fn list(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
     Exit::Ok
 }
 
+fn do_create(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit {
+    if entry.oauth_config.is_some() && entry.provider.create.is_none() {
+        let flags = Flags::default();
+        return oauth_create_cmd(entry, vars, &flags, ctx, io);
+    }
+    create_run(entry, vars, ctx, io)
+}
+
 fn create_run(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit {
     let verb = match need(entry, "create", &entry.provider.create, io) {
         Ok(verb) => verb,
@@ -459,13 +549,8 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         Ok(vars) => vars,
         Err(e) => return usage(&e, io),
     };
-    if entry.provider.create.is_none() && entry.provider.oauth.is_some() {
-        let _ = writeln!(
-            io.err,
-            "jerk {} create: OAuth sign-in is not implemented yet",
-            entry.id
-        );
-        return Exit::Unsupported;
+    if entry.provider.create.is_none() && entry.oauth_config.is_some() {
+        return oauth_create_cmd(entry, &vars, &flags, ctx, io);
     }
     if let Some(verb) = entry.provider.create.as_ref().filter(|v| v.parse.is_some()) {
         return mint(entry, verb, &vars, &flags, ctx, io);
@@ -477,7 +562,7 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         };
         if let Ok(token) = fetch(entry, &vars, ctx, &mut quiet) {
             let covered = match flags.value("--scope") {
-                Some(requested) => scopes::satisfied(
+                Some(requested) => jerk_oauth::scopes::scopes_satisfied(
                     granted(entry, &token, &vars, ctx, &mut quiet).as_deref(),
                     requested,
                 ),
@@ -498,6 +583,84 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         let _ = writeln!(io.out, "{}: signed in", entry.id);
     }
     code
+}
+
+fn oauth_create_cmd(
+    entry: &Entry,
+    vars: &Vars,
+    flags: &Flags,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Exit {
+    let config = entry.oauth_config.as_ref().unwrap();
+    let scope = flags
+        .value("--scope")
+        .or(vars.get("scope").map(String::as_str));
+    let user = vars.get("user").map(String::as_str).unwrap_or("default");
+    let host = ctx.oauth;
+
+    if !flags.has("--force") {
+        let grants = host.grants(entry.provider.store.as_deref());
+        if let Some(g) = grants.get(&entry.id, user) {
+            let mut quiet = Io {
+                out: &mut std::io::sink(),
+                err: &mut std::io::sink(),
+            };
+            if let Ok(tok) = fetch_oauth(entry, config, vars, ctx, &mut quiet) {
+                let covered = match scope {
+                    Some(requested) => {
+                        let have = tok.scope.or(g.scope);
+                        jerk_oauth::scopes::scopes_satisfied(have.as_deref(), requested)
+                    }
+                    None => true,
+                };
+                if covered {
+                    let _ = writeln!(
+                        io.out,
+                        "{}: already signed in; use --force to sign in again",
+                        entry.id
+                    );
+                    return Exit::Ok;
+                }
+            }
+        }
+    }
+
+    let token = match oauth::oauth_create(config, scope, host, ctx.now, ctx.random, io.err) {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = writeln!(io.err, "jerk: {}: {e}", entry.id);
+            return e.exit;
+        }
+    };
+
+    let grants = host.grants(entry.provider.store.as_deref());
+    let grant = if token.refresh_token.is_some() {
+        crate::grants::Grant {
+            provider: entry.id.clone(),
+            user: user.to_string(),
+            refresh_token: token.refresh_token.clone().unwrap_or_default(),
+            access_token: None,
+            expires_at: token.expires_at,
+            scope: token.scope.clone(),
+        }
+    } else {
+        crate::grants::Grant {
+            provider: entry.id.clone(),
+            user: user.to_string(),
+            refresh_token: String::new(),
+            access_token: Some(token.access_token.clone()),
+            expires_at: token.expires_at,
+            scope: token.scope.clone(),
+        }
+    };
+    if let Err(e) = grants.store(&grant) {
+        let _ = writeln!(io.err, "jerk: {}: cannot store grant: {e}", entry.id);
+        return Exit::Error;
+    }
+
+    let _ = writeln!(io.out, "{}: signed in", entry.id);
+    Exit::Ok
 }
 
 fn check_version(entry: &Entry, verb: &Verb, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<(), Exit> {
@@ -632,6 +795,9 @@ pub fn drop(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
         Ok(vars) => vars,
         Err(e) => return usage(&e, io),
     };
+    if entry.oauth_config.is_some() && entry.provider.drop.is_none() {
+        return oauth_drop_cmd(entry, &vars, &flags, ctx, io);
+    }
     let verb = match need(entry, "drop", &entry.provider.drop, io) {
         Ok(verb) => verb,
         Err(code) => return code,
@@ -667,4 +833,43 @@ pub fn drop(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
         }
         Err(code) => code,
     }
+}
+
+fn oauth_drop_cmd(
+    entry: &Entry,
+    _vars: &Vars,
+    flags: &Flags,
+    ctx: &mut Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Exit {
+    let user = entry
+        .provider
+        .params
+        .get("user")
+        .map(String::as_str)
+        .unwrap_or("default");
+    if !flags.has("--yes") {
+        if !ctx.stdin_terminal {
+            return usage(
+                &format!("{} drop: pass --yes when not on a terminal", entry.id),
+                io,
+            );
+        }
+        let _ = write!(io.err, "Drop {}? [y/N] ", entry.id);
+        let _ = io.err.flush();
+        let mut answer = String::new();
+        let _ = ctx.input.read_line(&mut answer);
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            let _ = writeln!(io.err, "jerk: cancelled");
+            return Exit::Error;
+        }
+    }
+    let host = ctx.oauth;
+    let grants = host.grants(entry.provider.store.as_deref());
+    if let Err(e) = grants.remove(&entry.id, user) {
+        let _ = writeln!(io.err, "jerk: {}: cannot remove grant: {e}", entry.id);
+        return Exit::Error;
+    }
+    let _ = writeln!(io.out, "{}: dropped", entry.id);
+    Exit::Ok
 }

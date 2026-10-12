@@ -46,11 +46,16 @@ pub struct Ctx<'a> {
     pub stdout_terminal: bool,
     pub input: &'a mut dyn BufRead,
     pub random: &'a dyn Fn(&mut [u8]),
+    pub oauth: &'a dyn crate::oauth::OAuthHost,
 }
 
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
     let env = Env::from_process();
     let stdin = std::io::stdin();
+    #[cfg(not(target_os = "wasi"))]
+    let oauth_host = crate::oauth::DefaultOAuthHost;
+    #[cfg(target_os = "wasi")]
+    let oauth_host = crate::oauth::NoOAuthHost;
     let mut ctx = Ctx {
         env: &env,
         exists: &which::is_file,
@@ -60,6 +65,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
         stdout_terminal: std::io::stdout().is_terminal(),
         input: &mut stdin.lock(),
         random: &crate::fnox::os_random,
+        oauth: &oauth_host,
     };
     run_with(args, &mut ctx, &mut Io { out, err })
 }

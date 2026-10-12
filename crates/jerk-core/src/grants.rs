@@ -5,6 +5,8 @@ pub struct Grant {
     pub provider: String,
     pub user: String,
     pub refresh_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_token: Option<String>,
     pub expires_at: Option<u64>,
     pub scope: Option<String>,
 }

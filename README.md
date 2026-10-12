@@ -4,7 +4,7 @@ Get, list, create and drop OAuth tokens across operating systems and inside SLIC
 
 `jerk` (as in an ice-cream jerk) asks `gh`, `npm`, `wrangler`, `aio` and friends for their tokens, so that adding a provider is configuration, not code. It feeds [fnox](https://fnox.jdx.dev) as a `command` lease backend on a real machine. Inside seven, tokens go to the vault's sealed store, and programs only ever see placeholders.
 
-**Status:** being built. `jerk list`, `jerk config`, and `get`, `list`, `create` and `drop` for providers backed by a CLI (gh, npm, wrangler, aio) work, and so do `lease`, `drop --lease`, `sync` and `config fnox`. OAuth providers and `intercept` print `not implemented yet` and exit 5 until they land.
+**Status:** being built. `jerk list`, `jerk config`, and `get`, `list`, `create` and `drop` for providers backed by a CLI (gh, npm, wrangler, aio) work, and so do `lease`, `drop --lease`, `sync` and `config fnox`. OAuth providers (loopback, auto, device modes) work for `get`, `create` and `drop`. `intercept` prints `not implemented yet` and exits 5 until it lands.
 
 `jerk <provider> get` prints the token only to a terminal, or with `--reveal`. To a pipe it prints a masked form such as `gho_…1234`. A token already in the provider's first `env` variable (`GH_TOKEN`, …) wins over the CLI, as gh does. `--scope` checks the granted scopes, with GitHub's implied scopes understood, and exits 3 when they don't cover it. jerk never signs in by itself: `get` exits 3, and `get --login` on a terminal runs `create` first. The provider's CLI runs without the provider's own token variables in its environment.
 
@@ -57,6 +57,34 @@ drop = { run = ["gh", "auth", "logout", "--hostname", "{host}", "--user", "{id}"
 ```
 
 Commands are argument lists, never shell strings. `{name}` placeholders come from `params` or from `scope`, `id`, `name`, `expires` and `user`. `jerk config check` validates every layer, `jerk config show <provider>` prints the provider that wins, and `jerk config path` shows where each layer lives.
+
+<<<<<<< HEAD
+## OAuth providers
+
+A provider can use an `[oauth]` block instead of CLI commands. jerk handles the OAuth flow itself: PKCE loopback, device code, or auto (loopback when the port binds, otherwise exit 4).
+
+```toml
+[providers.xai]
+name = "xAI Grok"
+env = ["XAI_API_KEY"]
+domains = ["api.x.ai"]
+[providers.xai.oauth]
+mode = "auto"
+flow = "pkce"
+authorize_url = "https://auth.x.ai/oauth2/auth?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&code_challenge={code_challenge}&code_challenge_method=S256&state={state}"
+token_url = "https://auth.x.ai/oauth2/token"
+client_id = "b1a00492-073a-47ea-816f-4c329264a828"
+redirect_uri = "http://127.0.0.1:56121/callback"
+scope = "openid profile email offline_access grok-cli:access api:access"
+[providers.xai.oauth.capture]
+at = "request"
+from = "query"
+param = "code"
+```
+
+`jerk xai create` opens the sign-in in the system browser. The refresh token goes to the OS keyring (service `slicc-jerk`, account `xai/default`), or to a file store (mode 0600) with `store = "file"`. `jerk xai get` refreshes the token at `token_url` and prints the access token by the same rules as CLI providers. `jerk xai drop --yes` removes the grant.
+
+The `device` mode sends the first request to `authorize_url` as the device authorization endpoint, prints the verification URI and user code on stderr, then polls `token_url`. `intercept` and `popup` modes exit 5 until they land.
 
 ## fnox
 
