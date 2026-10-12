@@ -21,7 +21,7 @@ params = { registry = "//registry.npmjs.org/", expires = "1", name = "jerk" }
 lease_via = "get"
 get = { read = { ini = "${NPM_CONFIG_USERCONFIG:-~/.npmrc}", key = "{registry}:_authToken" } }
 list = { run = ["npm", "token", "list", "--json"], parse = "json:" }
-create = { run = ["npm", "token", "create", "--name", "{name}", "--expires", "{expires}", "--json"], parse = "json:/token", id = "json:/key", interactive = true }
+create = { run = ["npm", "token", "create", "--name", "{name}", "--expires", "{expires}", "--json"], parse = "json:/token", interactive = true, min_version = "11.6.3", lookup = { run = ["npm", "token", "list", "--json"], prefix = "/token", id = "/key" } }
 drop = { run = ["npm", "token", "revoke", "{id}"] }
 
 [providers.cloudflare]
