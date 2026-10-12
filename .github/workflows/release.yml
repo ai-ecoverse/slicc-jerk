@@ -15,8 +15,11 @@ concurrency:
 
 jobs:
   plan:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     env:
       LEFTHOOK: '0'
     outputs:
@@ -37,17 +40,22 @@ jobs:
         id: plan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DRY_RUN: ${{ github.event_name == 'pull_request' }}
-        run: |
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "version=0.0.0-dry-run.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-          else
-            node scripts/release-plan.mjs
-          fi
+        run: node scripts/release-plan.mjs
+
+  dry-run:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - name: Plan
+        id: plan
+        run: echo "version=0.0.0-dry-run.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
 
   build:
-    needs: plan
-    if: needs.plan.outputs.version != ''
+    needs: [plan, dry-run]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (needs.plan.outputs.version || needs.dry-run.outputs.version) != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -83,7 +91,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
-      JERK_VERSION: ${{ needs.plan.outputs.version }}
+      JERK_VERSION: ${{ needs.plan.outputs.version || needs.dry-run.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -116,8 +124,39 @@ jobs:
           path: out/${{ matrix.asset }}
           retention-days: 7
 
+  package-check:
+    needs: [dry-run, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LEFTHOOK: '0'
+      VERSION: ${{ needs.dry-run.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          path: artifacts/build
+
+      - run: node scripts/release-collect.mjs --version "$VERSION"
+
+      - run: node scripts/npm-stage.mjs --version "$VERSION"
+
+      - run: node scripts/npm-publish.mjs --dry-run
+
   release:
     needs: [plan, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -129,7 +168,6 @@ jobs:
     env:
       LEFTHOOK: '0'
       VERSION: ${{ needs.plan.outputs.version }}
-      DRY_RUN: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -150,17 +188,11 @@ jobs:
 
       - run: node scripts/npm-stage.mjs --version "$VERSION"
 
-      - name: Check npm packages
-        if: env.DRY_RUN == 'true'
-        run: node scripts/npm-publish.mjs --dry-run
-
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
-        if: env.DRY_RUN != 'true'
         with:
           subject-checksums: artifacts/release/SHA256SUMS
 
       - name: Release
-        if: env.DRY_RUN != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLICC_NPM_PUBLISH: ${{ vars.SLICC_NPM_PUBLISH }}
