@@ -75,6 +75,9 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix || needs.dry-run.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     env:
       JERK_VERSION: ${{ needs.plan.outputs.version || needs.dry-run.outputs.version }}
     steps:
