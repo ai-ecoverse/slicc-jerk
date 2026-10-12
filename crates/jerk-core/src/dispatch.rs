@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const LINK_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Default)]
 pub struct Flags {
@@ -143,11 +144,18 @@ pub fn run_verb_env(
     let run: &[String] = verb.run.as_deref().unwrap_or(&[]);
     let path = program(entry, ctx, io)?;
     let args = render_args(run.get(1..).unwrap_or(&[]), vars);
+    let linked = interactive && ctx.via_link;
+    let interactive = interactive && !ctx.via_link;
+    let fallback = if linked {
+        LINK_TIMEOUT
+    } else {
+        DEFAULT_TIMEOUT
+    };
     let timeout = verb
         .timeout
         .as_deref()
         .and_then(parse_duration)
-        .or((!interactive).then_some(DEFAULT_TIMEOUT));
+        .or((!interactive).then_some(fallback));
     let opts = Opts {
         interactive,
         capture: verb.parse.is_some(),
@@ -508,7 +516,11 @@ pub fn list(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
             .collect::<Vec<_>>()),
     };
     let text = if flags.has("--json") {
-        value.to_string()
+        let items = match value {
+            serde_json::Value::Array(items) => items,
+            other => vec![other],
+        };
+        json!({ "items": items }).to_string()
     } else {
         serde_json::to_string_pretty(&value).unwrap_or_default()
     };

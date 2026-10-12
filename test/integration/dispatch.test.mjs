@@ -64,7 +64,7 @@ test('list redacts tokens', () => {
   fakeGh(sb);
   const res = sb.jerk(['github', 'list', '--json']);
   assert.equal(res.status, 0, res.stderr);
-  assert.deepEqual(JSON.parse(res.stdout)['github.com'][0].token, 'gho_…1234');
+  assert.deepEqual(JSON.parse(res.stdout).items[0]['github.com'][0].token, 'gho_…1234');
   assert.ok(!res.stdout.includes(TOKEN));
 });
 
