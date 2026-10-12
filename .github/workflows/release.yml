@@ -1,0 +1,167 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LEFTHOOK: '0'
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Plan
+        id: plan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'pull_request' }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "version=0.0.0-dry-run.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          else
+            node scripts/release-plan.mjs
+          fi
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.version != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            asset: jerk-darwin-arm64
+            file: jerk
+          - runner: macos-latest
+            target: x86_64-apple-darwin
+            asset: jerk-darwin-x64
+            file: jerk
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            asset: jerk-linux-arm64
+            file: jerk
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            asset: jerk-linux-x64
+            file: jerk
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            asset: jerk-win32-arm64.exe
+            file: jerk.exe
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: jerk-win32-x64.exe
+            file: jerk.exe
+          - runner: ubuntu-latest
+            target: wasm32-wasip1
+            asset: jerk.wasm
+            file: jerk.wasm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      JERK_VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Toolchain
+        shell: bash
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install
+          rustup target add "${{ matrix.target }}"
+
+      - name: Build
+        shell: bash
+        run: |
+          cargo build --release --locked --target "${{ matrix.target }}" -p jerk
+          mkdir -p out
+          cp "target/${{ matrix.target }}/release/${{ matrix.file }}" "out/${{ matrix.asset }}"
+
+      - name: Check the version
+        if: matrix.target != 'wasm32-wasip1' && matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: test "$("out/${{ matrix.asset }}" --version)" = "jerk $JERK_VERSION"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ matrix.asset }}
+          path: out/${{ matrix.asset }}
+          retention-days: 7
+
+  release:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+      attestations: write
+    env:
+      LEFTHOOK: '0'
+      VERSION: ${{ needs.plan.outputs.version }}
+      DRY_RUN: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          path: artifacts/build
+
+      - run: node scripts/release-collect.mjs --version "$VERSION"
+
+      - run: node scripts/npm-stage.mjs --version "$VERSION"
+
+      - name: Check npm packages
+        if: env.DRY_RUN == 'true'
+        run: node scripts/npm-publish.mjs --dry-run
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        if: env.DRY_RUN != 'true'
+        with:
+          subject-checksums: artifacts/release/SHA256SUMS
+
+      - name: Release
+        if: env.DRY_RUN != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLICC_NPM_PUBLISH: ${{ vars.SLICC_NPM_PUBLISH }}
+        run: npx semantic-release
