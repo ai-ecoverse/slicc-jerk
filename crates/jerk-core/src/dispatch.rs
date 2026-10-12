@@ -1,5 +1,5 @@
 use crate::cli::{usage, Ctx, Io};
-use crate::config::{parse_duration, Entry, Verb};
+use crate::config::{parse_duration, parse_version, Entry, Verb};
 use crate::exit::Exit;
 use crate::output::{choose, Shown};
 use crate::run::{Opts, Outcome};
@@ -500,6 +500,62 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
     code
 }
 
+fn check_version(entry: &Entry, verb: &Verb, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<(), Exit> {
+    let Some(min) = verb.min_version.as_deref().and_then(parse_version) else {
+        return Ok(());
+    };
+    let probe = Verb {
+        run: Some(vec![
+            entry.provider.requires.clone().unwrap_or_default(),
+            "--version".to_string(),
+        ]),
+        ..Verb::default()
+    };
+    let ran = run_verb(entry, "version", &probe, &Vars::new(), false, ctx, io)?;
+    match parse_version(&ran.stdout) {
+        Some(found) if found >= min => Ok(()),
+        found => {
+            let shown = found
+                .map(|(a, b, c)| format!("{a}.{b}.{c}"))
+                .unwrap_or_else(|| "unknown".to_string());
+            let (a, b, c) = min;
+            let _ = writeln!(
+                io.err,
+                "jerk: {}: {} {shown} is too old; this needs {a}.{b}.{c} or newer",
+                entry.id,
+                entry.provider.requires.as_deref().unwrap_or_default()
+            );
+            Err(Exit::Unavailable)
+        }
+    }
+}
+
+fn lookup_id(
+    entry: &Entry,
+    verb: &Verb,
+    token: &str,
+    vars: &Vars,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Option<String> {
+    let lookup = verb.lookup.as_ref()?;
+    let probe = Verb {
+        run: Some(lookup.run.clone()),
+        ..Verb::default()
+    };
+    let ran = run_verb(entry, "lookup", &probe, vars, false, ctx, io).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(ran.stdout.trim()).ok()?;
+    let items = doc.pointer(&lookup.items)?.as_array()?;
+    items
+        .iter()
+        .filter(|item| {
+            item.pointer(&lookup.prefix)
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|p| !p.is_empty() && token.starts_with(p))
+        })
+        .find_map(|item| item.pointer(&lookup.id)?.as_str().map(String::from))
+}
+
 pub fn mint_token(
     entry: &Entry,
     verb: &Verb,
@@ -508,6 +564,7 @@ pub fn mint_token(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Result<(String, Option<String>), Exit> {
+    check_version(entry, verb, ctx, io)?;
     let ran = run_verb(entry, "create", verb, vars, interactive, ctx, io)?;
     let Some(token) = extract::token(&ran.stdout, verb.parse.as_deref()) else {
         let _ = writeln!(io.err, "jerk: {}: create printed no token", entry.id);
@@ -517,7 +574,8 @@ pub fn mint_token(
         .id
         .as_deref()
         .and_then(|p| extract::json(&ran.stdout, p))
-        .and_then(|v| v.as_str().map(String::from));
+        .and_then(|v| v.as_str().map(String::from))
+        .or_else(|| lookup_id(entry, verb, &token, vars, ctx, io));
     if let Some(id) = &id {
         if let Err(e) = state::record(ctx.env, &entry.id, id) {
             let _ = writeln!(

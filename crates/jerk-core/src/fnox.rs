@@ -72,10 +72,26 @@ pub fn lease(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>)
     let mut random = [0u8; 8];
     (ctx.random)(&mut random);
     let lease_id = format!("jerk-{}-{}", entry.id, hex(&random));
-    if let Some(id) = &upstream {
-        if let Err(e) = state::lease_record(ctx.env, &lease_id, &entry.id, id) {
-            let _ = writeln!(io.err, "jerk: {}: cannot record the lease: {e}", entry.id);
+    match (&upstream, minting) {
+        (Some(id), _) => {
+            if let Err(e) = state::lease_record(ctx.env, &lease_id, &entry.id, id) {
+                let _ = writeln!(
+                    io.err,
+                    "jerk: {}: cannot record the lease, so no lease is given: {e}; revoke token {id} by hand",
+                    entry.id
+                );
+                return Exit::Error;
+            }
         }
+        (None, true) => {
+            let _ = writeln!(
+                io.err,
+                "jerk: {}: minted a token whose id jerk could not find, so no lease is given; revoke it by hand",
+                entry.id
+            );
+            return Exit::Error;
+        }
+        (None, false) => {}
     }
     let until = (ctx.now + duration).min(expires_at.unwrap_or(u64::MAX));
     let credentials: serde_json::Map<String, serde_json::Value> = entry
@@ -194,23 +210,32 @@ pub fn config_fnox(args: &[String], config: &Config, io: &mut Io<'_>) -> Exit {
 }
 
 fn provider_types(paths: &str, name: &str) -> Vec<String> {
-    paths
+    let kind = |provider: &toml::Value| {
+        provider
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let mut types = Vec::new();
+    for doc in paths
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .filter_map(|path| std::fs::read_to_string(path).ok())
         .filter_map(|text| text.parse::<toml::Table>().ok())
-        .filter_map(|doc| {
-            let provider = doc.get("providers")?.get(name)?;
-            Some(
-                provider
-                    .get("type")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-            )
-        })
-        .collect()
+    {
+        if let Some(provider) = doc.get("providers").and_then(|p| p.get(name)) {
+            types.push(kind(provider));
+        }
+        let profiles = doc.get("profiles").and_then(toml::Value::as_table);
+        for profile in profiles.into_iter().flat_map(|p| p.values()) {
+            if let Some(provider) = profile.get("providers").and_then(|p| p.get(name)) {
+                types.push(kind(provider));
+            }
+        }
+    }
+    types
 }
 
 fn run_fnox(

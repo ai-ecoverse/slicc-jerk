@@ -144,12 +144,14 @@ test('npm create mints a token, records only its id, and drop forgets it', async
   const { join } = await import('node:path');
   sb.script(
     'npm',
-    `if (args[0] === 'token' && args[1] === 'create') process.stdout.write(JSON.stringify({ token: 'npm_MINTEDMINTEDMINTED42', key: 'abcdef123' }));`
+    `if (args[0] === '--version') process.stdout.write('11.6.3\\n');
+else if (args[0] === 'token' && args[1] === 'create') process.stdout.write(JSON.stringify({ token: 'npm_MINTEDMINTEDMINTED42' }));
+else if (args[0] === 'token' && args[1] === 'list') process.stdout.write(JSON.stringify([{ token: 'npm_MI', key: 'abcdef123' }]));`
   );
   const res = sb.jerk(['npm', 'create', '--name', 'ci']);
   assert.equal(res.status, 0, res.stderr);
   assert.equal(res.stdout, 'npm_…ED42\n');
-  assert.deepEqual(sb.calls()[0].args, [
+  assert.deepEqual(sb.calls()[1].args, [
     'token',
     'create',
     '--name',
@@ -167,4 +169,16 @@ test('npm create mints a token, records only its id, and drop forgets it', async
     JSON.parse(readFileSync(join(sb.dir, 'state', 'slicc-jerk', 'minted.json'), 'utf8')),
     { npm: [] }
   );
+});
+
+test('npm create refuses an npm that cannot make granular tokens', () => {
+  const sb = sandbox();
+  sb.script(
+    'npm',
+    `if (args[0] === '--version') process.stdout.write('11.4.2\\n'); else process.exit(9);`
+  );
+  const res = sb.jerk(['npm', 'create']);
+  assert.equal(res.status, 4);
+  assert.match(res.stderr, /npm 11\.4\.2 is too old; this needs 11\.6\.3 or newer/);
+  assert.equal(sb.calls().length, 1);
 });

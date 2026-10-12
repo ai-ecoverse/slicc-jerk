@@ -13,6 +13,16 @@ pub struct Read {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct Lookup {
+    pub run: Vec<String>,
+    #[serde(default)]
+    pub items: String,
+    pub prefix: String,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Verb {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<Vec<String>>,
@@ -26,6 +36,10 @@ pub struct Verb {
     pub timeout: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lookup: Option<Lookup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_version: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub interactive: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -323,6 +337,16 @@ pub fn validate(id: &str, provider: &Provider, source: &Source) -> Vec<Problem> 
         if value != "get" && value != "create" {
             messages.push(format!("lease_via {value:?} must be get or create"));
         }
+        let revocable = provider
+            .create
+            .as_ref()
+            .is_some_and(|c| c.parse.is_some() && (c.id.is_some() || c.lookup.is_some()));
+        if value == "create" && !revocable {
+            messages.push(
+                "lease_via = \"create\" needs a create with parse and an id or lookup, so the lease can be revoked"
+                    .to_string(),
+            );
+        }
     }
     if provider.get.is_none() && provider.oauth.is_none() {
         messages.push("needs a get command or an oauth block".to_string());
@@ -366,6 +390,30 @@ fn validate_verb(name: &str, verb: &Verb, provider: &Provider, messages: &mut Ve
     }
     if verb.read.is_some() && name != "get" {
         messages.push(format!("{name}: read only applies to get"));
+    }
+    if let Some(lookup) = &verb.lookup {
+        if name != "create" || verb.parse.is_none() {
+            messages.push(format!(
+                "{name}: lookup only applies to a create with parse"
+            ));
+        }
+        if lookup.run.is_empty() {
+            messages.push(format!("{name}: lookup.run is empty"));
+        }
+        for pointer in [&lookup.items, &lookup.prefix, &lookup.id] {
+            if !pointer.is_empty() && !pointer.starts_with('/') {
+                messages.push(format!(
+                    "{name}: lookup pointer {pointer:?} must start with /"
+                ));
+            }
+        }
+    }
+    if let Some(version) = &verb.min_version {
+        if parse_version(version).is_none() {
+            messages.push(format!(
+                "{name}: min_version {version:?} must look like 11.6.3"
+            ));
+        }
     }
     if let Some(id) = &verb.id {
         if name != "create" || !id.starts_with("json:") || !valid_parse(id) {
@@ -497,4 +545,16 @@ pub fn parse_duration(text: &str) -> Option<std::time::Duration> {
         _ => return None,
     };
     Some(std::time::Duration::from_millis(ms))
+}
+
+pub fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+    text.split(|c: char| !c.is_ascii_digit() && c != '.')
+        .filter_map(|word| {
+            let mut parts = word.split('.');
+            let major = parts.next()?.parse().ok()?;
+            let minor = parts.next()?.parse().ok()?;
+            let patch = parts.next()?.parse().ok()?;
+            Some((major, minor, patch))
+        })
+        .next()
 }
