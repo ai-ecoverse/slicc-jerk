@@ -106,6 +106,10 @@ jobs:
           rustup toolchain install
           rustup target add "${{ matrix.target }}"
 
+      - name: musl C toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
       - name: Build
         shell: bash
         run: |
