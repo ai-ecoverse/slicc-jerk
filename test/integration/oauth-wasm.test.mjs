@@ -151,7 +151,7 @@ test('implicit flow with relay (Adobe-shaped)', { skip }, async () => {
   assert.equal(stateDecoded.nonce, begin.expectedNonce);
 
   const fragment = `access_token=ims-token-456&expires_in=7200&scope=openid+AdobeID&state=${encodeURIComponent(begin.state)}`;
-  const callbackUrl = `https://test.sliccy.ai/auth/callback#${fragment}`;
+  const callbackUrl = `https://test.sliccy.ai/auth/callback?nonce=${begin.expectedNonce}#${fragment}`;
   const complete = wasm.completeSignIn(implicitRelayConfig, begin.pending, callbackUrl);
   assert.equal(complete.kind, 'token');
   assert.equal(complete.token, 'ims-token-456');
@@ -210,4 +210,47 @@ test('parseTokenResponse handles IdP error', { skip }, async () => {
     () => wasm.parseTokenResponse(pkceConfig, body, 1700000000),
     (err) => err.kind === 'error' && err.code === 'idp_error'
   );
+});
+
+test('completeSignIn rejects wrong relay nonce', { skip }, async () => {
+  const wasm = await loadWasm();
+  const now = 1700000000;
+  const begin = wasm.beginSignIn(implicitRelayConfig, '', now, random32, random16);
+  const fragment = `access_token=tok&expires_in=3600&state=${encodeURIComponent(begin.state)}`;
+  const callbackUrl = `https://test.sliccy.ai/auth/callback?nonce=wrong-nonce#${fragment}`;
+  assert.throws(
+    () => wasm.completeSignIn(implicitRelayConfig, begin.pending, callbackUrl),
+    (err) => err.kind === 'error' && err.code === 'nonce_mismatch'
+  );
+});
+
+test('completeSignIn rejects missing relay nonce', { skip }, async () => {
+  const wasm = await loadWasm();
+  const now = 1700000000;
+  const begin = wasm.beginSignIn(implicitRelayConfig, '', now, random32, random16);
+  const fragment = `access_token=tok&expires_in=3600&state=${encodeURIComponent(begin.state)}`;
+  const callbackUrl = `https://test.sliccy.ai/auth/callback#${fragment}`;
+  assert.throws(
+    () => wasm.completeSignIn(implicitRelayConfig, begin.pending, callbackUrl),
+    (err) => err.kind === 'error' && err.code === 'nonce_mismatch'
+  );
+});
+
+test('implicit flow defaults to expires_in param', { skip }, async () => {
+  const configNoExpiresParam = JSON.stringify({
+    mode: 'popup',
+    flow: 'implicit',
+    authorize_url: 'https://example.com/auth?client_id={client_id}&response_type=token&redirect_uri={redirect_uri}&state={state}',
+    client_id: 'test',
+    redirect_uri: 'http://127.0.0.1:8080/callback',
+    capture: { at: 'callback', from: 'fragment', param: 'access_token' },
+  });
+  const wasm = await loadWasm();
+  const now = 1700000000;
+  const begin = wasm.beginSignIn(configNoExpiresParam, '', now, random32, random16);
+  const fragment = `access_token=tok&expires_in=1800&state=${encodeURIComponent(begin.state)}`;
+  const callbackUrl = `http://127.0.0.1:8080/callback#${fragment}`;
+  const complete = wasm.completeSignIn(configNoExpiresParam, begin.pending, callbackUrl);
+  assert.equal(complete.kind, 'token');
+  assert.equal(complete.expiresAt, now + 1800);
 });

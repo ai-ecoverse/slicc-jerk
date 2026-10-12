@@ -10,6 +10,55 @@ use jerk_oauth::scopes;
 use jerk_oauth::template;
 use wasm_bindgen::prelude::*;
 
+fn extract_query_param(url_str: &str, name: &str) -> Option<String> {
+    let query = url_str.find('?').map(|i| {
+        let after = &url_str[i + 1..];
+        match after.find('#') {
+            Some(j) => &after[..j],
+            None => after,
+        }
+    })?;
+    for pair in query.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == name {
+                return Some(percent_decode(v));
+            }
+        }
+    }
+    None
+}
+
+fn percent_decode(input: &str) -> String {
+    let mut out = Vec::new();
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                out.push(hi << 4 | lo);
+                i += 3;
+                continue;
+            }
+        }
+        if bytes[i] == b'+' {
+            out.push(b' ');
+        } else {
+            out.push(bytes[i]);
+        }
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| input.to_string())
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn parse_oauth_config(input: &str) -> Result<OAuthConfig, JsValue> {
     let trimmed = input.trim_start();
     if trimmed.starts_with('{') {
@@ -178,6 +227,7 @@ pub fn begin_sign_in(
     let pending = serde_json::json!({
         "verifier": verifier_str,
         "state": state_value,
+        "expected_nonce": expected_nonce,
         "flow": cfg.flow,
         "now_secs": now_secs as u64,
     });
@@ -211,6 +261,8 @@ pub fn complete_sign_in(
     struct Pending {
         verifier: String,
         state: String,
+        #[serde(default)]
+        expected_nonce: Option<String>,
         flow: Flow,
         now_secs: u64,
     }
@@ -245,6 +297,17 @@ pub fn complete_sign_in(
         obj.into()
     })?;
 
+    if let Some(ref expected) = pending.expected_nonce {
+        let received = extract_query_param(captured_url, "nonce").unwrap_or_default();
+        relay::verify_nonce(expected, &received).map_err(|_| -> JsValue {
+            let obj = js_sys::Object::new();
+            js_sys::Reflect::set(&obj, &"kind".into(), &"error".into()).ok();
+            js_sys::Reflect::set(&obj, &"code".into(), &"nonce_mismatch".into()).ok();
+            js_sys::Reflect::set(&obj, &"message".into(), &"relay nonce mismatch".into()).ok();
+            obj.into()
+        })?;
+    }
+
     match pending.flow {
         Flow::Pkce => {
             let token_url = cfg
@@ -266,10 +329,10 @@ pub fn complete_sign_in(
             Ok(obj.into())
         }
         Flow::Implicit => {
-            let expires_in = cfg
-                .expires_param
-                .as_deref()
-                .and_then(|p| result.params.get(p))
+            let expires_param = cfg.expires_param.as_deref().unwrap_or("expires_in");
+            let expires_in = result
+                .params
+                .get(expires_param)
                 .and_then(|v| v.parse::<u64>().ok());
             let expires_at = expiry::compute_expiry(pending.now_secs, expires_in, None);
 
@@ -293,7 +356,7 @@ pub fn parse_token_response(
     body: &str,
     now_secs: f64,
 ) -> Result<JsValue, JsValue> {
-    let cfg: OAuthConfig =
+    let _cfg: OAuthConfig =
         serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     let resp = exchange::parse_token_response(body).map_err(|e| -> JsValue {
@@ -317,8 +380,7 @@ pub fn parse_token_response(
         obj.into()
     })?;
 
-    let max_age = cfg.timeout.as_deref().and_then(config::parse_timeout);
-    let expires_at = expiry::compute_expiry(now_secs as u64, resp.expires_in, max_age);
+    let expires_at = expiry::compute_expiry(now_secs as u64, resp.expires_in, None);
 
     let obj = js_sys::Object::new();
     js_sys::Reflect::set(&obj, &"accessToken".into(), &resp.access_token.into()).ok();
