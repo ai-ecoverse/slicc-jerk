@@ -1,4 +1,5 @@
 use crate::paths::Env;
+use jerk_oauth::config::OAuthConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -131,6 +132,7 @@ pub struct Entry {
     pub id: String,
     pub provider: Provider,
     pub source: Source,
+    pub oauth_config: Option<OAuthConfig>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -286,15 +288,59 @@ pub fn merge(config: &mut Config, source: Source, text: &str) {
                 continue;
             }
         }
+        let problems_before = config.problems.len();
+        let oauth_config = parse_oauth(&id, &provider, &source, &mut config.problems);
+        let oauth_failed = config.problems[problems_before..]
+            .iter()
+            .any(|p| p.level == Level::Error);
+        if oauth_failed {
+            continue;
+        }
         config.providers.insert(
             id.clone(),
             Entry {
                 id,
                 provider,
                 source: source.clone(),
+                oauth_config,
             },
         );
     }
+}
+
+fn parse_oauth(
+    id: &str,
+    provider: &Provider,
+    source: &Source,
+    problems: &mut Vec<Problem>,
+) -> Option<OAuthConfig> {
+    let table = provider.oauth.as_ref()?;
+    let value = toml::Value::Table(table.clone());
+    let config: OAuthConfig = match value.try_into() {
+        Ok(c) => c,
+        Err(e) => {
+            problems.push(Problem {
+                level: Level::Error,
+                source: source.to_string(),
+                provider: Some(id.to_string()),
+                message: format!("oauth: {e}"),
+            });
+            return None;
+        }
+    };
+    let errors = jerk_oauth::config::validate(&config);
+    if !errors.is_empty() {
+        for err in errors {
+            problems.push(Problem {
+                level: Level::Error,
+                source: source.to_string(),
+                provider: Some(id.to_string()),
+                message: format!("oauth: {err}"),
+            });
+        }
+        return None;
+    }
+    Some(config)
 }
 
 pub fn validate(id: &str, provider: &Provider, source: &Source) -> Vec<Problem> {

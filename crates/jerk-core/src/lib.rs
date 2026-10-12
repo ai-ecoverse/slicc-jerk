@@ -1,14 +1,16 @@
+pub mod browser;
 pub mod builtin;
 pub mod cli;
 pub mod config;
 pub mod dispatch;
 pub mod exit;
 pub mod extract;
+pub mod grants;
 pub mod mask;
+pub mod oauth;
 pub mod output;
 pub mod paths;
 pub mod run;
-pub mod scopes;
 pub mod source;
 pub mod state;
 pub mod template;

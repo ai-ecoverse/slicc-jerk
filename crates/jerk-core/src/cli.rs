@@ -8,6 +8,10 @@ use serde_json::json;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 
+pub(crate) fn os_random(buf: &mut [u8]) {
+    let _ = getrandom::fill(buf);
+}
+
 pub(crate) const HELP: &str =
     "jerk: get, list, create and drop OAuth tokens through each provider's own CLI
 
@@ -45,11 +49,17 @@ pub struct Ctx<'a> {
     pub stdin_terminal: bool,
     pub stdout_terminal: bool,
     pub input: &'a mut dyn BufRead,
+    pub random: &'a dyn Fn(&mut [u8]),
+    pub oauth: &'a dyn crate::oauth::OAuthHost,
 }
 
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
     let env = Env::from_process();
     let stdin = std::io::stdin();
+    #[cfg(not(target_os = "wasi"))]
+    let oauth_host = crate::oauth::DefaultOAuthHost;
+    #[cfg(target_os = "wasi")]
+    let oauth_host = crate::oauth::NoOAuthHost;
     let mut ctx = Ctx {
         env: &env,
         exists: &which::is_file,
@@ -58,6 +68,8 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
         stdin_terminal: stdin.is_terminal(),
         stdout_terminal: std::io::stdout().is_terminal(),
         input: &mut stdin.lock(),
+        random: &os_random,
+        oauth: &oauth_host,
     };
     run_with(args, &mut ctx, &mut Io { out, err })
 }
