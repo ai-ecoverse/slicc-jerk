@@ -1,5 +1,11 @@
+pub mod builtin;
 pub mod cli;
+pub mod config;
 pub mod exit;
+pub mod mask;
+pub mod output;
+pub mod paths;
+pub mod which;
 
 pub fn version() -> &'static str {
     pick_version(option_env!("JERK_VERSION"))

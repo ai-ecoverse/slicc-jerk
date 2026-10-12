@@ -35,7 +35,7 @@
     "build": "cargo build --release -p jerk",
     "build:wasm": "node scripts/build-wasm.mjs",
     "test": "cargo build -p jerk && node --test test/integration/*.test.mjs",
-    "test:unit": "RUSTFLAGS='--cfg jerk_unit' cargo llvm-cov --workspace --lcov --output-path coverage/unit/lcov.info --ignore-filename-regex '(crates/jerk/src/main\\.rs|test/unit/)'",
+    "test:unit": "mkdir -p coverage/unit && RUSTFLAGS='--cfg jerk_unit' cargo llvm-cov --workspace --lcov --output-path coverage/unit/lcov.info --ignore-filename-regex '(crates/jerk/src/main\\.rs|test/unit/)'",
     "trust": "npx fledgling sync -y --skip-publish",
     "trust:dry": "npx fledgling sync --dry-run -y --skip-publish",
     "release": "semantic-release"

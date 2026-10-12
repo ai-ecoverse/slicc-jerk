@@ -4,7 +4,7 @@ Get, list, create and drop OAuth tokens across operating systems and inside SLIC
 
 `jerk` (as in an ice-cream jerk) asks `gh`, `npm`, `wrangler`, `aio` and friends for their tokens, so that adding a provider is configuration, not code. It feeds [fnox](https://fnox.jdx.dev) as a `command` lease backend on a real machine. Inside seven, tokens go to the vault's sealed store, and programs only ever see placeholders.
 
-**Status:** being built. This release has the command-line skeleton, the exit codes and the packages. The commands below print `not implemented yet` and exit 5 until they land.
+**Status:** being built. `jerk list` and `jerk config` work. The provider commands print `not implemented yet` and exit 5 until they land.
 
 ## Usage
 
@@ -16,7 +16,7 @@ jerk <provider> create [--scope S] [--force]
 jerk <provider> drop   [<id>] [--lease] [--yes]
 jerk <provider> lease
 jerk <provider> sync --fnox <SECRET> --provider <fnox provider>
-jerk config [path|check|fnox|show <provider>]
+jerk config path [--json] | check | show <provider> | fnox
 jerk intercept --authorize-url <url> --redirect <url>
 ```
 
@@ -28,6 +28,31 @@ jerk intercept --authorize-url <url> --redirect <url>
 | 3 | needs an interactive sign-in |
 | 4 | not available here (no CLI, no browser, no linked slicc CLI) |
 | 5 | unsupported for this provider or runtime |
+
+## Providers
+
+A provider is a TOML table. Layers are read from lowest to highest priority, and a provider defined again in a later layer replaces the earlier one as a whole. A system provider with `locked = true` can't be replaced.
+
+| layer | macOS and Linux | Windows |
+| --- | --- | --- |
+| built-in | `github` (gh), `npm`, `cloudflare` (wrangler), `adobe-aio` (aio) | same |
+| system | `/etc/slicc-jerk/providers.d/*.toml`, in file-name order (`SLICC_JERK_SYSTEM_DIR` overrides) | `%ProgramData%\slicc-jerk\providers.d\*.toml` |
+| user | `$XDG_CONFIG_HOME/slicc-jerk/providers.toml`, default `~/.config/slicc-jerk/providers.toml` | `%APPDATA%\slicc-jerk\providers.toml` |
+| explicit | `--config <file>` or `SLICC_JERK_CONFIG` | same |
+
+```toml
+[providers.github]
+name = "GitHub (gh)"
+env = ["GH_TOKEN", "GITHUB_TOKEN"]
+domains = ["api.github.com", "github.com"]
+requires = "gh"
+params = { host = "github.com" }
+get = { run = ["gh", "auth", "token", "--hostname", "{host}"], parse = "text" }
+create = { run = ["gh", "auth", "login", "--web", "--hostname", "{host}", "--scopes", "{scope}"], interactive = true }
+drop = { run = ["gh", "auth", "logout", "--hostname", "{host}", "--user", "{id}"], interactive = true }
+```
+
+Commands are argument lists, never shell strings. `{name}` placeholders come from `params` or from `scope`, `id`, `name`, `expires` and `user`. `jerk config check` validates every layer, `jerk config show <provider>` prints the provider that wins, and `jerk config path` shows where each layer lives.
 
 ## Install
 
