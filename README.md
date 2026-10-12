@@ -4,9 +4,11 @@ Get, list, create and drop OAuth tokens across operating systems and inside SLIC
 
 `jerk` (as in an ice-cream jerk) asks `gh`, `npm`, `wrangler`, `aio` and friends for their tokens, so that adding a provider is configuration, not code. It feeds [fnox](https://fnox.jdx.dev) as a `command` lease backend on a real machine. Inside seven, tokens go to the vault's sealed store, and programs only ever see placeholders.
 
-**Status:** being built. `jerk list`, `jerk config`, and `get`, `list`, `create` and `drop` for providers backed by a CLI (gh, wrangler, aio) work. `lease`, `sync`, npm's file source and minted tokens, OAuth providers and `intercept` print `not implemented yet` and exit 5 until they land.
+**Status:** being built. `jerk list`, `jerk config`, and `get`, `list`, `create` and `drop` for providers backed by a CLI (gh, npm, wrangler, aio) work. `lease`, `sync`, OAuth providers and `intercept` print `not implemented yet` and exit 5 until they land.
 
 `jerk <provider> get` prints the token only to a terminal, or with `--reveal`. To a pipe it prints a masked form such as `gho_…1234`. A token already in the provider's first `env` variable (`GH_TOKEN`, …) wins over the CLI, as gh does. `--scope` checks the granted scopes, with GitHub's implied scopes understood, and exits 3 when they don't cover it. jerk never signs in by itself: `get` exits 3, and `get --login` on a terminal runs `create` first. The provider's CLI runs without the provider's own token variables in its environment.
+
+`jerk npm get` reads `//registry.npmjs.org/:_authToken` from `$NPM_CONFIG_USERCONFIG` or `~/.npmrc`, expanding `${VAR}` references, because `npm config get` won't print auth keys. `jerk npm create` mints a token with `npm token create`. It prints the token by the same rules as `get` (it exists nowhere else), and records only its id in `<state>/minted.json` (mode 0600), so `jerk npm drop <id>` can revoke it.
 
 ## Usage
 

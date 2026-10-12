@@ -1,10 +1,10 @@
 use crate::cli::{usage, Ctx, Io};
-use crate::config::{parse_duration, Entry, Verb};
+use crate::config::{parse_duration, parse_version, Entry, Verb};
 use crate::exit::Exit;
 use crate::output::{choose, Shown};
 use crate::run::{Opts, Outcome};
-use crate::template::{render_args, Vars};
-use crate::{extract, mask, scopes, time, which};
+use crate::template::{render_args, render_text, Vars};
+use crate::{extract, mask, scopes, source, state, time, which};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -139,16 +139,9 @@ pub fn run_verb_env(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Result<Ran, Exit> {
-    let Some(run) = &verb.run else {
-        let _ = writeln!(
-            io.err,
-            "jerk {} {name}: read sources are not implemented yet",
-            entry.id
-        );
-        return Err(Exit::Unsupported);
-    };
+    let run: &[String] = verb.run.as_deref().unwrap_or(&[]);
     let path = program(entry, ctx, io)?;
-    let args = render_args(&run[1..], vars);
+    let args = render_args(run.get(1..).unwrap_or(&[]), vars);
     let timeout = verb
         .timeout
         .as_deref()
@@ -156,10 +149,11 @@ pub fn run_verb_env(
         .or((!interactive).then_some(DEFAULT_TIMEOUT));
     let opts = Opts {
         interactive,
+        capture: verb.parse.is_some(),
         timeout,
         remove_env: if scrub { &entry.provider.env } else { &[] },
     };
-    let cli = &run[0];
+    let cli = run.first().map(String::as_str).unwrap_or_default();
     match ctx.runner.run(&path, &args, &opts) {
         Outcome::Exited {
             code: 0, stdout, ..
@@ -224,6 +218,9 @@ pub fn fetch(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Resu
         );
         return Err(Exit::Unsupported);
     };
+    if let Some(read) = &verb.read {
+        return read_token(entry, read, vars, ctx, io);
+    }
     let ran = match run_verb(entry, "get", verb, vars, false, ctx, io) {
         Ok(ran) => ran,
         Err(Exit::Error) => {
@@ -260,6 +257,32 @@ pub fn fetch(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Resu
         source: "cli",
         expires_at,
     })
+}
+
+fn read_token(
+    entry: &Entry,
+    read: &crate::config::Read,
+    vars: &Vars,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<Token, Exit> {
+    let path = source::path(&render_text(&read.ini, vars), ctx.env);
+    let key = render_text(&read.key, vars);
+    let value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| source::ini_value(&text, &key, ctx.env));
+    match value {
+        Some(value) => Ok(Token {
+            value,
+            source: "file",
+            expires_at: None,
+        }),
+        None => {
+            let _ = writeln!(io.err, "jerk: {}: no token in {}", entry.id, path.display());
+            sign_in_hint(entry, io);
+            Err(Exit::SignIn)
+        }
+    }
 }
 
 pub fn granted(
@@ -415,14 +438,6 @@ fn create_run(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exi
         Ok(verb) => verb,
         Err(code) => return code,
     };
-    if verb.parse.is_some() {
-        let _ = writeln!(
-            io.err,
-            "jerk {} create: minted tokens are not implemented yet",
-            entry.id
-        );
-        return Exit::Unsupported;
-    }
     match run_verb(entry, "create", verb, vars, verb.interactive, ctx, io) {
         Ok(_) => Exit::Ok,
         Err(code) => code,
@@ -430,7 +445,12 @@ fn create_run(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exi
 }
 
 pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
-    let flags = match parse_flags(args, &["--scope", "--name", "--expires"], &["--force"], 0) {
+    let flags = match parse_flags(
+        args,
+        &["--scope", "--name", "--expires"],
+        &["--force", "--reveal", "--json"],
+        0,
+    ) {
         Ok(flags) => flags,
         Err(e) => return usage(&format!("{} create: {e}", entry.id), io),
     };
@@ -445,6 +465,9 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
             entry.id
         );
         return Exit::Unsupported;
+    }
+    if let Some(verb) = entry.provider.create.as_ref().filter(|v| v.parse.is_some()) {
+        return mint(entry, verb, &vars, &flags, ctx, io);
     }
     if !flags.has("--force") && entry.provider.get.is_some() {
         let mut quiet = Io {
@@ -474,6 +497,126 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         let _ = writeln!(io.out, "{}: signed in", entry.id);
     }
     code
+}
+
+fn check_version(entry: &Entry, verb: &Verb, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<(), Exit> {
+    let Some(min) = verb.min_version.as_deref().and_then(parse_version) else {
+        return Ok(());
+    };
+    let probe = Verb {
+        run: Some(vec![
+            entry.provider.requires.clone().unwrap_or_default(),
+            "--version".to_string(),
+        ]),
+        ..Verb::default()
+    };
+    let ran = run_verb(entry, "version", &probe, &Vars::new(), false, ctx, io)?;
+    match parse_version(&ran.stdout) {
+        Some(found) if found >= min => Ok(()),
+        found => {
+            let shown = found
+                .map(|(a, b, c)| format!("{a}.{b}.{c}"))
+                .unwrap_or_else(|| "unknown".to_string());
+            let (a, b, c) = min;
+            let _ = writeln!(
+                io.err,
+                "jerk: {}: {} {shown} is too old; this needs {a}.{b}.{c} or newer",
+                entry.id,
+                entry.provider.requires.as_deref().unwrap_or_default()
+            );
+            Err(Exit::Unavailable)
+        }
+    }
+}
+
+fn lookup_id(
+    entry: &Entry,
+    verb: &Verb,
+    token: &str,
+    vars: &Vars,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Option<String> {
+    let lookup = verb.lookup.as_ref()?;
+    let probe = Verb {
+        run: Some(lookup.run.clone()),
+        ..Verb::default()
+    };
+    let ran = run_verb(entry, "lookup", &probe, vars, false, ctx, io).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(ran.stdout.trim()).ok()?;
+    let items = doc.pointer(&lookup.items)?.as_array()?;
+    items
+        .iter()
+        .filter(|item| {
+            item.pointer(&lookup.prefix)
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|p| !p.is_empty() && token.starts_with(p))
+        })
+        .find_map(|item| item.pointer(&lookup.id)?.as_str().map(String::from))
+}
+
+pub fn mint_token(
+    entry: &Entry,
+    verb: &Verb,
+    vars: &Vars,
+    interactive: bool,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<(String, Option<String>), Exit> {
+    check_version(entry, verb, ctx, io)?;
+    let ran = run_verb(entry, "create", verb, vars, interactive, ctx, io)?;
+    let Some(token) = extract::token(&ran.stdout, verb.parse.as_deref()) else {
+        let _ = writeln!(io.err, "jerk: {}: create printed no token", entry.id);
+        return Err(Exit::Error);
+    };
+    let id = verb
+        .id
+        .as_deref()
+        .and_then(|p| extract::json(&ran.stdout, p))
+        .and_then(|v| v.as_str().map(String::from))
+        .or_else(|| lookup_id(entry, verb, &token, vars, ctx, io));
+    if let Some(id) = &id {
+        if let Err(e) = state::record(ctx.env, &entry.id, id) {
+            let _ = writeln!(
+                io.err,
+                "jerk: {}: cannot record the token id: {e}",
+                entry.id
+            );
+        }
+    }
+    Ok((token, id))
+}
+
+fn mint(
+    entry: &Entry,
+    verb: &Verb,
+    vars: &Vars,
+    flags: &Flags,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Exit {
+    let (token, id) = match mint_token(entry, verb, vars, verb.interactive, ctx, io) {
+        Ok(minted) => minted,
+        Err(code) => return code,
+    };
+    let masked = mask::mask(&token);
+    let reveal = flags.has("--reveal");
+    if flags.has("--json") {
+        let mut doc = json!({ "provider": entry.id, "id": id, "masked": masked });
+        if reveal {
+            doc["token"] = json!(token);
+        }
+        let _ = writeln!(io.out, "{doc}");
+        return Exit::Ok;
+    }
+    let label = id.as_deref().unwrap_or("(no id)");
+    let _ = writeln!(io.err, "jerk: {}: created token {label}", entry.id);
+    let shown = match choose(false, ctx.stdout_terminal, reveal) {
+        Shown::Masked => masked,
+        _ => token,
+    };
+    let _ = writeln!(io.out, "{shown}");
+    Exit::Ok
 }
 
 pub fn drop(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
@@ -520,6 +663,9 @@ pub fn drop(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
     }
     match run_verb(entry, "drop", verb, &vars, verb.interactive, ctx, io) {
         Ok(_) => {
+            if let Some(id) = flags.positionals.first() {
+                let _ = state::forget(ctx.env, &entry.id, id);
+            }
             let _ = writeln!(io.out, "{}: dropped", entry.id);
             Exit::Ok
         }

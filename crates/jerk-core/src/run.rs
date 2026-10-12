@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 pub struct Opts<'a> {
     pub interactive: bool,
+    pub capture: bool,
     pub timeout: Option<Duration>,
     pub remove_env: &'a [String],
 }
@@ -42,9 +43,14 @@ impl Runner for Process {
             command.env_remove(name);
         }
         if opts.interactive {
+            let stdout = if opts.capture {
+                Stdio::piped()
+            } else {
+                Stdio::inherit()
+            };
             command
                 .stdin(Stdio::inherit())
-                .stdout(Stdio::inherit())
+                .stdout(stdout)
                 .stderr(Stdio::inherit());
         } else {
             command
