@@ -1,5 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,12 +41,34 @@ export function sandbox() {
       writeFileSync(file, '');
       return file;
     },
+    script(name, body) {
+      const js = join(bin, `${name}.js`);
+      writeFileSync(
+        js,
+        `const fs = require('node:fs');\nconst args = process.argv.slice(2);\nfs.appendFileSync(${JSON.stringify(join(dir, 'calls.jsonl'))}, JSON.stringify({ name: ${JSON.stringify(name)}, args, env: Object.keys(process.env).filter((k) => k.endsWith('_TOKEN')) }) + '\\n');\n${body}\n`
+      );
+      if (process.platform === 'win32') {
+        writeFileSync(join(bin, `${name}.cmd`), `@"${process.execPath}" "%~dp0${name}.js" %*\r\n`);
+      } else {
+        const file = join(bin, name);
+        writeFileSync(file, `#!${process.execPath}\nrequire(${JSON.stringify(js)});\n`);
+        chmodSync(file, 0o755);
+      }
+    },
+    calls() {
+      const file = join(dir, 'calls.jsonl');
+      if (!existsSync(file)) return [];
+      return readFileSync(file, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+    },
     writeUser(text) {
       mkdirSync(join(dir, 'config', 'slicc-jerk'), { recursive: true });
       writeFileSync(join(dir, 'config', 'slicc-jerk', 'providers.toml'), text);
     },
-    jerk(args) {
-      return jerk(args, { env });
+    jerk(args, extra = {}) {
+      return jerk(args, { env: { ...env, ...extra } });
     },
   };
 }
