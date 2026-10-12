@@ -1,9 +1,11 @@
 use crate::config::{self, Config, Level};
+use crate::dispatch;
 use crate::exit::Exit;
 use crate::paths::Env;
+use crate::run::{Process, Runner};
 use crate::which;
 use serde_json::json;
-use std::io::Write;
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 
 pub(crate) const HELP: &str =
@@ -35,17 +37,34 @@ pub struct Io<'a> {
     pub err: &'a mut dyn Write,
 }
 
-pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
-    let env = Env::from_process();
-    run_with(args, &env, &mut Io { out, err }, &which::is_file)
+pub struct Ctx<'a> {
+    pub env: &'a Env,
+    pub exists: &'a dyn Fn(&Path) -> bool,
+    pub runner: &'a dyn Runner,
+    pub now: u64,
+    pub stdin_terminal: bool,
+    pub stdout_terminal: bool,
+    pub input: &'a mut dyn BufRead,
 }
 
-pub fn run_with(
-    args: &[String],
-    env: &Env,
-    io: &mut Io<'_>,
-    exists: &dyn Fn(&Path) -> bool,
-) -> Exit {
+pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
+    let env = Env::from_process();
+    let stdin = std::io::stdin();
+    let mut ctx = Ctx {
+        env: &env,
+        exists: &which::is_file,
+        runner: &Process,
+        now: crate::time::now(),
+        stdin_terminal: stdin.is_terminal(),
+        stdout_terminal: std::io::stdout().is_terminal(),
+        input: &mut stdin.lock(),
+    };
+    run_with(args, &mut ctx, &mut Io { out, err })
+}
+
+pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
+    let env = ctx.env;
+    let exists = ctx.exists;
     let (explicit, rest) = match split_config(args) {
         Ok(split) => split,
         Err(message) => return usage(&message, io),
@@ -73,15 +92,22 @@ pub fn run_with(
                 if let Some(code) = report(&config, io) {
                     return code;
                 }
-                if config.get(provider).is_none() {
+                let Some(entry) = config.get(provider) else {
                     return usage(
                         &format!(
                             "unknown provider {provider}; jerk list shows the configured ones"
                         ),
                         io,
                     );
+                };
+                let args = &rest[2..];
+                match verb {
+                    "get" => dispatch::get(entry, args, ctx, io),
+                    "list" => dispatch::list(entry, args, ctx, io),
+                    "create" => dispatch::create(entry, args, ctx, io),
+                    "drop" => dispatch::drop(entry, args, ctx, io),
+                    _ => not_yet(&format!("{provider} {verb}"), io),
                 }
-                not_yet(&format!("{provider} {verb}"), io)
             }
             Some(verb) => usage(&format!("unknown command {verb}"), io),
             None => usage(&format!("{provider}: missing a command"), io),
@@ -324,7 +350,7 @@ fn not_yet(what: &str, io: &mut Io<'_>) -> Exit {
     Exit::Unsupported
 }
 
-fn usage(message: &str, io: &mut Io<'_>) -> Exit {
+pub(crate) fn usage(message: &str, io: &mut Io<'_>) -> Exit {
     let _ = writeln!(io.err, "jerk: {message}\nRun jerk --help for usage.");
     Exit::Usage
 }
