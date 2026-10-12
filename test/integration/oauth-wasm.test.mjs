@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const wasmDir = join(root, 'dist', 'jerk-oauth');
@@ -11,7 +11,7 @@ const wasmPath = join(wasmDir, 'jerk_oauth_wasm_bg.wasm');
 const skip = (!existsSync(jsPath) || !existsSync(wasmPath)) && 'run npm run build:oauth-wasm first';
 
 async function loadWasm() {
-  const mod = await import(jsPath);
+  const mod = await import(pathToFileURL(jsPath).href);
   const bytes = readFileSync(wasmPath);
   mod.initSync({ module: bytes });
   return mod;
@@ -240,7 +240,8 @@ test('implicit flow defaults to expires_in param', { skip }, async () => {
   const configNoExpiresParam = JSON.stringify({
     mode: 'popup',
     flow: 'implicit',
-    authorize_url: 'https://example.com/auth?client_id={client_id}&response_type=token&redirect_uri={redirect_uri}&state={state}',
+    authorize_url:
+      'https://example.com/auth?client_id={client_id}&response_type=token&redirect_uri={redirect_uri}&state={state}',
     client_id: 'test',
     redirect_uri: 'http://127.0.0.1:8080/callback',
     capture: { at: 'callback', from: 'fragment', param: 'access_token' },

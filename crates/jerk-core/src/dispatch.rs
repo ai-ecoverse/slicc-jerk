@@ -225,7 +225,18 @@ pub struct Token {
 }
 
 pub fn fetch(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<Token, Exit> {
-    if let Some(value) = entry.provider.env.first().and_then(|n| ctx.env.var(n)) {
+    fetch_from(entry, vars, true, ctx, io)
+}
+
+pub fn fetch_from(
+    entry: &Entry,
+    vars: &Vars,
+    use_env: bool,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<Token, Exit> {
+    let from_env = entry.provider.env.first().and_then(|n| ctx.env.var(n));
+    if let Some(value) = from_env.filter(|_| use_env) {
         return Ok(Token {
             expires_at: None,
             value: value.to_string(),
@@ -381,6 +392,73 @@ fn fetch_oauth(
             Err(e.exit)
         }
     }
+}
+
+pub fn whoami(
+    entry: &Entry,
+    token: &Token,
+    vars: &Vars,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Option<String> {
+    let verb = entry.provider.user.as_ref()?;
+    let ran = run_verb_env(
+        entry,
+        "user",
+        verb,
+        vars,
+        false,
+        token.source != "env",
+        ctx,
+        io,
+    )
+    .ok()?;
+    let parse = verb.parse.as_deref().unwrap_or("text");
+    let value = match parse.strip_prefix("json:") {
+        Some(_) => extract::json(&ran.stdout, &crate::template::render_text(parse, vars))?
+            .as_str()?
+            .to_string(),
+        None => ran.stdout.trim().to_string(),
+    };
+    (!value.is_empty()).then_some(value)
+}
+
+pub fn details(
+    entry: &Entry,
+    args: &[String],
+    ctx: &Ctx<'_>,
+) -> Vec<(&'static str, serde_json::Value)> {
+    let mut quiet = Io {
+        out: &mut std::io::sink(),
+        err: &mut std::io::sink(),
+    };
+    let flags = parse_flags(
+        args,
+        &["--scope", "--name", "--expires"],
+        &["--force", "--reveal", "--json"],
+        0,
+    )
+    .unwrap_or_default();
+    let vars = vars(entry, &flags).unwrap_or_default();
+    let Ok(token) = fetch_from(entry, &vars, false, ctx, &mut quiet) else {
+        return Vec::new();
+    };
+    let scopes = token
+        .scope
+        .clone()
+        .or_else(|| granted(entry, &token, &vars, ctx, &mut quiet));
+    let user = whoami(entry, &token, &vars, ctx, &mut quiet);
+    let mut out = Vec::new();
+    if let Some(user) = user {
+        out.push(("user", json!(user)));
+    }
+    if let Some(scopes) = scopes {
+        out.push(("scopes", json!(scopes)));
+    }
+    if let Some(at) = token.expires_at {
+        out.push(("expires_at", json!(time::rfc3339(at))));
+    }
+    out
 }
 
 pub fn granted(
