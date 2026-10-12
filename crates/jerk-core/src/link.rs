@@ -63,6 +63,16 @@ impl Write for Progress<'_> {
     }
 }
 
+pub fn bare(provider: &str, message: &str, io: &mut Io<'_>) -> Exit {
+    let message = message.trim_start_matches("jerk: ");
+    let _ = writeln!(
+        io.out,
+        "{}",
+        json!({ "provider": provider, "message": message })
+    );
+    Exit::Usage
+}
+
 pub fn strip(args: &[String]) -> Option<Vec<String>> {
     let mut found = false;
     let mut rest = Vec::new();

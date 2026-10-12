@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -9,6 +9,7 @@ pub struct Opts<'a> {
     pub timeout: Option<Duration>,
     pub remove_env: &'a [String],
     pub input: Option<&'a str>,
+    pub on_stderr: Option<&'a dyn Fn(&str)>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -27,6 +28,23 @@ pub trait Runner {
 }
 
 pub struct Process;
+
+fn drain_lines(
+    pipe: impl Read + Send + 'static,
+    lines: std::sync::mpsc::Sender<String>,
+) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut text = String::new();
+        let mut reader = std::io::BufReader::new(pipe);
+        let mut line = String::new();
+        while matches!(reader.read_line(&mut line), Ok(n) if n > 0) {
+            let _ = lines.send(line.trim_end().to_string());
+            text.push_str(&line);
+            line.clear();
+        }
+        text
+    })
+}
 
 fn drain(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<String> {
     std::thread::spawn(move || {
@@ -72,7 +90,15 @@ impl Runner for Process {
             let _ = stdin.write_all(text.as_bytes());
         }
         let out = child.stdout.take().map(drain);
-        let err = child.stderr.take().map(drain);
+        let (lines, received) = std::sync::mpsc::channel();
+        let err = child.stderr.take().map(|pipe| drain_lines(pipe, lines));
+        let forward = || {
+            while let Ok(line) = received.try_recv() {
+                if let Some(on_stderr) = opts.on_stderr {
+                    on_stderr(&line);
+                }
+            }
+        };
         let deadline = opts.timeout.map(|t| Instant::now() + t);
         let status = loop {
             match child.try_wait() {
@@ -82,16 +108,22 @@ impl Runner for Process {
                     let _ = child.wait();
                     return Outcome::TimedOut;
                 }
-                _ => std::thread::sleep(Duration::from_millis(10)),
+                _ => {
+                    forward();
+                    std::thread::sleep(Duration::from_millis(10));
+                }
             }
         };
         let take = |h: Option<std::thread::JoinHandle<String>>| {
             h.map(|h| h.join().unwrap_or_default()).unwrap_or_default()
         };
+        let stdout = take(out);
+        let stderr = take(err);
+        forward();
         Outcome::Exited {
             code: status.code().unwrap_or(1),
-            stdout: take(out),
-            stderr: take(err),
+            stdout,
+            stderr,
         }
     }
 }

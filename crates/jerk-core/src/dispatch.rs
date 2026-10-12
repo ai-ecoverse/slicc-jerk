@@ -156,15 +156,26 @@ pub fn run_verb_env(
         .as_deref()
         .and_then(parse_duration)
         .or((!interactive).then_some(fallback));
-    let opts = Opts {
-        interactive,
-        capture: verb.parse.is_some(),
-        timeout,
-        remove_env: if scrub { &entry.provider.env } else { &[] },
-        input: None,
+    let outcome = {
+        let progress = std::cell::RefCell::new(&mut *io.err);
+        let forward = |line: &str| {
+            let shown = crate::mask::mask_words(line);
+            if !shown.trim().is_empty() {
+                let _ = writeln!(progress.borrow_mut(), "{shown}");
+            }
+        };
+        let opts = Opts {
+            interactive,
+            capture: verb.parse.is_some(),
+            timeout,
+            remove_env: if scrub { &entry.provider.env } else { &[] },
+            input: None,
+            on_stderr: linked.then_some(&forward as &dyn Fn(&str)),
+        };
+        ctx.runner.run(&path, &args, &opts)
     };
     let cli = run.first().map(String::as_str).unwrap_or_default();
-    match ctx.runner.run(&path, &args, &opts) {
+    match outcome {
         Outcome::Exited {
             code: 0, stdout, ..
         } => Ok(Ran { stdout }),

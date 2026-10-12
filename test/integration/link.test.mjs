@@ -40,6 +40,10 @@ test('create --via-link streams progress, runs without a terminal, and ends with
   assert.equal(res.status, 0, res.stdout);
   const docs = ndjson(res.stdout);
   assert.equal(docs.at(-1).provider, 'demo');
+  assert.deepEqual(docs[0], {
+    event: 'progress',
+    message: 'open https://idp.example/device and enter ABCD-EFGH',
+  });
   assert.equal(docs.at(-1).message, 'demo: signed in');
   assert.ok(docs.every((d) => !JSON.stringify(d).includes('gho_')));
 });
@@ -63,4 +67,12 @@ test('provider list --json wraps rows in items', () => {
   );
   const res = sb.jerk(['github', 'list', '--json']);
   assert.deepEqual(JSON.parse(res.stdout), { items: [{ 'github.com': [{ login: 'octo' }] }] });
+});
+
+test('a --via-link request for an unknown provider is still a link status', () => {
+  const sb = sandbox();
+  const res = sb.jerk(['nope', 'lease', '--via-link']);
+  assert.equal(res.status, 2);
+  assert.equal(res.stderr, '');
+  assert.deepEqual(JSON.parse(res.stdout), { provider: 'nope', message: 'unknown provider nope' });
 });

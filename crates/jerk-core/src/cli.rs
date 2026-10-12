@@ -99,6 +99,20 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
         provider => match rest.get(1).map(String::as_str) {
             Some(verb) if VERBS.contains(&verb) => {
                 let config = config::load(env, explicit.as_deref());
+                let linked = rest[2..].iter().any(|a| a == "--via-link");
+                if linked {
+                    if let Some(problem) = config.problems.iter().find(|p| p.level == Level::Error)
+                    {
+                        return crate::link::bare(provider, &problem.to_string(), io);
+                    }
+                    if config.get(provider).is_none() {
+                        return crate::link::bare(
+                            provider,
+                            &format!("unknown provider {provider}"),
+                            io,
+                        );
+                    }
+                }
                 if let Some(code) = report(&config, io) {
                     return code;
                 }

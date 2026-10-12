@@ -252,6 +252,7 @@ fn run_fnox(
         timeout: Some(std::time::Duration::from_secs(60)),
         remove_env: &entry.provider.env,
         input,
+        on_stderr: None,
     };
     match ctx.runner.run(fnox, args, &opts) {
         Outcome::Exited {
