@@ -1,0 +1,50 @@
+{
+  "name": "slicc-jerk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Get, list, create and drop OAuth tokens across operating systems and inside SLICC, by dispatching to each provider's own CLI",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ai-ecoverse/slicc-jerk.git"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "fledgling": {
+    "provider": "github",
+    "workflow": "release.yml",
+    "repo": "ai-ecoverse/slicc-jerk",
+    "publish": true,
+    "include": [
+      "@ai-ecoverse/slicc-jerk",
+      "@ai-ecoverse/slicc-jerk-darwin-arm64",
+      "@ai-ecoverse/slicc-jerk-darwin-x64",
+      "@ai-ecoverse/slicc-jerk-linux-arm64",
+      "@ai-ecoverse/slicc-jerk-linux-x64",
+      "@ai-ecoverse/slicc-jerk-win32-arm64",
+      "@ai-ecoverse/slicc-jerk-win32-x64"
+    ]
+  },
+  "scripts": {
+    "prepare": "lefthook install",
+    "lint": "slicc-lint && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
+    "typecheck": "node --check npm/jerk.js && node --check scripts/targets.mjs && node --check scripts/npm-stage.mjs && node --check scripts/npm-publish.mjs && node --check scripts/release-plan.mjs && node --check scripts/release-collect.mjs && node --check scripts/build-wasm.mjs",
+    "format": "biome check --write . && cargo fmt --all",
+    "build": "cargo build --release -p jerk",
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "test": "cargo build -p jerk && node --test test/integration/*.test.mjs",
+    "test:unit": "RUSTFLAGS='--cfg jerk_unit' cargo llvm-cov --workspace --lcov --output-path coverage/unit/lcov.info --ignore-filename-regex '(crates/jerk/src/main\\.rs|test/unit/)'",
+    "trust": "npx fledgling sync -y --skip-publish",
+    "trust:dry": "npx fledgling sync --dry-run -y --skip-publish",
+    "release": "semantic-release"
+  },
+  "devDependencies": {
+    "@ai-ecoverse/slicc-shared-web": "1.13.0",
+    "@biomejs/biome": "2.5.15",
+    "@semantic-release/exec": "7.1.0",
+    "lefthook": "2.1.16",
+    "semantic-release": "25.0.9"
+  }
+}

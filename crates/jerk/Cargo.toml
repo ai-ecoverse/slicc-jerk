@@ -1,0 +1,17 @@
+[package]
+name = "jerk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "jerk"
+path = "src/main.rs"
+
+[dependencies]
+jerk-core = { path = "../jerk-core" }
+
+[lints]
+workspace = true

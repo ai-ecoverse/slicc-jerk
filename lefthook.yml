@@ -1,0 +1,14 @@
+extends:
+  - node_modules/@ai-ecoverse/slicc-shared-web/lefthook.yml
+
+pre-commit:
+  jobs:
+    - name: rustfmt
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+    - name: clippy
+      glob: "*.rs"
+      run: cargo clippy --workspace --all-targets -- -D warnings
+    - name: rust diff coverage
+      glob: "crates/**.rs"
+      run: npm run --silent test:unit && npx --no-install slicc-diff-cover
