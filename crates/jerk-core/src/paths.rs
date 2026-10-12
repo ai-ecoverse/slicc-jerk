@@ -40,10 +40,15 @@ impl Env {
     }
 
     pub fn var(&self, name: &str) -> Option<&str> {
-        self.vars
-            .get(name)
-            .map(String::as_str)
-            .filter(|v| !v.is_empty())
+        let value = if self.os == Os::Windows {
+            self.vars
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value)
+        } else {
+            self.vars.get(name)
+        };
+        value.map(String::as_str).filter(|v| !v.is_empty())
     }
 
     fn home(&self) -> PathBuf {

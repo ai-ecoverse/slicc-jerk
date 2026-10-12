@@ -162,23 +162,30 @@ impl Config {
 
 pub const TEMPLATE_VARS: [&str; 5] = ["scope", "id", "name", "expires", "user"];
 
-pub fn layer_files(env: &Env, explicit: Option<&str>) -> Vec<Source> {
+pub fn layer_files(env: &Env, explicit: Option<&str>) -> (Vec<Source>, Vec<Problem>) {
     let mut sources = Vec::new();
+    let mut problems = Vec::new();
     let system = env.system_dir();
-    let mut system_files: Vec<PathBuf> = std::fs::read_dir(&system)
-        .map(|dir| {
-            dir.filter_map(Result::ok)
+    match std::fs::read_dir(&system) {
+        Ok(dir) => {
+            let mut files: Vec<PathBuf> = dir
+                .filter_map(Result::ok)
                 .map(|e| e.path())
                 .filter(|p| p.extension().is_some_and(|ext| ext == "toml"))
-                .collect()
-        })
-        .unwrap_or_default();
-    system_files.sort();
-    for path in system_files {
-        sources.push(Source {
-            layer: Layer::System,
-            path: Some(path),
-        });
+                .collect();
+            files.sort();
+            sources.extend(files.into_iter().map(|path| Source {
+                layer: Layer::System,
+                path: Some(path),
+            }));
+        }
+        Err(e) if missing(&e) => {}
+        Err(e) => problems.push(Problem {
+            level: Level::Error,
+            source: system.display().to_string(),
+            provider: None,
+            message: format!("cannot read the system directory: {e}"),
+        }),
     }
     sources.push(Source {
         layer: Layer::User,
@@ -190,13 +197,25 @@ pub fn layer_files(env: &Env, explicit: Option<&str>) -> Vec<Source> {
             path: Some(path),
         });
     }
-    sources
+    (sources, problems)
+}
+
+#[cfg(target_os = "wasi")]
+pub(crate) fn missing(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::NotFound || e.raw_os_error() == Some(76)
+}
+
+#[cfg(not(target_os = "wasi"))]
+pub(crate) fn missing(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::NotFound
 }
 
 pub fn load(env: &Env, explicit: Option<&str>) -> Config {
     let mut config = Config::default();
     merge(&mut config, builtin_source(), crate::builtin::BUILTIN);
-    for source in layer_files(env, explicit) {
+    let (sources, problems) = layer_files(env, explicit);
+    config.problems.extend(problems);
+    for source in sources {
         let path = source.path.clone().unwrap_or_default();
         match std::fs::read_to_string(&path) {
             Ok(text) => merge(&mut config, source, &text),
