@@ -6,8 +6,16 @@ fn file(env: &Env) -> PathBuf {
     env.state_dir().join("minted.json")
 }
 
+fn leases_file(env: &Env) -> PathBuf {
+    env.state_dir().join("leases.json")
+}
+
 fn read(env: &Env) -> Value {
-    std::fs::read_to_string(file(env))
+    read_at(file(env))
+}
+
+fn read_at(path: PathBuf) -> Value {
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .filter(Value::is_object)
@@ -15,7 +23,10 @@ fn read(env: &Env) -> Value {
 }
 
 fn write(env: &Env, doc: &Value) -> std::io::Result<()> {
-    let path = file(env);
+    write_at(env, file(env), doc)
+}
+
+fn write_at(env: &Env, path: PathBuf, doc: &Value) -> std::io::Result<()> {
     std::fs::create_dir_all(env.state_dir())?;
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, format!("{doc}\n"))?;
@@ -66,4 +77,32 @@ pub fn forget(env: &Env, provider: &str, id: &str) -> std::io::Result<bool> {
     let mut doc = read(env);
     doc[provider] = json!(ids);
     write(env, &doc).map(|_| true)
+}
+
+pub fn lease_record(env: &Env, lease_id: &str, provider: &str, id: &str) -> std::io::Result<()> {
+    let mut doc = read_at(leases_file(env));
+    doc[lease_id] = json!({ "provider": provider, "id": id });
+    write_at(env, leases_file(env), &doc)
+}
+
+pub fn lease_find(env: &Env, lease_id: &str) -> Option<(String, String)> {
+    let doc = read_at(leases_file(env));
+    let entry = doc.get(lease_id)?;
+    Some((
+        entry["provider"].as_str()?.to_string(),
+        entry["id"].as_str()?.to_string(),
+    ))
+}
+
+pub fn lease_forget(env: &Env, lease_id: &str) -> std::io::Result<()> {
+    let mut doc = read_at(leases_file(env));
+    if let Some(map) = doc.as_object_mut() {
+        map.remove(lease_id);
+    }
+    write_at(env, leases_file(env), &doc)
+}
+
+pub fn touch_synced(env: &Env, now: u64) -> std::io::Result<()> {
+    std::fs::create_dir_all(env.state_dir())?;
+    std::fs::write(env.state_dir().join("synced"), format!("{now}\n"))
 }

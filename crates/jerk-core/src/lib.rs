@@ -4,6 +4,7 @@ pub mod config;
 pub mod dispatch;
 pub mod exit;
 pub mod extract;
+pub mod fnox;
 pub mod mask;
 pub mod output;
 pub mod paths;

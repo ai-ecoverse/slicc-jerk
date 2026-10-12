@@ -104,7 +104,7 @@ test('config show prints the effective provider as TOML', () => {
 
 test('provider commands exit 5 until they are built', () => {
   const sb = sandbox();
-  for (const args of [['npm', 'lease'], ['github', 'sync'], ['config', 'fnox'], ['intercept']]) {
+  for (const args of [['intercept']]) {
     const res = sb.jerk(args);
     assert.equal(res.status, 5, args.join(' '));
     assert.match(res.stderr, /not implemented yet/);

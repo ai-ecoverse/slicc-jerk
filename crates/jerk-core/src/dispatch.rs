@@ -152,6 +152,7 @@ pub fn run_verb_env(
         capture: verb.parse.is_some(),
         timeout,
         remove_env: if scrub { &entry.provider.env } else { &[] },
+        input: None,
     };
     let cli = run.first().map(String::as_str).unwrap_or_default();
     match ctx.runner.run(&path, &args, &opts) {
@@ -499,21 +500,18 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
     code
 }
 
-fn mint(
+pub fn mint_token(
     entry: &Entry,
     verb: &Verb,
     vars: &Vars,
-    flags: &Flags,
+    interactive: bool,
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
-) -> Exit {
-    let ran = match run_verb(entry, "create", verb, vars, verb.interactive, ctx, io) {
-        Ok(ran) => ran,
-        Err(code) => return code,
-    };
+) -> Result<(String, Option<String>), Exit> {
+    let ran = run_verb(entry, "create", verb, vars, interactive, ctx, io)?;
     let Some(token) = extract::token(&ran.stdout, verb.parse.as_deref()) else {
         let _ = writeln!(io.err, "jerk: {}: create printed no token", entry.id);
-        return Exit::Error;
+        return Err(Exit::Error);
     };
     let id = verb
         .id
@@ -529,6 +527,21 @@ fn mint(
             );
         }
     }
+    Ok((token, id))
+}
+
+fn mint(
+    entry: &Entry,
+    verb: &Verb,
+    vars: &Vars,
+    flags: &Flags,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Exit {
+    let (token, id) = match mint_token(entry, verb, vars, verb.interactive, ctx, io) {
+        Ok(minted) => minted,
+        Err(code) => return code,
+    };
     let masked = mask::mask(&token);
     let reveal = flags.has("--reveal");
     if flags.has("--json") {
@@ -555,12 +568,7 @@ pub fn drop(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
         Err(e) => return usage(&format!("{} drop: {e}", entry.id), io),
     };
     if flags.has("--lease") {
-        let _ = writeln!(
-            io.err,
-            "jerk {} drop --lease: not implemented yet",
-            entry.id
-        );
-        return Exit::Unsupported;
+        return crate::fnox::drop_lease(entry, &flags, ctx, io);
     }
     let vars = match vars(entry, &flags) {
         Ok(vars) => vars,
