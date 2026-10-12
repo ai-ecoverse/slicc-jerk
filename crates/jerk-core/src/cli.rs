@@ -47,6 +47,7 @@ pub struct Ctx<'a> {
     pub input: &'a mut dyn BufRead,
     pub random: &'a dyn Fn(&mut [u8]),
     pub oauth: &'a dyn crate::oauth::OAuthHost,
+    pub via_link: bool,
 }
 
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
@@ -66,6 +67,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
         input: &mut stdin.lock(),
         random: &crate::fnox::os_random,
         oauth: &oauth_host,
+        via_link: false,
     };
     run_with(args, &mut ctx, &mut Io { out, err })
 }
@@ -97,6 +99,20 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
         provider => match rest.get(1).map(String::as_str) {
             Some(verb) if VERBS.contains(&verb) => {
                 let config = config::load(env, explicit.as_deref());
+                let linked = rest[2..].iter().any(|a| a == "--via-link");
+                if linked {
+                    if let Some(problem) = config.problems.iter().find(|p| p.level == Level::Error)
+                    {
+                        return crate::link::bare(provider, &problem.to_string(), io);
+                    }
+                    if config.get(provider).is_none() {
+                        return crate::link::bare(
+                            provider,
+                            &format!("unknown provider {provider}"),
+                            io,
+                        );
+                    }
+                }
                 if let Some(code) = report(&config, io) {
                     return code;
                 }
@@ -109,6 +125,9 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                     );
                 };
                 let args = &rest[2..];
+                if let Some(stripped) = crate::link::strip(args) {
+                    return crate::link::run(entry, verb, &stripped, ctx, io);
+                }
                 match verb {
                     "get" => dispatch::get(entry, args, ctx, io),
                     "list" => dispatch::list(entry, args, ctx, io),

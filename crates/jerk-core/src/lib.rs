@@ -7,6 +7,7 @@ pub mod exit;
 pub mod extract;
 pub mod fnox;
 pub mod grants;
+pub mod link;
 pub mod mask;
 pub mod oauth;
 pub mod output;

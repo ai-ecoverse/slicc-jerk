@@ -104,6 +104,16 @@ duration = "1h"
 - **`--proxy`** adds `[[proxy.rules]]` for the provider's domains. They need a fnox build that lets proxy rules read lease credentials (F2, carried on ai-ecoverse/fnox).
 - **Until then, `jerk <provider> sync --fnox <SECRET> --provider <fnox provider> [--global]`** pipes the token into `fnox set` on stdin. It only writes to providers that encrypt or use an OS store (age, keychain, 1password, bitwarden, fido2, yubikey and the cloud KMSes), never `plain`.
 
+## Over the slicc link
+
+When seven asks a linked slicc CLI for a token (link stream `jerk`, slicc-cli's link spec §5.14), the CLI runs host jerk with `--via-link`:
+
+- **`jerk <provider> create --via-link [--seven-origin O] [--scope S] [-p k=v]…`** prints newline-delimited JSON: `{"event":"progress","message":…}` lines (a device code, for example), then a status object. It never prompts and never uses the terminal. A create that would run without a sign-in page (a minted token) or that needs a terminal is refused, and so is `--force`.
+- **`jerk <provider> lease --via-link`** prints the fnox lease object, then a status object.
+- **`jerk <provider> drop --lease --via-link`** prints a status object. A plain `drop` (a CLI sign-out) is never run over the link.
+- **Status objects** carry `provider`, `env`, `message`, and `expires_at` when there is one. stderr stays empty.
+- **`jerk <provider> list --json`** prints `{"items":[…]}`.
+
 ## Install
 
 - **npm:** `npm install -g @ai-ecoverse/slicc-jerk`. The package is a small Node launcher; npm picks one of the platform packages `@ai-ecoverse/slicc-jerk-<os>-<arch>` (darwin, linux, win32; arm64, x64). The same package carries `bin/jerk.wasm` for seven's kernel.

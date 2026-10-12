@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const LINK_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Default)]
 pub struct Flags {
@@ -143,20 +144,38 @@ pub fn run_verb_env(
     let run: &[String] = verb.run.as_deref().unwrap_or(&[]);
     let path = program(entry, ctx, io)?;
     let args = render_args(run.get(1..).unwrap_or(&[]), vars);
+    let linked = interactive && ctx.via_link;
+    let interactive = interactive && !ctx.via_link;
+    let fallback = if linked {
+        LINK_TIMEOUT
+    } else {
+        DEFAULT_TIMEOUT
+    };
     let timeout = verb
         .timeout
         .as_deref()
         .and_then(parse_duration)
-        .or((!interactive).then_some(DEFAULT_TIMEOUT));
-    let opts = Opts {
-        interactive,
-        capture: verb.parse.is_some(),
-        timeout,
-        remove_env: if scrub { &entry.provider.env } else { &[] },
-        input: None,
+        .or((!interactive).then_some(fallback));
+    let outcome = {
+        let progress = std::cell::RefCell::new(&mut *io.err);
+        let forward = |line: &str| {
+            let shown = crate::mask::mask_words(line);
+            if !shown.trim().is_empty() {
+                let _ = writeln!(progress.borrow_mut(), "{shown}");
+            }
+        };
+        let opts = Opts {
+            interactive,
+            capture: verb.parse.is_some(),
+            timeout,
+            remove_env: if scrub { &entry.provider.env } else { &[] },
+            input: None,
+            on_stderr: linked.then_some(&forward as &dyn Fn(&str)),
+        };
+        ctx.runner.run(&path, &args, &opts)
     };
     let cli = run.first().map(String::as_str).unwrap_or_default();
-    match ctx.runner.run(&path, &args, &opts) {
+    match outcome {
         Outcome::Exited {
             code: 0, stdout, ..
         } => Ok(Ran { stdout }),
@@ -508,7 +527,11 @@ pub fn list(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
             .collect::<Vec<_>>()),
     };
     let text = if flags.has("--json") {
-        value.to_string()
+        let items = match value {
+            serde_json::Value::Array(items) => items,
+            other => vec![other],
+        };
+        json!({ "items": items }).to_string()
     } else {
         serde_json::to_string_pretty(&value).unwrap_or_default()
     };
