@@ -225,7 +225,18 @@ pub struct Token {
 }
 
 pub fn fetch(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<Token, Exit> {
-    if let Some(value) = entry.provider.env.first().and_then(|n| ctx.env.var(n)) {
+    fetch_from(entry, vars, true, ctx, io)
+}
+
+pub fn fetch_from(
+    entry: &Entry,
+    vars: &Vars,
+    use_env: bool,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<Token, Exit> {
+    let from_env = entry.provider.env.first().and_then(|n| ctx.env.var(n));
+    if let Some(value) = from_env.filter(|_| use_env) {
         return Ok(Token {
             expires_at: None,
             value: value.to_string(),
@@ -429,7 +440,7 @@ pub fn details(
     )
     .unwrap_or_default();
     let vars = vars(entry, &flags).unwrap_or_default();
-    let Ok(token) = fetch(entry, &vars, ctx, &mut quiet) else {
+    let Ok(token) = fetch_from(entry, &vars, false, ctx, &mut quiet) else {
         return Vec::new();
     };
     let scopes = token
