@@ -1,10 +1,16 @@
 pub mod builtin;
 pub mod cli;
 pub mod config;
+pub mod dispatch;
 pub mod exit;
+pub mod extract;
 pub mod mask;
 pub mod output;
 pub mod paths;
+pub mod run;
+pub mod scopes;
+pub mod template;
+pub mod time;
 pub mod which;
 
 pub fn version() -> &'static str {
