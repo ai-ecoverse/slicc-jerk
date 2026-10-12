@@ -42,7 +42,7 @@ test('the kernel build has no CLI-dispatch providers', {
 }, () => {
   const res = runWasm(['list']);
   assert.equal(res.code, 0);
-  assert.match(res.text, /^PROVIDER\s+NAME\s+SOURCE\s+CLI\n$/);
+  assert.match(res.text, /^PROVIDER\s+NAME\s+SOURCE\n$/);
 });
 
 test('the kernel build keeps the exit codes', {
