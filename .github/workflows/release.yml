@@ -17,6 +17,8 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     env:
       LEFTHOOK: '0'
     outputs:
