@@ -11,4 +11,4 @@ pre-commit:
       run: cargo clippy --workspace --all-targets -- -D warnings
     - name: rust diff coverage
       glob: "crates/**.rs"
-      run: npm run --silent test:unit && npx --no-install slicc-diff-cover
+      run: npm run --silent test:unit && uvx diff-cover@10.6.0 coverage/unit/lcov.info --compare-branch HEAD --ignore-unstaged --fail-under 100 --exclude 'crates/jerk-oauth-wasm/*'

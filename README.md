@@ -125,8 +125,30 @@ When seven asks a linked slicc CLI for a token (link stream `jerk`, slicc-cli's 
 - `npm run lint`: slicc lint, rustfmt and clippy.
 - `npm test`: builds jerk and runs `test/integration/`.
 - `npm run build:wasm`: writes `bin/jerk.wasm`.
+- `npm run build:oauth-wasm`: builds `@ai-ecoverse/jerk-oauth` into `dist/jerk-oauth/`.
 - `npm run test:unit`: the gitignored unit tests in `test/unit/`, with coverage through `cargo-llvm-cov`.
 
 ## License
 
 Apache-2.0
+
+## `@ai-ecoverse/jerk-oauth` (npm)
+
+Pure OAuth helpers compiled from `crates/jerk-oauth` to WebAssembly (`wasm32-unknown-unknown`, wasm-bindgen `web` target). bios uses it for route (b) sign-ins, and the vault uses it for grant refresh.
+
+The package is ESM with `.wasm` and `.d.ts`. The caller does every fetch, opens every popup and supplies the clock and the random bytes. There is no I/O.
+
+### API
+
+```js
+import init, { initSync, parseConfig, beginSignIn, completeSignIn,
+  parseTokenResponse, refreshRequest, scopesSatisfied, shouldBackoff } from '@ai-ecoverse/jerk-oauth';
+```
+
+- **`parseConfig(tomlOrJson)`** — returns `{ ok, config?, errors? }`. Accepts TOML (the `[oauth]` block) or JSON.
+- **`beginSignIn(configJson, scope, nowSecs, random32, random16)`** — returns `{ authorizeUrl, state, expectedNonce?, pending }`. `pending` is opaque JSON the caller keeps in memory.
+- **`completeSignIn(configJson, pendingJson, capturedUrl)`** — returns `{ kind: "exchange", url, body }` (for PKCE) or `{ kind: "token", token, expiresAt?, scope? }` (implicit). Throws `{ kind: "error", code, message }` on state mismatch or IdP error.
+- **`parseTokenResponse(configJson, body, nowSecs)`** — returns `{ accessToken, refreshToken?, expiresAt?, scope? }`.
+- **`refreshRequest(configJson, refreshToken)`** — returns `{ url, body }`.
+- **`scopesSatisfied(granted, requested)`** — boolean.
+- **`shouldBackoff(lastFailureSecs, nowSecs)`** — boolean (5-minute window).

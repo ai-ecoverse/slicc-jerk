@@ -1,0 +1,21 @@
+[package]
+name = "jerk-oauth-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+jerk-oauth = { path = "../jerk-oauth" }
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+js-sys = "0.3"
+toml = "0.8"
+
+[lints]
+workspace = true

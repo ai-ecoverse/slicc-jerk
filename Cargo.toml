@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/jerk", "crates/jerk-core", "crates/jerk-oauth"]
+members = ["crates/jerk", "crates/jerk-core", "crates/jerk-oauth", "crates/jerk-oauth-wasm"]
 
 [workspace.package]
 version = "0.0.0"
