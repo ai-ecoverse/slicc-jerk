@@ -95,10 +95,6 @@ jobs:
         if: contains(matrix.builds, 'musl')
         run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
 
-      - name: musl C toolchain
-        if: contains(matrix.target, 'musl')
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
-
       - name: Build
         shell: bash
         run: |
