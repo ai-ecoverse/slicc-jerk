@@ -37,9 +37,18 @@ test('the kernel build prints its version', {
   assert.equal(res.text, `jerk ${expectedVersion}\n`);
 });
 
+test('the kernel build has no CLI-dispatch providers', {
+  skip: !existsSync(wasm) && 'run npm run build:wasm first',
+}, () => {
+  const res = runWasm(['list']);
+  assert.equal(res.code, 0);
+  assert.match(res.text, /^PROVIDER\s+NAME\s+SOURCE\s+CLI\n$/);
+});
+
 test('the kernel build keeps the exit codes', {
   skip: !existsSync(wasm) && 'run npm run build:wasm first',
 }, () => {
   assert.equal(runWasm(['--nope']).code, 2);
-  assert.equal(runWasm(['github', 'get']).code, 5);
+  assert.equal(runWasm(['intercept']).code, 5);
+  assert.equal(runWasm(['github', 'get']).code, 2);
 });
