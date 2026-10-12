@@ -15,7 +15,9 @@ import { after, before, test } from 'node:test';
 import { binary, expectedVersion, root } from './helpers.mjs';
 
 const target = `${process.platform}-${process.arch}`;
-const asset = `jerk-${target}${process.platform === 'win32' ? '.exe' : ''}`;
+const goName = { darwin: 'darwin', linux: 'linux', win32: 'windows' }[process.platform];
+const goArch = { arm64: 'arm64', x64: 'amd64' }[process.arch];
+const asset = `jerk-${goName}-${goArch}${process.platform === 'win32' ? '.exe' : ''}`;
 let work;
 
 before(() => {

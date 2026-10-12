@@ -24,6 +24,7 @@ jobs:
       LEFTHOOK: '0'
     outputs:
       version: ${{ steps.plan.outputs.version }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -42,52 +43,36 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/release-plan.mjs
 
+      - name: Matrix
+        id: matrix
+        run: node scripts/build-matrix.mjs
+
   dry-run:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       version: ${{ steps.plan.outputs.version }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
       - name: Plan
         id: plan
         run: echo "version=0.0.0-dry-run.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Matrix
+        id: matrix
+        run: node scripts/build-matrix.mjs --pull-request
 
   build:
     needs: [plan, dry-run]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (needs.plan.outputs.version || needs.dry-run.outputs.version) != '' }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: macos-latest
-            target: aarch64-apple-darwin
-            asset: jerk-darwin-arm64
-            file: jerk
-          - runner: macos-latest
-            target: x86_64-apple-darwin
-            asset: jerk-darwin-x64
-            file: jerk
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-            asset: jerk-linux-arm64
-            file: jerk
-          - runner: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            asset: jerk-linux-x64
-            file: jerk
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            asset: jerk-win32-arm64.exe
-            file: jerk.exe
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            asset: jerk-win32-x64.exe
-            file: jerk.exe
-          - runner: ubuntu-latest
-            target: wasm32-wasip1
-            asset: jerk.wasm
-            file: jerk.wasm
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix || needs.dry-run.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
@@ -104,7 +89,11 @@ jobs:
             export PATH="$HOME/.cargo/bin:$PATH"
           fi
           rustup toolchain install
-          rustup target add "${{ matrix.target }}"
+          for build in ${{ matrix.builds }}; do rustup target add "${build%%:*}"; done
+
+      - name: musl C toolchain
+        if: contains(matrix.builds, 'musl')
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
 
       - name: musl C toolchain
         if: contains(matrix.target, 'musl')
@@ -113,19 +102,25 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          cargo build --release --locked --target "${{ matrix.target }}" -p jerk
           mkdir -p out
-          cp "target/${{ matrix.target }}/release/${{ matrix.file }}" "out/${{ matrix.asset }}"
+          for build in ${{ matrix.builds }}; do
+            IFS=: read -r target file asset <<< "$build"
+            cargo build --release --locked --target "$target" -p jerk
+            cp "target/$target/release/$file" "out/$asset"
+          done
 
       - name: Check the version
-        if: matrix.target != 'wasm32-wasip1' && matrix.target != 'x86_64-apple-darwin'
+        if: matrix.name != 'wasm'
         shell: bash
-        run: test "$("out/${{ matrix.asset }}" --version)" = "jerk $JERK_VERSION"
+        run: |
+          first="${{ matrix.builds }}"
+          first="${first%% *}"
+          test "$("out/${first##*:}" --version)" = "jerk $JERK_VERSION"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: ${{ matrix.asset }}
-          path: out/${{ matrix.asset }}
+          name: jerk-${{ matrix.name }}
+          path: out/
           retention-days: 7
 
   package-check:
@@ -152,9 +147,9 @@ jobs:
         with:
           path: artifacts/build
 
-      - run: node scripts/release-collect.mjs --version "$VERSION"
+      - run: node scripts/release-collect.mjs --version "$VERSION" --skip-missing
 
-      - run: node scripts/npm-stage.mjs --version "$VERSION"
+      - run: node scripts/npm-stage.mjs --version "$VERSION" --only linux-arm64 --only linux-x64 --only win32-arm64 --only win32-x64
 
       - run: node scripts/npm-publish.mjs --dry-run
 

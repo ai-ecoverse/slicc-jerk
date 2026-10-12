@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -12,6 +12,7 @@ const { values } = parseArgs({
     version: { type: 'string' },
     from: { type: 'string', default: join(root, 'artifacts', 'build') },
     out: { type: 'string', default: join(root, 'artifacts', 'release') },
+    'skip-missing': { type: 'boolean', default: false },
   },
 });
 if (!values.version) {
@@ -23,13 +24,21 @@ rmSync(values.out, { recursive: true, force: true });
 mkdirSync(values.out, { recursive: true });
 const assets = [...TARGETS.map(assetName), 'jerk.wasm'];
 const sums = [];
+const found = new Map(
+  readdirSync(values.from, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => [entry.name, join(entry.parentPath, entry.name)])
+);
 for (const asset of assets) {
-  const source = join(values.from, asset, asset);
-  if (!existsSync(source)) throw new Error(`missing ${source}`);
+  const source = found.get(asset);
+  if (!source) {
+    if (values['skip-missing']) continue;
+    throw new Error(`missing ${asset} in ${values.from}`);
+  }
   copyFileSync(source, join(values.out, asset));
   sums.push(`${createHash('sha256').update(readFileSync(source)).digest('hex')}  ${asset}`);
 }
 writeFileSync(join(values.out, 'SHA256SUMS'), `${sums.join('\n')}\n`);
 mkdirSync(join(root, 'dist'), { recursive: true });
 writeFileSync(join(root, 'dist', 'VERSION'), values.version.replace(/^v/, ''));
-process.stdout.write(`collected ${assets.length} assets for ${values.version} in ${values.out}\n`);
+process.stdout.write(`collected ${sums.length} assets for ${values.version} in ${values.out}\n`);
