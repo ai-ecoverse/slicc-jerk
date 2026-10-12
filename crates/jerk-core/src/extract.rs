@@ -46,19 +46,17 @@ pub fn jwt_expiry(token: &str) -> Option<u64> {
     Some((number("created_at")? + number("expires_in")?) / 1000)
 }
 
-const SECRET_KEYS: [&str; 4] = ["token", "secret", "password", "key"];
+const SECRET_KEYS: [&str; 4] = ["token", "secret", "password", "apikey"];
 
 pub fn redact(value: &Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(
             map.iter()
                 .map(|(k, v)| {
-                    let lower = k.to_ascii_lowercase();
+                    let lower = k.to_ascii_lowercase().replace(['_', '-'], "");
                     let secret = SECRET_KEYS.iter().any(|s| lower.contains(s));
                     let v = match v {
-                        Value::String(s) if secret && s.chars().count() >= 16 => {
-                            Value::String(mask(s))
-                        }
+                        Value::String(s) if secret => Value::String(mask(s)),
                         other => redact(other),
                     };
                     (k.clone(), v)
