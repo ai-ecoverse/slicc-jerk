@@ -118,3 +118,53 @@ test('wrangler tokens get a max_age expiry', () => {
   assert.equal(res.masked, 'cfoa…6789');
   assert.ok(Date.parse(res.expires_at) > Date.now() + 49 * 60 * 1000);
 });
+
+test('npm get reads the npmrc, and an env reference inside it', async () => {
+  const sb = sandbox();
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  mkdirSync(join(sb.dir, 'home'), { recursive: true });
+  writeFileSync(join(sb.dir, 'home', '.npmrc'), '//registry.npmjs.org/:_authToken=${MY_NPM}\n');
+  const res = sb.jerk(['npm', 'get', '--json'], { MY_NPM: 'npm_FAKEFAKEFAKEFAKE99' });
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout), {
+    provider: 'npm',
+    source: 'file',
+    masked: 'npm_…KE99',
+    expires_at: null,
+    scopes: null,
+  });
+  const none = sb.jerk(['npm', 'get'], { NPM_CONFIG_USERCONFIG: join(sb.dir, 'nope') });
+  assert.equal(none.status, 3);
+});
+
+test('npm create mints a token, records only its id, and drop forgets it', async () => {
+  const sb = sandbox();
+  const { readFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  sb.script(
+    'npm',
+    `if (args[0] === 'token' && args[1] === 'create') process.stdout.write(JSON.stringify({ token: 'npm_MINTEDMINTEDMINTED42', key: 'abcdef123' }));`
+  );
+  const res = sb.jerk(['npm', 'create', '--name', 'ci']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, 'npm_…ED42\n');
+  assert.deepEqual(sb.calls()[0].args, [
+    'token',
+    'create',
+    '--name',
+    'ci',
+    '--expires',
+    '1',
+    '--json',
+  ]);
+  const minted = readFileSync(join(sb.dir, 'state', 'slicc-jerk', 'minted.json'), 'utf8');
+  assert.deepEqual(JSON.parse(minted), { npm: ['abcdef123'] });
+  assert.ok(!minted.includes('npm_MINTED'));
+  assert.equal(sb.jerk(['npm', 'drop', 'abcdef123', '--yes']).status, 0);
+  assert.deepEqual(sb.calls().at(-1).args, ['token', 'revoke', 'abcdef123']);
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(sb.dir, 'state', 'slicc-jerk', 'minted.json'), 'utf8')),
+    { npm: [] }
+  );
+});

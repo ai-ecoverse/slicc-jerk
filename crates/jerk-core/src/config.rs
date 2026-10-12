@@ -24,6 +24,8 @@ pub struct Verb {
     pub expiry: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub interactive: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -364,6 +366,20 @@ fn validate_verb(name: &str, verb: &Verb, provider: &Provider, messages: &mut Ve
     }
     if verb.read.is_some() && name != "get" {
         messages.push(format!("{name}: read only applies to get"));
+    }
+    if let Some(id) = &verb.id {
+        if name != "create" || !id.starts_with("json:") || !valid_parse(id) {
+            messages.push(format!(
+                "{name}: id {id:?} must be json:<pointer>, on create only"
+            ));
+        }
+        if verb
+            .parse
+            .as_deref()
+            .is_none_or(|p| !p.starts_with("json:"))
+        {
+            messages.push(format!("{name}: id needs parse = \"json:<pointer>\""));
+        }
     }
     if let Some(parse) = &verb.parse {
         if !valid_parse(parse) {
