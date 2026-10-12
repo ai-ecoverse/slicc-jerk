@@ -182,13 +182,20 @@ pub fn run(entry: &Entry, verb: &str, args: &[String], ctx: &mut Ctx<'_>, io: &m
             )
         }
         "lease" => status(entry, last.unwrap_or_else(|| fallback.to_string()), &[]),
-        _ => status(
-            entry,
-            last_line(&text)
-                .or(last)
-                .unwrap_or_else(|| fallback.to_string()),
-            &[],
-        ),
+        _ => {
+            let extra = if verb == "create" && code == Exit::Ok {
+                crate::dispatch::details(entry, args, ctx)
+            } else {
+                Vec::new()
+            };
+            status(
+                entry,
+                last_line(&text)
+                    .or(last)
+                    .unwrap_or_else(|| fallback.to_string()),
+                &extra,
+            )
+        }
     };
     let _ = writeln!(io.out, "{doc}");
     code

@@ -75,6 +75,8 @@ pub struct Provider {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Verb>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<Verb>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub create: Option<Verb>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drop: Option<Verb>,
@@ -416,6 +418,7 @@ pub fn verbs(provider: &Provider) -> Vec<(&'static str, &Verb)> {
         ("get", &provider.get),
         ("list", &provider.list),
         ("scopes", &provider.scopes),
+        ("user", &provider.user),
         ("create", &provider.create),
         ("drop", &provider.drop),
     ]

@@ -9,6 +9,7 @@ params = { host = "github.com" }
 get = { run = ["gh", "auth", "token", "--hostname", "{host}"], parse = "text" }
 list = { run = ["gh", "auth", "status", "--hostname", "{host}", "--json", "hosts"], parse = "json:/hosts" }
 scopes = { run = ["gh", "auth", "status", "--hostname", "{host}", "--active", "--json", "hosts"], parse = "json:/hosts/{host}/0/scopes" }
+user = { run = ["gh", "auth", "status", "--hostname", "{host}", "--active", "--json", "hosts"], parse = "json:/hosts/{host}/0/login" }
 create = { run = ["gh", "auth", "login", "--web", "--hostname", "{host}", "--scopes", "{scope}"], interactive = true }
 drop = { run = ["gh", "auth", "logout", "--hostname", "{host}", "--user", "{id}"], interactive = true }
 
