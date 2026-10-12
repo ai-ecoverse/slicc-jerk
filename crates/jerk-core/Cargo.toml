@@ -18,13 +18,13 @@ url = "2"
 ureq = { version = "3", features = ["rustls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3", features = ["apple-native"] }
+keyring = { version = "4", features = ["apple-native"] }
 
 [target.'cfg(windows)'.dependencies]
-keyring = { version = "3", features = ["windows-native"] }
+keyring = { version = "4", features = ["windows-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", features = ["linux-native"] }
+keyring = { version = "4", features = ["linux-native"] }
 
 [lints]
 workspace = true
