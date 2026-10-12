@@ -152,6 +152,7 @@ pub fn run_verb_env(
         capture: verb.parse.is_some(),
         timeout,
         remove_env: if scrub { &entry.provider.env } else { &[] },
+        input: None,
     };
     let cli = run.first().map(String::as_str).unwrap_or_default();
     match ctx.runner.run(&path, &args, &opts) {
@@ -625,12 +626,7 @@ pub fn drop(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
         Err(e) => return usage(&format!("{} drop: {e}", entry.id), io),
     };
     if flags.has("--lease") {
-        let _ = writeln!(
-            io.err,
-            "jerk {} drop --lease: not implemented yet",
-            entry.id
-        );
-        return Exit::Unsupported;
+        return crate::fnox::drop_lease(entry, &flags, ctx, io);
     }
     let vars = match vars(entry, &flags) {
         Ok(vars) => vars,

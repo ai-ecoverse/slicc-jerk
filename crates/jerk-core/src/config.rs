@@ -337,6 +337,16 @@ pub fn validate(id: &str, provider: &Provider, source: &Source) -> Vec<Problem> 
         if value != "get" && value != "create" {
             messages.push(format!("lease_via {value:?} must be get or create"));
         }
+        let revocable = provider
+            .create
+            .as_ref()
+            .is_some_and(|c| c.parse.is_some() && (c.id.is_some() || c.lookup.is_some()));
+        if value == "create" && !revocable {
+            messages.push(
+                "lease_via = \"create\" needs a create with parse and an id or lookup, so the lease can be revoked"
+                    .to_string(),
+            );
+        }
     }
     if provider.get.is_none() && provider.oauth.is_none() {
         messages.push("needs a get command or an oauth block".to_string());

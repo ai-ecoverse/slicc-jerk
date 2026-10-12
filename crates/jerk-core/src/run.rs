@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -8,6 +8,7 @@ pub struct Opts<'a> {
     pub capture: bool,
     pub timeout: Option<Duration>,
     pub remove_env: &'a [String],
+    pub input: Option<&'a str>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -53,8 +54,13 @@ impl Runner for Process {
                 .stdout(stdout)
                 .stderr(Stdio::inherit());
         } else {
+            let stdin = if opts.input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            };
             command
-                .stdin(Stdio::null())
+                .stdin(stdin)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
         }
@@ -62,6 +68,9 @@ impl Runner for Process {
             Ok(child) => child,
             Err(e) => return Outcome::Failed(e.to_string()),
         };
+        if let (Some(text), Some(mut stdin)) = (opts.input, child.stdin.take()) {
+            let _ = stdin.write_all(text.as_bytes());
+        }
         let out = child.stdout.take().map(drain);
         let err = child.stderr.take().map(drain);
         let deadline = opts.timeout.map(|t| Instant::now() + t);
