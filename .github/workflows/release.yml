@@ -139,6 +139,12 @@ jobs:
 
       - run: npm ci
 
+      - run: rustup show active-toolchain || rustup toolchain install
+
+      - run: cargo install wasm-bindgen-cli@0.2.129
+
+      - run: npm run build:oauth-wasm
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           path: artifacts/build
@@ -174,6 +180,12 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - run: rustup show active-toolchain || rustup toolchain install
+
+      - run: cargo install wasm-bindgen-cli@0.2.129
+
+      - run: npm run build:oauth-wasm
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:

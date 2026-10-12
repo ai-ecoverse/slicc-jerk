@@ -51,8 +51,12 @@ jobs:
 
       - run: rustup show active-toolchain || rustup toolchain install
 
+      - run: cargo install wasm-bindgen-cli@0.2.129
+
       - run: npm ci
 
       - run: npm run build:wasm
+
+      - run: npm run build:oauth-wasm
 
       - run: npm test
