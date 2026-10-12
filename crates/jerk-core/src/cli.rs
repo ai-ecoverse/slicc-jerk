@@ -8,10 +8,6 @@ use serde_json::json;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 
-pub(crate) fn os_random(buf: &mut [u8]) {
-    let _ = getrandom::fill(buf);
-}
-
 pub(crate) const HELP: &str =
     "jerk: get, list, create and drop OAuth tokens through each provider's own CLI
 
@@ -68,7 +64,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
         stdin_terminal: stdin.is_terminal(),
         stdout_terminal: std::io::stdout().is_terminal(),
         input: &mut stdin.lock(),
-        random: &os_random,
+        random: &crate::fnox::os_random,
         oauth: &oauth_host,
     };
     run_with(args, &mut ctx, &mut Io { out, err })
@@ -118,7 +114,8 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                     "list" => dispatch::list(entry, args, ctx, io),
                     "create" => dispatch::create(entry, args, ctx, io),
                     "drop" => dispatch::drop(entry, args, ctx, io),
-                    _ => not_yet(&format!("{provider} {verb}"), io),
+                    "lease" => crate::fnox::lease(entry, args, ctx, io),
+                    _ => crate::fnox::sync(entry, args, ctx, io),
                 }
             }
             Some(verb) => usage(&format!("unknown command {verb}"), io),
@@ -259,7 +256,13 @@ fn config_command(args: &[String], env: &Env, explicit: Option<&str>, io: &mut I
         Some("path") => config_path(&args[1..], env, explicit, io),
         Some("check") if args.len() == 1 => config_check(env, explicit, io),
         Some("show") if args.len() == 2 => config_show(&args[1], env, explicit, io),
-        Some("fnox") => not_yet("config fnox", io),
+        Some("fnox") => {
+            let config = config::load(env, explicit);
+            if let Some(code) = report(&config, io) {
+                return code;
+            }
+            crate::fnox::config_fnox(&args[1..], &config, io)
+        }
         Some(other) if ["check", "show"].contains(&other) => {
             usage(&format!("config {other}: wrong arguments"), io)
         }
