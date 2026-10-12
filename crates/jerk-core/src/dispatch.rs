@@ -125,6 +125,20 @@ pub fn run_verb(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Result<Ran, Exit> {
+    run_verb_env(entry, name, verb, vars, interactive, true, ctx, io)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_verb_env(
+    entry: &Entry,
+    name: &str,
+    verb: &Verb,
+    vars: &Vars,
+    interactive: bool,
+    scrub: bool,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<Ran, Exit> {
     let run: &[String] = verb.run.as_deref().unwrap_or(&[]);
     let path = program(entry, ctx, io)?;
     let args = render_args(run.get(1..).unwrap_or(&[]), vars);
@@ -137,7 +151,7 @@ pub fn run_verb(
         interactive,
         capture: verb.parse.is_some(),
         timeout,
-        remove_env: &entry.provider.env,
+        remove_env: if scrub { &entry.provider.env } else { &[] },
     };
     let cli = run.first().map(String::as_str).unwrap_or_default();
     match ctx.runner.run(&path, &args, &opts) {
@@ -271,9 +285,16 @@ fn read_token(
     }
 }
 
-pub fn granted(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Option<String> {
+pub fn granted(
+    entry: &Entry,
+    token: &Token,
+    vars: &Vars,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Option<String> {
     let verb = entry.provider.scopes.as_ref()?;
-    let ran = run_verb(entry, "scopes", verb, vars, false, ctx, io).ok()?;
+    let scrub = token.source != "env";
+    let ran = run_verb_env(entry, "scopes", verb, vars, false, scrub, ctx, io).ok()?;
     match verb.parse.as_deref() {
         Some(parse) if parse.starts_with("json:") => {
             let pointer = crate::template::render_text(parse, vars);
@@ -299,34 +320,44 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
         Ok(vars) => vars,
         Err(e) => return usage(&e, io),
     };
-    let mut token = fetch(entry, &vars, ctx, io);
-    if token.as_ref().err() == Some(&Exit::SignIn)
-        && flags.has("--login")
-        && ctx.stdin_terminal
-        && ctx.stdout_terminal
-    {
-        let code = create_run(entry, &vars, ctx, io);
-        if code != Exit::Ok {
-            return code;
+    let login = flags.has("--login") && ctx.stdin_terminal && ctx.stdout_terminal;
+    let requested = flags.value("--scope");
+    let mut signed_in = false;
+    let (token, granted_scopes) = loop {
+        let token = match fetch(entry, &vars, ctx, io) {
+            Ok(token) => token,
+            Err(Exit::SignIn) if login && !signed_in => {
+                signed_in = true;
+                let code = create_run(entry, &vars, ctx, io);
+                if code != Exit::Ok {
+                    return code;
+                }
+                continue;
+            }
+            Err(code) => return code,
+        };
+        let Some(requested) = requested else {
+            break (token, None);
+        };
+        let scopes_now = granted(entry, &token, &vars, ctx, io);
+        if scopes::satisfied(scopes_now.as_deref(), requested) {
+            break (token, scopes_now);
         }
-        token = fetch(entry, &vars, ctx, io);
-    }
-    let token = match token {
-        Ok(token) => token,
-        Err(code) => return code,
+        if login && !signed_in {
+            signed_in = true;
+            let code = create_run(entry, &vars, ctx, io);
+            if code != Exit::Ok {
+                return code;
+            }
+            continue;
+        }
+        let _ = writeln!(
+            io.err,
+            "jerk: {}: the token does not cover {requested}; run jerk {} create --scope {requested}",
+            entry.id, entry.id
+        );
+        return Exit::SignIn;
     };
-    let mut granted_scopes = None;
-    if let Some(requested) = flags.value("--scope") {
-        granted_scopes = granted(entry, &vars, ctx, io);
-        if !scopes::satisfied(granted_scopes.as_deref(), requested) {
-            let _ = writeln!(
-                io.err,
-                "jerk: {}: the token does not cover {requested}; run jerk {} create --scope {requested}",
-                entry.id, entry.id
-            );
-            return Exit::SignIn;
-        }
-    }
     let expires = token.expires_at.map(time::rfc3339);
     let masked = mask::mask(&token.value);
     if flags.has("--refresh") {
@@ -443,11 +474,12 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
             out: &mut std::io::sink(),
             err: &mut std::io::sink(),
         };
-        if fetch(entry, &vars, ctx, &mut quiet).is_ok() {
+        if let Ok(token) = fetch(entry, &vars, ctx, &mut quiet) {
             let covered = match flags.value("--scope") {
-                Some(requested) => {
-                    scopes::satisfied(granted(entry, &vars, ctx, &mut quiet).as_deref(), requested)
-                }
+                Some(requested) => scopes::satisfied(
+                    granted(entry, &token, &vars, ctx, &mut quiet).as_deref(),
+                    requested,
+                ),
                 None => true,
             };
             if covered {
