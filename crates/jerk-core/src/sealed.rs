@@ -161,8 +161,13 @@ impl Waiting<'_> {
             .to_string();
         for _ in 0..self.limit {
             (self.sleep)(1);
-            if let PollResult::Done(done) = self.inner.poll(&id)? {
-                return Ok(done);
+            match self.inner.poll(&id) {
+                Ok(PollResult::Done(done)) => return Ok(done),
+                Ok(PollResult::Pending { .. }) => {}
+                Err(e) => {
+                    let _ = self.inner.cancel(&id);
+                    return Err(e);
+                }
             }
         }
         let _ = self.inner.cancel(&id);
