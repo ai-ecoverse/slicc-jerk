@@ -276,11 +276,18 @@ pub fn merge(config: &mut Config, source: Source, text: &str) {
     let file: File = match toml::from_str(text) {
         Ok(file) => file,
         Err(e) => {
+            let raw = e.message().to_string();
+            let sanitized =
+                if raw.contains("unknown") || raw.contains("invalid") || raw.contains("expected") {
+                    sanitize_oauth_serde_error(&raw)
+                } else {
+                    raw
+                };
             config.problems.push(Problem {
                 level: Level::Error,
                 source: source.to_string(),
                 provider: None,
-                message: e.message().to_string(),
+                message: sanitized,
             });
             return;
         }
@@ -323,6 +330,26 @@ pub fn merge(config: &mut Config, source: Source, text: &str) {
     }
 }
 
+fn sanitize_oauth_serde_error(msg: &str) -> String {
+    if msg.contains("unknown variant") {
+        return "invalid configuration".into();
+    }
+    if let Some(name) = extract_between(msg, "unknown field `", "`") {
+        return format!("invalid field {name}");
+    }
+    if let Some(name) = extract_between(msg, "missing field `", "`") {
+        return format!("missing field {name}");
+    }
+    "invalid configuration".into()
+}
+
+fn extract_between<'a>(haystack: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+    let start = haystack.find(prefix)? + prefix.len();
+    let rest = &haystack[start..];
+    let end = rest.find(suffix)?;
+    Some(&rest[..end])
+}
+
 fn parse_oauth(
     id: &str,
     provider: &Provider,
@@ -334,11 +361,13 @@ fn parse_oauth(
     let config: OAuthConfig = match value.try_into() {
         Ok(c) => c,
         Err(e) => {
+            let raw = e.to_string();
+            let sanitized = sanitize_oauth_serde_error(&raw);
             problems.push(Problem {
                 level: Level::Error,
                 source: source.to_string(),
                 provider: Some(id.to_string()),
-                message: format!("oauth: {e}"),
+                message: format!("oauth: {sanitized}"),
             });
             return None;
         }
@@ -387,17 +416,17 @@ pub fn validate(id: &str, provider: &Provider, source: &Source) -> Vec<Problem> 
     }
     if let Some(value) = &provider.max_age {
         if parse_duration(value).is_none() {
-            messages.push(format!("max_age {value:?} is not a duration such as 50m"));
+            messages.push("max_age is not a valid duration such as 50m".to_string());
         }
     }
     if let Some(value) = &provider.store {
         if value != "keyring" && value != "file" {
-            messages.push(format!("store {value:?} must be keyring or file"));
+            messages.push("store must be keyring or file".to_string());
         }
     }
     if let Some(value) = &provider.lease_via {
         if value != "get" && value != "create" {
-            messages.push(format!("lease_via {value:?} must be get or create"));
+            messages.push("lease_via must be get or create".to_string());
         }
         let revocable = provider
             .create

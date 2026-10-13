@@ -146,6 +146,9 @@ pub fn is_loopback_host(host: &str) -> bool {
 pub fn require_https_or_loopback(url_str: &str) -> Result<(), String> {
     match url::Url::parse(url_str) {
         Ok(parsed) => {
+            if parsed.username() != "" || parsed.password().is_some() {
+                return Err("must not contain userinfo".into());
+            }
             let scheme = parsed.scheme();
             let host = parsed.host_str().unwrap_or("");
             if scheme == "https" {
@@ -165,6 +168,13 @@ pub fn require_https_or_loopback(url_str: &str) -> Result<(), String> {
 fn validate_url_scheme(url_str: &str, field: &str, errors: &mut Vec<ValidationError>) {
     match url::Url::parse(url_str) {
         Ok(parsed) => {
+            if parsed.username() != "" || parsed.password().is_some() {
+                errors.push(ValidationError {
+                    field: field.into(),
+                    message: "must not contain userinfo".into(),
+                });
+                return;
+            }
             let scheme = parsed.scheme();
             let host = parsed.host_str().unwrap_or("");
             if scheme == "https" {
@@ -365,10 +375,10 @@ pub fn timeout_ms(config: &OAuthConfig) -> u64 {
 
 pub fn validate_entropy(random32: &[u8; 32], random16: &[u8; 16]) -> Result<(), &'static str> {
     if random32.iter().all(|&b| b == random32[0]) {
-        return Err("random32 has no entropy (all bytes equal)");
+        return Err("random32 failed a sanity check; the caller must supply CSPRNG bytes");
     }
     if random16.iter().all(|&b| b == random16[0]) {
-        return Err("random16 has no entropy (all bytes equal)");
+        return Err("random16 failed a sanity check; the caller must supply CSPRNG bytes");
     }
     Ok(())
 }

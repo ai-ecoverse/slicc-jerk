@@ -61,6 +61,49 @@ jobs:
 
       - run: npm test
 
+  reproducible-wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LEFTHOOK: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: rustup show active-toolchain || rustup toolchain install
+
+      - run: cargo install wasm-bindgen-cli@0.2.129
+
+      - run: npm ci
+
+      - name: Build jerk-oauth wasm (first)
+        run: |
+          npm run build:oauth-wasm
+          mkdir -p /tmp/build-a
+          cp dist/jerk-oauth/jerk_oauth_wasm_bg.wasm /tmp/build-a/
+          cp dist/jerk-oauth/jerk_oauth_wasm.js /tmp/build-a/
+          cp dist/jerk-oauth/jerk_oauth_wasm.d.ts /tmp/build-a/
+
+      - name: Build jerk-oauth wasm (second)
+        run: |
+          cargo clean -p jerk-oauth-wasm
+          npm run build:oauth-wasm
+          mkdir -p /tmp/build-b
+          cp dist/jerk-oauth/jerk_oauth_wasm_bg.wasm /tmp/build-b/
+          cp dist/jerk-oauth/jerk_oauth_wasm.js /tmp/build-b/
+          cp dist/jerk-oauth/jerk_oauth_wasm.d.ts /tmp/build-b/
+
+      - name: Compare builds
+        run: |
+          diff /tmp/build-a/jerk_oauth_wasm_bg.wasm /tmp/build-b/jerk_oauth_wasm_bg.wasm
+          diff /tmp/build-a/jerk_oauth_wasm.js /tmp/build-b/jerk_oauth_wasm.js
+          diff /tmp/build-a/jerk_oauth_wasm.d.ts /tmp/build-b/jerk_oauth_wasm.d.ts
+          echo "All jerk-oauth wasm artifacts are byte-identical across builds"
+
   test-installer:
     runs-on: ubuntu-latest
     timeout-minutes: 10

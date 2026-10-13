@@ -350,6 +350,6 @@ pub fn oauth_refresh(
         refresh_token: parsed.refresh_token.clone(),
         expires_at,
         scope: parsed.scope.clone(),
-        token_type: parsed.token_type.clone(),
+        token_type: Some(parsed.token_type.clone()),
     })
 }
