@@ -54,7 +54,7 @@ test('jerk list shows the built-in providers and finds their CLIs on PATH', () =
   const json = JSON.parse(sb.jerk(['list', '--json']).stdout);
   assert.deepEqual(
     json.map((p) => p.provider),
-    ['adobe-aio', 'cloudflare', 'github', 'npm']
+    ['adobe-aio', 'cloudflare', 'github', 'npm', 'xai']
   );
   assert.equal(json.find((p) => p.provider === 'github').cli, true);
 });
@@ -71,7 +71,7 @@ test('a user file replaces a built-in provider as a unit', () => {
   assert.equal(github.requires, null);
   const check = sb.jerk(['config', 'check']);
   assert.equal(check.status, 0);
-  assert.equal(check.stdout, 'ok: 4 providers (3 built-in, 1 user)\n');
+  assert.equal(check.stdout, 'ok: 5 providers (4 built-in, 1 user)\n');
 });
 
 test('config check reports every problem and exits 2', () => {
