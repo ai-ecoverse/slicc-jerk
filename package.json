@@ -30,7 +30,7 @@
   },
   "scripts": {
     "prepare": "lefthook install",
-    "lint": "slicc-lint && shellcheck scripts/*.sh && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
+    "lint": "slicc-lint && shellcheck scripts/*.sh && shellcheck -s sh install.sh && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
     "typecheck": "node --check npm/jerk.js && node --check scripts/targets.mjs && node --check scripts/npm-stage.mjs && node --check scripts/npm-publish.mjs && node --check scripts/release-plan.mjs && node --check scripts/release-collect.mjs && node --check scripts/build-wasm.mjs && node --check scripts/build-matrix.mjs && node --check scripts/build-jerk-oauth-wasm.mjs",
     "format": "biome check --write . && cargo fmt --all",
     "build": "cargo build --release -p jerk",

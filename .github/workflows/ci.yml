@@ -60,3 +60,75 @@ jobs:
       - run: npm run build:oauth-wasm
 
       - run: npm test
+
+  test-installer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LEFTHOOK: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Create fake assets
+        run: |
+          mkdir -p _test_assets
+          arch=$(uname -m)
+          case "$arch" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; esac
+          asset="jerk-linux-${arch}"
+          printf '#!/bin/sh\nprintf "jerk 0.99.0\\n"\n' > "_test_assets/$asset"
+          chmod +x "_test_assets/$asset"
+          hash=$(sha256sum "_test_assets/$asset" | cut -d' ' -f1)
+          printf '%s  %s\n' "$hash" "$asset" > _test_assets/SHA256SUMS
+
+      - name: Run installer tests
+        run: FAKE_VERSION=0.99.0 sh scripts/test-install.sh _test_assets
+
+  test-installer-macos:
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    env:
+      LEFTHOOK: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Create fake assets
+        run: |
+          mkdir -p _test_assets
+          os=$(uname -s | tr '[:upper:]' '[:lower:]')
+          case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; esac
+          asset="jerk-${os}-${arch}"
+          printf '#!/bin/sh\nprintf "jerk 0.99.0\\n"\n' > "_test_assets/$asset"
+          chmod +x "_test_assets/$asset"
+          hash=$(shasum -a 256 "_test_assets/$asset" | cut -d' ' -f1)
+          printf '%s  %s\n' "$hash" "$asset" > _test_assets/SHA256SUMS
+
+      - name: Run installer tests
+        run: FAKE_VERSION=0.99.0 sh scripts/test-install.sh _test_assets
+
+  test-installer-alpine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LEFTHOOK: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Create fake assets
+        run: |
+          mkdir -p _test_assets
+          arch=$(uname -m)
+          case "$arch" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; esac
+          asset="jerk-linux-${arch}"
+          printf '#!/bin/sh\nprintf "jerk 0.99.0\\n"\n' > "_test_assets/$asset"
+          chmod +x "_test_assets/$asset"
+          hash=$(sha256sum "_test_assets/$asset" | cut -d' ' -f1)
+          printf '%s  %s\n' "$hash" "$asset" > _test_assets/SHA256SUMS
+
+      - name: Run installer tests in alpine (wget only)
+        run: |
+          docker run --rm -v "$PWD:/w" alpine:latest sh -c '
+            apk add --no-cache python3 coreutils
+            apk del curl 2>/dev/null || true
+            FAKE_VERSION=0.99.0 sh /w/scripts/test-install.sh /w/_test_assets
+          '
