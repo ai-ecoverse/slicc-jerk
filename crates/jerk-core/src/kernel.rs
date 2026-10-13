@@ -76,15 +76,15 @@ pub fn list(config: &Config, args: &[String], sealed: &dyn Sealed, io: &mut Io<'
     Exit::Ok
 }
 
-struct KernelRow {
-    provider: String,
-    name: String,
-    source: String,
-    cli: String,
-    env: Vec<String>,
+pub struct KernelRow {
+    pub provider: String,
+    pub name: String,
+    pub source: String,
+    pub cli: String,
+    pub env: Vec<String>,
 }
 
-fn host_list(sealed: &dyn Sealed) -> Result<Vec<KernelRow>, SealedError> {
+pub fn host_list(sealed: &dyn Sealed) -> Result<Vec<KernelRow>, SealedError> {
     let body = json!({ "v": 1, "op": "request", "kind": "jerk", "jop": "list" });
     let reply = sealed.request(&body)?;
     if let Some(exit) = reply.get("exit").and_then(Value::as_i64) {

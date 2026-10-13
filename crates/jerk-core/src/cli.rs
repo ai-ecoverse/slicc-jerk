@@ -431,10 +431,19 @@ fn kernel_verb_or_passthrough(
     if let Some(entry) = entry {
         return kernel_verb(entry, verb, args, ctx, sealed, io);
     }
+    let rows = crate::kernel::host_list(sealed).unwrap_or_default();
+    let row = rows.into_iter().find(|r| r.provider == provider);
+    let Some(row) = row else {
+        return usage(
+            &format!("unknown provider {provider}; jerk list shows the configured ones"),
+            io,
+        );
+    };
     let stub = crate::config::Entry {
-        id: provider.to_string(),
+        id: row.provider.clone(),
         provider: crate::config::Provider {
-            name: Some(provider.to_string()),
+            name: Some(row.name.clone()),
+            env: row.env.clone(),
             ..crate::config::Provider::default()
         },
         source: crate::config::Source {
@@ -443,38 +452,7 @@ fn kernel_verb_or_passthrough(
         },
         oauth_config: None,
     };
-    match verb {
-        "get" => {
-            let env_val = ctx.env.var(&format!("{}_TOKEN", provider.to_uppercase()));
-            crate::kernel::get(&stub, args, env_val, sealed, io)
-        }
-        "create" => crate::kernel::create(&stub, args, sealed, ctx.sleep, io),
-        "drop" => {
-            let stdin_terminal = ctx.stdin_terminal;
-            let input = &mut *ctx.input;
-            let mut confirm = || {
-                let mut answer = String::new();
-                let _ = input.read_line(&mut answer);
-                matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
-            };
-            crate::kernel::drop_cmd(&stub, args, stdin_terminal, sealed, &mut confirm, io)
-        }
-        "lease" | "sync" => {
-            let _ = writeln!(
-                io.err,
-                "jerk {provider}: {verb} is not supported in the kernel"
-            );
-            Exit::Unsupported
-        }
-        "list" => {
-            let _ = writeln!(
-                io.err,
-                "jerk {provider}: per-provider list is not supported in the kernel"
-            );
-            Exit::Unsupported
-        }
-        _ => usage(&format!("unknown command {verb}"), io),
-    }
+    kernel_verb(&stub, verb, args, ctx, sealed, io)
 }
 
 fn kernel_verb(
