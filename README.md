@@ -165,6 +165,8 @@ import init, { initSync, parseConfig, beginSignIn, completeSignIn,
 IdP errors (`code: "idp_error"`) also carry `error`, the IdP's error code, and `description` when the IdP sent one. Both are cut to 128 printable ASCII characters. A caller that mustn't show the provider's free text should use `code` and `error`, not `message`.
 
 Validation notes:
+- `nowSecs` (in `beginSignIn`, `parseTokenResponse` and `parseRefreshResponse`) must be a whole, non-negative number of seconds no larger than `Number.MAX_SAFE_INTEGER`. Anything else throws `invalid_clock`.
+- `token_url` and `resource` are sent in their parsed, serialized form.
 - `random32` and `random16` get a sanity check only. The caller must supply CSPRNG bytes (`crypto.getRandomValues`).
 - URLs with userinfo (`https://user:pass@host`) are refused, in config and in captured redirects. An empty userinfo (`http://:@127.0.0.1:8765/…`) is dropped by the URL parser and then treated as no userinfo.
 - Error messages never contain values from the config or the pending state, and never contain a response body. An unknown or missing config field is named only when the name matches `[A-Za-z0-9_.-]{1,64}`. The IdP's own `error` and `error_description` are passed through, cut to 128 printable ASCII characters.

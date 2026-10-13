@@ -115,7 +115,10 @@ pub fn refresh_request(params: &RefreshParams<'_>) -> Result<(String, String), S
         pairs.push(("scope".into(), scope.into()));
     }
     if let Some(resource) = params.resource {
-        pairs.push(("resource".into(), resource.into()));
+        let normalized = url::Url::parse(resource)
+            .map(|u| u.to_string())
+            .map_err(|_| "resource must be an absolute URL".to_string())?;
+        pairs.push(("resource".into(), normalized));
     }
     if let Some(secret) = params.client_secret.filter(|s| !s.is_empty()) {
         pairs.push(("client_secret".into(), secret.into()));
