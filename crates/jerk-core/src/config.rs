@@ -51,9 +51,13 @@ pub struct Verb {
 #[serde(deny_unknown_fields)]
 pub struct Provider {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub domains: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -98,6 +102,7 @@ struct File {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Layer {
     BuiltIn,
+    Mcp,
     System,
     User,
     Explicit,
@@ -107,6 +112,7 @@ impl Layer {
     pub fn label(&self) -> &'static str {
         match self {
             Layer::BuiltIn => "built-in",
+            Layer::Mcp => "mcp.json",
             Layer::System => "system",
             Layer::User => "user",
             Layer::Explicit => "explicit",
@@ -233,6 +239,13 @@ pub(crate) fn missing(e: &std::io::Error) -> bool {
 pub fn load(env: &Env, explicit: Option<&str>) -> Config {
     let mut config = Config::default();
     merge(&mut config, builtin_source(), crate::builtin::BUILTIN);
+    let (mcp_entries, mcp_problems) = crate::mcp_config::load_mcp_providers(env);
+    config.problems.extend(mcp_problems);
+    for entry in mcp_entries {
+        if !config.providers.contains_key(&entry.id) {
+            config.providers.insert(entry.id.clone(), entry);
+        }
+    }
     let (sources, problems) = layer_files(env, explicit);
     config.problems.extend(problems);
     for source in sources {
@@ -347,16 +360,17 @@ fn parse_oauth(
 
 pub fn validate(id: &str, provider: &Provider, source: &Source) -> Vec<Problem> {
     let mut messages = Vec::new();
+    let is_mcp = id.starts_with("mcp:");
     if !valid_id(id) {
         messages.push(
-            "the id must be lower-case letters, digits and dashes, starting with a letter or digit"
+            "the id must be lower-case letters, digits and dashes, starting with a letter or digit, or mcp:<name>"
                 .to_string(),
         );
     }
     if provider.locked && source.layer != Layer::System {
         messages.push("locked only applies in system files".to_string());
     }
-    if provider.env.is_empty() {
+    if provider.env.is_empty() && !is_mcp {
         messages.push("env needs at least one name".to_string());
     }
     for name in &provider.env {
@@ -396,7 +410,7 @@ pub fn validate(id: &str, provider: &Provider, source: &Source) -> Vec<Problem> 
             );
         }
     }
-    if provider.get.is_none() && provider.oauth.is_none() {
+    if provider.get.is_none() && provider.oauth.is_none() && !is_mcp {
         messages.push("needs a get command or an oauth block".to_string());
     }
     for (name, verb) in verbs(provider) {
@@ -547,9 +561,22 @@ pub fn placeholders(text: &str) -> Result<Vec<String>, String> {
 }
 
 pub fn valid_id(id: &str) -> bool {
+    if let Some(rest) = id.strip_prefix("mcp:") {
+        if let Some(url_part) = rest.strip_prefix("url:") {
+            return url::Url::parse(url_part).is_ok();
+        }
+        return valid_mcp_name(rest);
+    }
     let mut chars = id.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+fn valid_mcp_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 pub fn valid_env(name: &str) -> bool {
