@@ -119,8 +119,9 @@ When seven asks a linked slicc CLI for a token (link stream `jerk`, slicc-cli's 
 
 - **Shell (macOS / Linux):**
   ```sh
-  curl -fsSL https://github.com/ai-ecoverse/slicc-jerk/releases/latest/download/install.sh | sh
+  curl -fsSL https://get.sliccy.ai/jerk | sh
   ```
+  If get.sliccy.ai is unreachable, use the release asset directly: `curl -fsSL https://github.com/ai-ecoverse/slicc-jerk/releases/latest/download/install.sh | sh`. Options pass through, for example `curl -fsSL https://get.sliccy.ai/jerk | sh -s -- --help`.
 - **npm:** `npm install -g @ai-ecoverse/slicc-jerk`. The package is a small Node launcher; npm picks one of the platform packages `@ai-ecoverse/slicc-jerk-<os>-<arch>` (darwin, linux, win32; arm64, x64). The same package carries `bin/jerk.wasm` for seven's kernel.
 - **slicc:** the slicc CLI installs jerk with it, or with `slicc install jerk`.
 - **GitHub releases:** one binary per platform, with `SHA256SUMS` and build provenance. The macOS binaries are signed with a Developer ID (identifier `ai.sliccy.jerk`, hardened runtime) and notarized; a bare binary can't be stapled, so Gatekeeper checks the notarization online. The Windows binaries are unsigned until Azure Trusted Signing is configured.
