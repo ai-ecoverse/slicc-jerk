@@ -28,6 +28,7 @@ pub fn list(config: &Config, args: &[String], sealed: &dyn Sealed, io: &mut Io<'
                 .clone()
                 .unwrap_or_else(|| entry.id.clone()),
             source: "seven".to_string(),
+            cli: "-".to_string(),
             env: entry.provider.env.clone(),
         })
         .collect();
@@ -49,6 +50,7 @@ pub fn list(config: &Config, args: &[String], sealed: &dyn Sealed, io: &mut Io<'
                     "provider": row.provider,
                     "name": row.name,
                     "source": row.source,
+                    "cli": row.cli,
                     "env": row.env,
                 })
             })
@@ -57,13 +59,20 @@ pub fn list(config: &Config, args: &[String], sealed: &dyn Sealed, io: &mut Io<'
         return Exit::Ok;
     }
 
-    let rows: Vec<[String; 3]> = all
+    let rows: Vec<[String; 4]> = all
         .iter()
-        .map(|row| [row.provider.clone(), row.name.clone(), row.source.clone()])
+        .map(|row| {
+            [
+                row.provider.clone(),
+                row.name.clone(),
+                row.source.clone(),
+                row.cli.clone(),
+            ]
+        })
         .collect();
     let _ = io
         .out
-        .write_all(table3(&["PROVIDER", "NAME", "SOURCE"], &rows).as_bytes());
+        .write_all(crate::cli::table(&["PROVIDER", "NAME", "SOURCE", "CLI"], &rows).as_bytes());
     Exit::Ok
 }
 
@@ -71,6 +80,7 @@ struct KernelRow {
     provider: String,
     name: String,
     source: String,
+    cli: String,
     env: Vec<String>,
 }
 
@@ -111,37 +121,11 @@ fn host_list(sealed: &dyn Sealed) -> Result<Vec<KernelRow>, SealedError> {
                 provider,
                 name,
                 source: format!("host:{device}"),
+                cli: "host".to_string(),
                 env,
             })
         })
         .collect())
-}
-
-fn table3(header: &[&str; 3], rows: &[[String; 3]]) -> String {
-    let mut widths: Vec<usize> = header.iter().map(|h| h.chars().count()).collect();
-    for row in rows {
-        for (w, cell) in widths.iter_mut().zip(row) {
-            *w = (*w).max(cell.chars().count());
-        }
-    }
-    let line = |cells: Vec<&str>| {
-        let mut text = String::new();
-        for (i, cell) in cells.iter().enumerate() {
-            if i + 1 == cells.len() {
-                text.push_str(cell);
-            } else {
-                text.push_str(cell);
-                text.push_str(&" ".repeat(widths[i] - cell.chars().count() + 2));
-            }
-        }
-        text.push('\n');
-        text
-    };
-    let mut text = line(header.to_vec());
-    for row in rows {
-        text.push_str(&line(row.iter().map(String::as_str).collect()));
-    }
-    text
 }
 
 pub fn get(

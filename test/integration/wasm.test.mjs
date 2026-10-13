@@ -42,7 +42,7 @@ test('the kernel build has no CLI-dispatch providers', {
 }, () => {
   const res = runWasm(['list']);
   assert.equal(res.code, 0);
-  assert.match(res.text, /^PROVIDER\s+NAME\s+SOURCE\n$/);
+  assert.match(res.text, /^PROVIDER\s+NAME\s+SOURCE\s+CLI\n$/);
 });
 
 test('the kernel build keeps the exit codes', {
@@ -50,5 +50,5 @@ test('the kernel build keeps the exit codes', {
 }, () => {
   assert.equal(runWasm(['--nope']).code, 2);
   assert.equal(runWasm(['intercept']).code, 5);
-  assert.equal(runWasm(['github', 'get']).code, 2);
+  assert.equal(runWasm(['github', 'get']).code, 3);
 });
