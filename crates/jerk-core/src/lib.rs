@@ -9,6 +9,8 @@ pub mod exit;
 pub mod extract;
 pub mod fnox;
 pub mod grants;
+#[cfg(not(target_os = "wasi"))]
+pub mod intercept_cmd;
 pub mod link;
 pub mod mask;
 pub mod oauth;

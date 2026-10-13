@@ -94,7 +94,7 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
         }
         "list" => list(&rest[1..], env, explicit.as_deref(), io, exists),
         "config" => config_command(&rest[1..], env, explicit.as_deref(), io),
-        "intercept" => not_yet("intercept", io),
+        "intercept" => intercept_command(&rest[1..], ctx, io),
         flag if flag.starts_with('-') => usage(&format!("unknown option {flag}"), io),
         provider => match rest.get(1).map(String::as_str) {
             Some(verb) if VERBS.contains(&verb) => {
@@ -379,6 +379,29 @@ fn config_show(id: &str, env: &Env, explicit: Option<&str>, io: &mut Io<'_>) -> 
     Exit::Ok
 }
 
+#[cfg(not(target_os = "wasi"))]
+fn intercept_command(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
+    if ctx.via_link {
+        let _ = writeln!(io.err, "jerk intercept: not available over the link");
+        return Exit::Unsupported;
+    }
+    if !ctx.stdin_terminal || !ctx.stdout_terminal {
+        let _ = writeln!(
+            io.err,
+            "jerk intercept: stdin and stdout must both be terminals"
+        );
+        return Exit::Usage;
+    }
+    crate::intercept_cmd::run(args, ctx, io)
+}
+
+#[cfg(target_os = "wasi")]
+fn intercept_command(_args: &[String], _ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
+    let _ = writeln!(io.err, "jerk intercept: not available in this environment");
+    Exit::Unsupported
+}
+
+#[allow(dead_code)]
 fn not_yet(what: &str, io: &mut Io<'_>) -> Exit {
     let _ = writeln!(io.err, "jerk {what}: not implemented yet");
     Exit::Unsupported
