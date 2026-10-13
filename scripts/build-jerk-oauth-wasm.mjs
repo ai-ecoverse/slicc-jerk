@@ -11,7 +11,7 @@ mkdirSync(out, { recursive: true });
 
 const cargo = spawnSync(
   'cargo',
-  ['build', '--release', '--target', 'wasm32-unknown-unknown', '-p', 'jerk-oauth-wasm'],
+  ['build', '--release', '--locked', '--target', 'wasm32-unknown-unknown', '-p', 'jerk-oauth-wasm'],
   { cwd: root, stdio: 'inherit' }
 );
 if (cargo.status !== 0) process.exit(cargo.status ?? 1);

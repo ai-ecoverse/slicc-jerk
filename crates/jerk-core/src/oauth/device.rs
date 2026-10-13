@@ -138,11 +138,11 @@ pub fn poll_token(params: &PollParams<'_>) -> Result<Token, OAuthError> {
         })?;
         let expires_at = expiry::compute_expiry(current_secs, token_response.expires_in, None);
         return Ok(Token {
-            access_token: token_response.access_token,
-            refresh_token: token_response.refresh_token,
+            access_token: token_response.access_token.clone(),
+            refresh_token: token_response.refresh_token.clone(),
             expires_at,
-            scope: token_response.scope,
-            token_type: token_response.token_type,
+            scope: token_response.scope.clone(),
+            token_type: token_response.token_type.clone(),
         });
     }
 }

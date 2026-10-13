@@ -78,7 +78,7 @@ pub fn run(
     };
     let result = cdp
         .call("Target.createTarget", target_params, None)
-        .map_err(cdp_err)?;
+        .map_err(map_cdp_error)?;
     let target_id = result["targetId"]
         .as_str()
         .ok_or_else(|| OAuthError {
@@ -124,6 +124,8 @@ pub fn run(
         &config.capture.from,
         &config.capture.param,
         Some(&state),
+        Some(&config.redirect_uri),
+        None,
     )
     .map_err(|e| OAuthError {
         exit: Exit::Error,
@@ -163,11 +165,11 @@ pub fn run(
         })?;
         let expires_at = expiry::compute_expiry(now_secs, token_response.expires_in, None);
         Ok(Token {
-            access_token: token_response.access_token,
-            refresh_token: token_response.refresh_token,
+            access_token: token_response.access_token.clone(),
+            refresh_token: token_response.refresh_token.clone(),
             expires_at,
-            scope: token_response.scope,
-            token_type: token_response.token_type,
+            scope: token_response.scope.clone(),
+            token_type: token_response.token_type.clone(),
         })
     } else {
         let expires_in = result
@@ -209,20 +211,23 @@ fn run_in_target(
         patterns.push(Pattern::request("__jerk_placeholder_never_matches__"));
     }
 
-    let mut interception = Interception::attach(cdp, target_id, &patterns).map_err(cdp_err)?;
+    let mut interception =
+        Interception::attach(cdp, target_id, &patterns).map_err(map_cdp_error)?;
 
     let session = interception.session_id().to_string();
     interception
         .call("Page.enable", json!({}), Some(&session))
-        .map_err(cdp_err)?;
+        .map_err(map_cdp_error)?;
 
     let _ = writeln!(err, "jerk: sign-in opened in browser");
 
-    interception.notify(
-        "Page.navigate",
-        json!({ "url": authorize_url }),
-        Some(&session),
-    );
+    interception
+        .notify(
+            "Page.navigate",
+            json!({ "url": authorize_url }),
+            Some(&session),
+        )
+        .map_err(map_cdp_error)?;
 
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
@@ -306,15 +311,10 @@ fn capture_fetch(
     loop {
         let remaining = remaining_timeout(deadline)?;
 
-        let paused = match interception.next(remaining) {
+        let paused = match interception.next(remaining).map_err(map_cdp_error) {
             Ok(Some(p)) => p,
             Ok(None) => return Err(timeout_err()),
-            Err(e) => {
-                return Err(OAuthError {
-                    exit: Exit::Error,
-                    message: e,
-                })
-            }
+            Err(e) => return Err(e),
         };
 
         if is_network {
@@ -500,5 +500,23 @@ fn cdp_err(message: String) -> OAuthError {
     OAuthError {
         exit: Exit::Error,
         message,
+    }
+}
+
+pub(crate) fn is_blocked_error(message: &str) -> bool {
+    message.contains("BlockedByClient") || message.starts_with("slicc: refused:")
+}
+
+pub(crate) fn map_cdp_error(message: String) -> OAuthError {
+    if is_blocked_error(&message) {
+        OAuthError {
+            exit: Exit::Usage,
+            message: "sign-in blocked by browser (protected origin)".into(),
+        }
+    } else {
+        OAuthError {
+            exit: Exit::Error,
+            message,
+        }
     }
 }

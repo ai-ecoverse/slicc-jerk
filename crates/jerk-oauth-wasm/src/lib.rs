@@ -9,6 +9,15 @@ use jerk_oauth::rewrite;
 use jerk_oauth::scopes;
 use jerk_oauth::template;
 use wasm_bindgen::prelude::*;
+use zeroize::Zeroize;
+
+fn make_error(code: &str, message: &str) -> JsValue {
+    let obj = js_sys::Object::new();
+    js_sys::Reflect::set(&obj, &"kind".into(), &"error".into()).ok();
+    js_sys::Reflect::set(&obj, &"code".into(), &code.into()).ok();
+    js_sys::Reflect::set(&obj, &"message".into(), &message.into()).ok();
+    obj.into()
+}
 
 fn extract_query_param(url_str: &str, name: &str) -> Option<String> {
     let query = url_str.find('?').map(|i| {
@@ -62,19 +71,8 @@ fn hex_val(b: u8) -> Option<u8> {
 fn parse_oauth_config(input: &str) -> Result<OAuthConfig, JsValue> {
     let trimmed = input.trim_start();
     if trimmed.starts_with('{') {
-        serde_json::from_str::<OAuthConfig>(trimmed).map_err(|e| {
-            let obj = js_sys::Object::new();
-            js_sys::Reflect::set(&obj, &"ok".into(), &false.into()).ok();
-            js_sys::Reflect::set(
-                &obj,
-                &"errors".into(),
-                &serde_json::to_string(&[format!("json: {e}")])
-                    .unwrap_or_default()
-                    .into(),
-            )
-            .ok();
-            obj.into()
-        })
+        serde_json::from_str::<OAuthConfig>(trimmed)
+            .map_err(|e| make_error("config_parse", &format!("json: {e}")))
     } else {
         #[derive(serde::Deserialize)]
         struct Wrapper {
@@ -85,33 +83,17 @@ fn parse_oauth_config(input: &str) -> Result<OAuthConfig, JsValue> {
     }
 }
 
-fn toml_parse<T: serde::de::DeserializeOwned>(input: &str) -> Result<T, JsValue> {
-    let value: serde_json::Value = toml_to_json(input).map_err(|e| -> JsValue {
-        let obj = js_sys::Object::new();
-        js_sys::Reflect::set(&obj, &"ok".into(), &false.into()).ok();
-        js_sys::Reflect::set(
-            &obj,
-            &"errors".into(),
-            &serde_json::to_string(&[format!("toml: {e}")])
-                .unwrap_or_default()
-                .into(),
-        )
-        .ok();
-        obj.into()
-    })?;
-    serde_json::from_value(value).map_err(|e| {
-        let obj = js_sys::Object::new();
-        js_sys::Reflect::set(&obj, &"ok".into(), &false.into()).ok();
-        js_sys::Reflect::set(
-            &obj,
-            &"errors".into(),
-            &serde_json::to_string(&[format!("{e}")])
-                .unwrap_or_default()
-                .into(),
-        )
-        .ok();
-        obj.into()
+fn validate_config(config: OAuthConfig) -> Result<config::ValidConfig, JsValue> {
+    config::validated(config).map_err(|errors| {
+        let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+        make_error("config_invalid", &msgs.join("; "))
     })
+}
+
+fn toml_parse<T: serde::de::DeserializeOwned>(input: &str) -> Result<T, JsValue> {
+    let value: serde_json::Value = toml_to_json(input)
+        .map_err(|e| -> JsValue { make_error("config_parse", &format!("toml: {e}")) })?;
+    serde_json::from_value(value).map_err(|e| make_error("config_parse", &e.to_string()))
 }
 
 fn toml_to_json(input: &str) -> Result<serde_json::Value, String> {
@@ -182,20 +164,23 @@ pub fn begin_sign_in(
     random32: &[u8],
     random16: &[u8],
 ) -> Result<JsValue, JsValue> {
-    let cfg: OAuthConfig =
-        serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
-
     if random32.len() != 32 {
-        return Err(JsValue::from_str("random32 must be 32 bytes"));
+        return Err(make_error("invalid_input", "random32 must be 32 bytes"));
     }
     if random16.len() != 16 {
-        return Err(JsValue::from_str("random16 must be 16 bytes"));
+        return Err(make_error("invalid_input", "random16 must be 16 bytes"));
     }
 
     let r32: [u8; 32] = random32.try_into().unwrap();
     let r16: [u8; 16] = random16.try_into().unwrap();
 
-    let verifier_str = pkce::verifier(&r32);
+    config::validate_entropy(&r32, &r16).map_err(|msg| make_error("bad_entropy", msg))?;
+
+    let raw_cfg = parse_oauth_config(config_json)?;
+    let valid = validate_config(raw_cfg)?;
+    let cfg = valid.inner();
+
+    let mut verifier_str = pkce::verifier(&r32);
     let challenge = pkce::challenge(&verifier_str);
     let nonce = relay::nonce_from_bytes(&r16);
 
@@ -232,6 +217,8 @@ pub fn begin_sign_in(
         "now_secs": now_secs as u64,
     });
 
+    verifier_str.zeroize();
+
     let obj = js_sys::Object::new();
     js_sys::Reflect::set(&obj, &"authorizeUrl".into(), &authorize_url.into()).ok();
     js_sys::Reflect::set(&obj, &"state".into(), &state_value.into()).ok();
@@ -254,8 +241,9 @@ pub fn complete_sign_in(
     pending_json: &str,
     captured_url: &str,
 ) -> Result<JsValue, JsValue> {
-    let cfg: OAuthConfig =
-        serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let raw_cfg = parse_oauth_config(config_json)?;
+    let valid = validate_config(raw_cfg)?;
+    let cfg = valid.inner();
 
     #[derive(serde::Deserialize)]
     struct Pending {
@@ -267,45 +255,48 @@ pub fn complete_sign_in(
         now_secs: u64,
     }
 
-    let pending: Pending =
-        serde_json::from_str(pending_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let pending: Pending = serde_json::from_str(pending_json)
+        .map_err(|e| make_error("invalid_pending", &e.to_string()))?;
 
     let result = capture::parse_redirect(
         captured_url,
         &cfg.capture.from,
         &cfg.capture.param,
         Some(&pending.state),
+        Some(&cfg.redirect_uri),
+        None,
     )
     .map_err(|e| -> JsValue {
-        let obj = js_sys::Object::new();
-        js_sys::Reflect::set(&obj, &"kind".into(), &"error".into()).ok();
         let (code, msg) = match &e {
-            capture::CaptureError::MissingParam(name) => {
-                ("missing_param", format!("missing parameter: {name}"))
+            capture::CaptureError::MissingParam(name) => (
+                "missing_param".to_string(),
+                format!("missing parameter: {name}"),
+            ),
+            capture::CaptureError::StateMismatch => {
+                ("state_mismatch".into(), "state mismatch".into())
             }
-            capture::CaptureError::StateMismatch => ("state_mismatch", "state mismatch".into()),
+            capture::CaptureError::RedirectMismatch => {
+                ("redirect_mismatch".into(), "redirect URI mismatch".into())
+            }
+            capture::CaptureError::DuplicateParam(name) => (
+                "duplicate_param".into(),
+                format!("duplicate parameter: {name}"),
+            ),
             capture::CaptureError::IdpError { error, description } => (
-                "idp_error",
+                "idp_error".into(),
                 match description {
                     Some(d) => format!("{error}: {d}"),
                     None => error.clone(),
                 },
             ),
         };
-        js_sys::Reflect::set(&obj, &"code".into(), &code.into()).ok();
-        js_sys::Reflect::set(&obj, &"message".into(), &msg.into()).ok();
-        obj.into()
+        make_error(&code, &msg)
     })?;
 
     if let Some(ref expected) = pending.expected_nonce {
         let received = extract_query_param(captured_url, "nonce").unwrap_or_default();
-        relay::verify_nonce(expected, &received).map_err(|_| -> JsValue {
-            let obj = js_sys::Object::new();
-            js_sys::Reflect::set(&obj, &"kind".into(), &"error".into()).ok();
-            js_sys::Reflect::set(&obj, &"code".into(), &"nonce_mismatch".into()).ok();
-            js_sys::Reflect::set(&obj, &"message".into(), &"relay nonce mismatch".into()).ok();
-            obj.into()
-        })?;
+        relay::verify_nonce(expected, &received)
+            .map_err(|_| -> JsValue { make_error("nonce_mismatch", "relay nonce mismatch") })?;
     }
 
     match pending.flow {
@@ -313,7 +304,7 @@ pub fn complete_sign_in(
             let token_url = cfg
                 .token_url
                 .as_deref()
-                .ok_or_else(|| JsValue::from_str("token_url required for pkce"))?;
+                .ok_or_else(|| make_error("config_invalid", "token_url required for pkce"))?;
             let body_pairs = exchange::build_authorization_code_body(
                 &result.value,
                 &cfg.client_id,
@@ -356,17 +347,31 @@ pub fn parse_token_response(
     body: &str,
     now_secs: f64,
 ) -> Result<JsValue, JsValue> {
-    let _cfg: OAuthConfig =
-        serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let raw_cfg = parse_oauth_config(config_json)?;
+    let _valid = validate_config(raw_cfg)?;
 
     let resp = exchange::parse_token_response(body).map_err(|e| -> JsValue {
-        let obj = js_sys::Object::new();
-        js_sys::Reflect::set(&obj, &"kind".into(), &"error".into()).ok();
         let (code, msg) = match &e {
             exchange::ExchangeError::MissingAccessToken => {
                 ("missing_access_token", "missing access_token".into())
             }
-            exchange::ExchangeError::InvalidJson(m) => ("invalid_json", m.clone()),
+            exchange::ExchangeError::EmptyAccessToken => {
+                ("empty_access_token", "empty access_token".into())
+            }
+            exchange::ExchangeError::InvalidJson(_) => {
+                ("invalid_json", "invalid token response JSON".into())
+            }
+            exchange::ExchangeError::InvalidTokenType(tt) => (
+                "invalid_token_type",
+                format!("token_type must be Bearer, got {tt}"),
+            ),
+            exchange::ExchangeError::InvalidExpiresIn(val) => {
+                ("invalid_expires_in", format!("invalid expires_in: {val}"))
+            }
+            exchange::ExchangeError::ErrorWithToken => (
+                "error_with_token",
+                "response contains both error and access_token".into(),
+            ),
             exchange::ExchangeError::IdpError { error, description } => (
                 "idp_error",
                 match description {
@@ -375,15 +380,18 @@ pub fn parse_token_response(
                 },
             ),
         };
-        js_sys::Reflect::set(&obj, &"code".into(), &code.into()).ok();
-        js_sys::Reflect::set(&obj, &"message".into(), &msg.into()).ok();
-        obj.into()
+        make_error(code, &msg)
     })?;
 
     let expires_at = expiry::compute_expiry(now_secs as u64, resp.expires_in, None);
 
     let obj = js_sys::Object::new();
-    js_sys::Reflect::set(&obj, &"accessToken".into(), &resp.access_token.into()).ok();
+    js_sys::Reflect::set(
+        &obj,
+        &"accessToken".into(),
+        &resp.access_token.clone().into(),
+    )
+    .ok();
     if let Some(rt) = &resp.refresh_token {
         js_sys::Reflect::set(&obj, &"refreshToken".into(), &rt.clone().into()).ok();
     }
@@ -398,13 +406,14 @@ pub fn parse_token_response(
 
 #[wasm_bindgen(js_name = refreshRequest)]
 pub fn refresh_request(config_json: &str, refresh_token: &str) -> Result<JsValue, JsValue> {
-    let cfg: OAuthConfig =
-        serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let raw_cfg = parse_oauth_config(config_json)?;
+    let valid = validate_config(raw_cfg)?;
+    let cfg = valid.inner();
 
     let token_url = cfg
         .token_url
         .as_deref()
-        .ok_or_else(|| JsValue::from_str("token_url required for refresh"))?;
+        .ok_or_else(|| make_error("config_invalid", "token_url required for refresh"))?;
 
     let body_pairs = exchange::build_refresh_body(refresh_token, &cfg.client_id);
     let body = exchange::encode_form_body(&body_pairs);

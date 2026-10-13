@@ -1,5 +1,7 @@
+use crate::capture::sanitize_error_description;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use zeroize::Zeroize;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TokenResponse {
@@ -14,10 +16,23 @@ pub struct TokenResponse {
     pub token_type: Option<String>,
 }
 
+impl Drop for TokenResponse {
+    fn drop(&mut self) {
+        self.access_token.zeroize();
+        if let Some(ref mut rt) = self.refresh_token {
+            rt.zeroize();
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExchangeError {
     MissingAccessToken,
+    EmptyAccessToken,
     InvalidJson(String),
+    InvalidTokenType(String),
+    InvalidExpiresIn(String),
+    ErrorWithToken,
     IdpError {
         error: String,
         description: Option<String>,
@@ -28,7 +43,17 @@ impl std::fmt::Display for ExchangeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ExchangeError::MissingAccessToken => write!(f, "token response missing access_token"),
-            ExchangeError::InvalidJson(msg) => write!(f, "invalid token response: {msg}"),
+            ExchangeError::EmptyAccessToken => write!(f, "token response has empty access_token"),
+            ExchangeError::InvalidJson(_) => write!(f, "invalid token response JSON"),
+            ExchangeError::InvalidTokenType(tt) => {
+                write!(f, "token_type must be Bearer, got {tt}")
+            }
+            ExchangeError::InvalidExpiresIn(val) => {
+                write!(f, "invalid expires_in: {val}")
+            }
+            ExchangeError::ErrorWithToken => {
+                write!(f, "token response contains both error and access_token")
+            }
             ExchangeError::IdpError { error, description } => match description {
                 Some(desc) => write!(f, "token endpoint error: {error}: {desc}"),
                 None => write!(f, "token endpoint error: {error}"),
@@ -74,16 +99,35 @@ pub fn encode_form_body(pairs: &[(String, String)]) -> String {
 
 pub fn parse_token_response(body: &str) -> Result<TokenResponse, ExchangeError> {
     let map: BTreeMap<String, serde_json::Value> =
-        serde_json::from_str(body).map_err(|e| ExchangeError::InvalidJson(e.to_string()))?;
+        serde_json::from_str(body).map_err(|_| ExchangeError::InvalidJson("parse error".into()))?;
 
-    if let Some(error) = map.get("error").and_then(|v| v.as_str()) {
+    let has_error = map.get("error").and_then(|v| v.as_str()).is_some();
+    let has_token = map.get("access_token").and_then(|v| v.as_str()).is_some();
+
+    if has_error && has_token {
+        return Err(ExchangeError::ErrorWithToken);
+    }
+
+    if has_error {
+        let error = map
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let description = map
+            .get("error_description")
+            .and_then(|v| v.as_str())
+            .map(sanitize_error_description);
         return Err(ExchangeError::IdpError {
-            error: error.to_string(),
-            description: map
-                .get("error_description")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
+            error: sanitize_error_description(&error),
+            description,
         });
+    }
+
+    if let Some(error_val) = map.get("error") {
+        if !error_val.is_null() {
+            return Err(ExchangeError::ErrorWithToken);
+        }
     }
 
     let access_token = map
@@ -92,12 +136,50 @@ pub fn parse_token_response(body: &str) -> Result<TokenResponse, ExchangeError> 
         .ok_or(ExchangeError::MissingAccessToken)?
         .to_string();
 
+    if access_token.is_empty() {
+        return Err(ExchangeError::EmptyAccessToken);
+    }
+
+    if let Some(tt_val) = map.get("token_type") {
+        if let Some(tt) = tt_val.as_str() {
+            if !tt.eq_ignore_ascii_case("bearer") {
+                return Err(ExchangeError::InvalidTokenType(sanitize_error_description(
+                    tt,
+                )));
+            }
+        }
+    }
+
+    let expires_in = match map.get("expires_in") {
+        Some(val) => {
+            if let Some(n) = val.as_u64() {
+                if n > 315_360_000 {
+                    return Err(ExchangeError::InvalidExpiresIn("too large".into()));
+                }
+                Some(n)
+            } else if val.as_i64().is_some() {
+                return Err(ExchangeError::InvalidExpiresIn("negative".into()));
+            } else if let Some(n) = val.as_f64() {
+                if !(0.0..=315_360_000.0).contains(&n) || n.is_nan() || n.is_infinite() {
+                    return Err(ExchangeError::InvalidExpiresIn("out of range".into()));
+                }
+                Some(n as u64)
+            } else if let Some(s) = val.as_str() {
+                match s.parse::<u64>() {
+                    Ok(n) if n <= 315_360_000 => Some(n),
+                    _ => return Err(ExchangeError::InvalidExpiresIn("not a valid number".into())),
+                }
+            } else {
+                return Err(ExchangeError::InvalidExpiresIn("unexpected type".into()));
+            }
+        }
+        None => None,
+    };
+
     let refresh_token = map
         .get("refresh_token")
         .and_then(|v| v.as_str())
         .map(str::to_string);
-
-    let expires_in = map.get("expires_in").and_then(|v| v.as_u64());
 
     let scope = map
         .get("scope")
