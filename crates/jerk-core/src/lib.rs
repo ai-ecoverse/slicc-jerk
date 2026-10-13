@@ -1,4 +1,6 @@
 pub mod browser;
+#[cfg(not(target_os = "wasi"))]
+pub mod browser_select;
 pub mod builtin;
 pub mod cli;
 pub mod config;
@@ -7,6 +9,8 @@ pub mod exit;
 pub mod extract;
 pub mod fnox;
 pub mod grants;
+#[cfg(not(target_os = "wasi"))]
+pub mod intercept_cmd;
 pub mod kernel;
 pub mod link;
 pub mod mask;

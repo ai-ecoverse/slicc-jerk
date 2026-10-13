@@ -18,6 +18,7 @@ url = "2"
 [target.'cfg(not(target_os = "wasi"))'.dependencies]
 ureq = { version = "3", features = ["rustls"] }
 keyring-core = "1"
+slicc-cdp-client = "1.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
@@ -27,6 +28,7 @@ windows-native-keyring-store = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-keyutils-keyring-store = "1"
+openssl = { version = "0.10", features = ["vendored"] }
 
 [lints]
 workspace = true

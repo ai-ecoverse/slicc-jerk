@@ -639,7 +639,7 @@ fn create_run(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exi
 pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     let flags = match parse_flags(
         args,
-        &["--scope", "--name", "--expires"],
+        &["--scope", "--name", "--expires", "--cdp", "--seven-origin"],
         &["--force", "--reveal", "--json"],
         0,
     ) {
@@ -727,7 +727,59 @@ fn oauth_create_cmd(
         }
     }
 
-    let token = match oauth::oauth_create(config, scope, host, ctx.now, ctx.random, io.err) {
+    #[cfg(not(target_os = "wasi"))]
+    let cdp_opener = {
+        let cdp_url = flags.value("--cdp");
+        let seven_origin = flags
+            .value("--seven-origin")
+            .or(ctx.seven_origin.as_deref());
+        let needs_cdp = matches!(
+            config.mode,
+            jerk_oauth::config::Mode::Intercept | jerk_oauth::config::Mode::Auto
+        );
+        if needs_cdp {
+            struct Opener<'a> {
+                cdp_url: Option<&'a str>,
+                seven_origin: Option<&'a str>,
+                env: &'a crate::paths::Env,
+                runner: &'a dyn crate::run::Runner,
+                exists: &'a dyn Fn(&std::path::Path) -> bool,
+            }
+            impl oauth::CdpOpener for Opener<'_> {
+                fn open(&self) -> Result<oauth::CdpResult, String> {
+                    let ws_url = crate::browser_select::resolve_cdp_url(
+                        self.cdp_url,
+                        self.seven_origin,
+                        self.env,
+                        self.runner,
+                        self.exists,
+                        &mut std::io::sink(),
+                    )
+                    .map_err(|e| e.message)?;
+                    let cdp = cdp_client::cdp::Cdp::connect(&ws_url)?;
+                    Ok(oauth::CdpResult(cdp))
+                }
+            }
+            let opener = Opener {
+                cdp_url,
+                seven_origin,
+                env: ctx.env,
+                runner: ctx.runner,
+                exists: ctx.exists,
+            };
+            Some(opener)
+        } else {
+            None
+        }
+    };
+    #[cfg(not(target_os = "wasi"))]
+    let cdp_ref: Option<&dyn oauth::CdpOpener> =
+        cdp_opener.as_ref().map(|o| o as &dyn oauth::CdpOpener);
+    #[cfg(target_os = "wasi")]
+    let cdp_ref: Option<&dyn oauth::CdpOpener> = None;
+
+    let token = match oauth::oauth_create(config, scope, host, ctx.now, ctx.random, io.err, cdp_ref)
+    {
         Ok(t) => t,
         Err(e) => {
             let _ = writeln!(io.err, "jerk: {}: {e}", entry.id);

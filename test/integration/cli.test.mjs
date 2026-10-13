@@ -54,7 +54,7 @@ test('jerk list shows the built-in providers and finds their CLIs on PATH', () =
   const json = JSON.parse(sb.jerk(['list', '--json']).stdout);
   assert.deepEqual(
     json.map((p) => p.provider),
-    ['adobe-aio', 'cloudflare', 'github', 'npm']
+    ['adobe-aio', 'cloudflare', 'github', 'npm', 'xai']
   );
   assert.equal(json.find((p) => p.provider === 'github').cli, true);
 });
@@ -71,7 +71,7 @@ test('a user file replaces a built-in provider as a unit', () => {
   assert.equal(github.requires, null);
   const check = sb.jerk(['config', 'check']);
   assert.equal(check.status, 0);
-  assert.equal(check.stdout, 'ok: 4 providers (3 built-in, 1 user)\n');
+  assert.equal(check.stdout, 'ok: 5 providers (4 built-in, 1 user)\n');
 });
 
 test('config check reports every problem and exits 2', () => {
@@ -104,12 +104,9 @@ test('config show prints the effective provider as TOML', () => {
   assert.equal(res.stderr, 'jerk: github comes from built-in\n');
 });
 
-test('provider commands exit 5 until they are built', () => {
+test('intercept exits 2 when not on a terminal', () => {
   const sb = sandbox();
-  for (const args of [['intercept']]) {
-    const res = sb.jerk(args);
-    assert.equal(res.status, 5, args.join(' '));
-    assert.match(res.stderr, /not implemented yet/);
-    assert.equal(res.stdout, '');
-  }
+  const res = sb.jerk(['intercept']);
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /terminal/);
 });

@@ -7,12 +7,25 @@ pub mod device;
 #[cfg(not(target_os = "wasi"))]
 pub mod http_client;
 
+#[cfg(not(target_os = "wasi"))]
+pub mod intercept;
+
 use crate::browser::Browser;
 use crate::exit::Exit;
 use crate::grants::Grants;
 use jerk_oauth::config::OAuthConfig;
 #[allow(unused_imports)]
 use std::io::Write;
+
+#[cfg(not(target_os = "wasi"))]
+pub struct CdpResult(pub(crate) cdp_client::cdp::Cdp);
+
+#[cfg(target_os = "wasi")]
+pub enum CdpResult {}
+
+pub trait CdpOpener {
+    fn open(&self) -> Result<CdpResult, String>;
+}
 
 pub struct OAuthEnv<'a> {
     pub config: &'a OAuthConfig,
@@ -82,6 +95,7 @@ pub fn oauth_create(
     now_secs: u64,
     random: &dyn Fn(&mut [u8]),
     err: &mut dyn std::io::Write,
+    cdp: Option<&dyn CdpOpener>,
 ) -> Result<Token, OAuthError> {
     use jerk_oauth::config::Mode;
 
@@ -131,10 +145,24 @@ pub fn oauth_create(
                         );
                     }
                 }
-                Err(OAuthError {
+                let opener = cdp.ok_or(OAuthError {
                     exit: Exit::Unavailable,
-                    message: "cannot bind the loopback port; intercept is not available yet".into(),
-                })
+                    message: "cannot bind the loopback port and no CDP browser available; pass --cdp or run slicc launch".into(),
+                })?;
+                let CdpResult(mut cdp_conn) = opener.open().map_err(|e| OAuthError {
+                    exit: Exit::Unavailable,
+                    message: e,
+                })?;
+                intercept::run(
+                    &mut cdp_conn,
+                    config,
+                    scope,
+                    now_secs,
+                    &r32,
+                    &r16,
+                    &|url, body| host.http_post(url, body),
+                    err,
+                )
             }
             #[cfg(target_os = "wasi")]
             {
@@ -159,10 +187,38 @@ pub fn oauth_create(
                 })
             }
         }
-        Mode::Intercept => Err(OAuthError {
-            exit: Exit::Unsupported,
-            message: "intercept mode is not implemented yet".into(),
-        }),
+        Mode::Intercept => {
+            #[cfg(not(target_os = "wasi"))]
+            {
+                let opener = cdp.ok_or(OAuthError {
+                    exit: Exit::Unavailable,
+                    message: "intercept mode needs a CDP browser; pass --cdp or run slicc launch"
+                        .into(),
+                })?;
+                let CdpResult(mut cdp_conn) = opener.open().map_err(|e| OAuthError {
+                    exit: Exit::Unavailable,
+                    message: e,
+                })?;
+                intercept::run(
+                    &mut cdp_conn,
+                    config,
+                    scope,
+                    now_secs,
+                    &r32,
+                    &r16,
+                    &|url, body| host.http_post(url, body),
+                    err,
+                )
+            }
+            #[cfg(target_os = "wasi")]
+            {
+                let _ = (scope, err, r32, r16);
+                Err(OAuthError {
+                    exit: Exit::Unsupported,
+                    message: "intercept mode is not available in this environment".into(),
+                })
+            }
+        }
         Mode::Popup => Err(OAuthError {
             exit: Exit::Unsupported,
             message: "popup mode is not implemented yet".into(),

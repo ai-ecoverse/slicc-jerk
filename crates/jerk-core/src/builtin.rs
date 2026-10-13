@@ -45,6 +45,21 @@ params = { ctx = "cli" }
 get = { run = ["aio", "login", "--bare", "--no-open", "--ctx", "{ctx}"], parse = "text", expiry = "jwt", timeout = "10s" }
 create = { run = ["aio", "login", "--force", "--ctx", "{ctx}"], interactive = true, link = true }
 drop = { run = ["aio", "logout", "--ctx", "{ctx}"], interactive = true }
+
+[providers.xai]
+name = "xAI Grok"
+env = ["XAI_API_KEY"]
+domains = ["api.x.ai"]
+[providers.xai.oauth]
+mode = "auto"
+flow = "pkce"
+authorize_url = "https://auth.x.ai/oauth2/auth?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&code_challenge={code_challenge}&code_challenge_method=S256&state={state}&nonce={nonce}&plan=generic&referrer=slicc"
+token_url = "https://auth.x.ai/oauth2/token"
+client_id = "b1a00492-073a-47ea-816f-4c329264a828"
+redirect_uri = "http://127.0.0.1:56121/callback"
+scope = "openid profile email offline_access grok-cli:access api:access"
+capture = { at = "request", from = "query", param = "code" }
+rewrite = [{ match = "auth.x.ai", append = { plan = "generic" } }]
 "#;
 
 #[cfg(target_os = "wasi")]
