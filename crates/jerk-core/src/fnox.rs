@@ -199,10 +199,13 @@ pub fn config_fnox(args: &[String], config: &Config, io: &mut Io<'_>) -> Exit {
                 );
             }
         }
-        let _ = writeln!(
-            io.err,
-            "jerk: proxy rules that name lease credentials need fnox with F2 (ai-ecoverse/fnox)"
-        );
+        for entry in &entries {
+            let _ = writeln!(
+                io.err,
+                "jerk: fnox proxy reads the secret {}; keep it current with jerk {} sync --fnox {} --provider <fnox provider>",
+                entry.provider.env[0], entry.id, entry.provider.env[0]
+            );
+        }
     }
     let _ = write!(io.out, "{}", text.trim_end_matches('\n'));
     let _ = writeln!(io.out);
