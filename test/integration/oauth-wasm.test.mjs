@@ -379,3 +379,57 @@ test('parseRefreshResponse needs no config and validates like parseTokenResponse
       err.code === 'idp_error' && err.error === 'invalid_grant' && err.description === 'revoked'
   );
 });
+
+test('refreshTokenRequest never echoes a URL, and returns the parsed URL', { skip }, async () => {
+  const wasm = await loadWasm();
+  const long = `evil${'x'.repeat(2000)}.example`;
+  for (const token_url of [`http://${long}/t`, 'data://x/t', 'javascript://x/t']) {
+    assert.throws(
+      () =>
+        wasm.refreshTokenRequest(
+          JSON.stringify({ token_url, client_id: 'c', refresh_token: 'rt' })
+        ),
+      (err) =>
+        err.code === 'invalid_params' &&
+        err.message === 'token_url must use https (http only for loopback)' &&
+        !err.message.includes('xxxx')
+    );
+  }
+  assert.throws(
+    () =>
+      wasm.refreshTokenRequest(
+        JSON.stringify({
+          token_url: 'https://as.example/t',
+          client_id: 'c',
+          refresh_token: 'rt',
+          resource: `http://${long}/`,
+        })
+      ),
+    (err) => err.message === 'resource must use https (http only for loopback)'
+  );
+  const parsed = wasm.refreshTokenRequest(
+    JSON.stringify({ token_url: 'https://:@AS.example/t', client_id: 'c', refresh_token: 'rt' })
+  );
+  assert.equal(parsed.url, 'https://as.example/t');
+  const config = wasm.parseConfig(
+    JSON.stringify({ ...JSON.parse(pkceConfig), token_url: `http://${long}/t` })
+  );
+  assert.equal(config.ok, false);
+  assert.ok(!JSON.stringify(config.errors).includes('xxxx'));
+});
+
+test('refreshTokenRequestBytes zeroes the caller buffer', { skip }, async () => {
+  const wasm = await loadWasm();
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({ token_url: 'https://as.example/t', client_id: 'c', refresh_token: 'rt-bytes' })
+  );
+  const result = wasm.refreshTokenRequestBytes(bytes);
+  assert.match(result.body, /refresh_token=rt-bytes/);
+  assert.ok(bytes.every((b) => b === 0));
+  const bad = new Uint8Array([0xff, 0xfe]);
+  assert.throws(
+    () => wasm.refreshTokenRequestBytes(bad),
+    (err) => err.code === 'invalid_params'
+  );
+  assert.ok(bad.every((b) => b === 0));
+});
