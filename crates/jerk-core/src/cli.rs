@@ -104,6 +104,9 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
         "list" => {
             if let Some(sealed) = ctx.sealed {
                 let config = config::load(env, explicit.as_deref());
+                if let Some(code) = report(&config, io) {
+                    return code;
+                }
                 return crate::kernel::list(&config, &rest[1..], sealed, io);
             }
             list(&rest[1..], env, explicit.as_deref(), io, exists)
@@ -131,6 +134,19 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                 if let Some(code) = report(&config, io) {
                     return code;
                 }
+                let args = &rest[2..];
+                if let Some(sealed) = ctx.sealed {
+                    let entry = config.get(provider).cloned();
+                    return kernel_verb_or_passthrough(
+                        provider,
+                        entry.as_ref(),
+                        verb,
+                        args,
+                        ctx,
+                        sealed,
+                        io,
+                    );
+                }
                 let Some(entry) = config.get(provider) else {
                     return usage(
                         &format!(
@@ -139,10 +155,6 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                         io,
                     );
                 };
-                let args = &rest[2..];
-                if let Some(sealed) = ctx.sealed {
-                    return kernel_verb(entry, verb, args, ctx, sealed, io);
-                }
                 if let Some(stripped) = crate::link::strip(args) {
                     return crate::link::run(entry, verb, &stripped, ctx, io);
                 }
@@ -405,6 +417,64 @@ fn not_yet(what: &str, io: &mut Io<'_>) -> Exit {
 pub(crate) fn usage(message: &str, io: &mut Io<'_>) -> Exit {
     let _ = writeln!(io.err, "jerk: {message}\nRun jerk --help for usage.");
     Exit::Usage
+}
+
+fn kernel_verb_or_passthrough(
+    provider: &str,
+    entry: Option<&crate::config::Entry>,
+    verb: &str,
+    args: &[String],
+    ctx: &mut Ctx<'_>,
+    sealed: &dyn crate::sealed::Sealed,
+    io: &mut Io<'_>,
+) -> Exit {
+    if let Some(entry) = entry {
+        return kernel_verb(entry, verb, args, ctx, sealed, io);
+    }
+    let stub = crate::config::Entry {
+        id: provider.to_string(),
+        provider: crate::config::Provider {
+            name: Some(provider.to_string()),
+            ..crate::config::Provider::default()
+        },
+        source: crate::config::Source {
+            layer: crate::config::Layer::BuiltIn,
+            path: None,
+        },
+        oauth_config: None,
+    };
+    match verb {
+        "get" => {
+            let env_val = ctx.env.var(&format!("{}_TOKEN", provider.to_uppercase()));
+            crate::kernel::get(&stub, args, env_val, sealed, io)
+        }
+        "create" => crate::kernel::create(&stub, args, sealed, ctx.sleep, io),
+        "drop" => {
+            let stdin_terminal = ctx.stdin_terminal;
+            let input = &mut *ctx.input;
+            let mut confirm = || {
+                let mut answer = String::new();
+                let _ = input.read_line(&mut answer);
+                matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+            };
+            crate::kernel::drop_cmd(&stub, args, stdin_terminal, sealed, &mut confirm, io)
+        }
+        "lease" | "sync" => {
+            let _ = writeln!(
+                io.err,
+                "jerk {provider}: {verb} is not supported in the kernel"
+            );
+            Exit::Unsupported
+        }
+        "list" => {
+            let _ = writeln!(
+                io.err,
+                "jerk {provider}: per-provider list is not supported in the kernel"
+            );
+            Exit::Unsupported
+        }
+        _ => usage(&format!("unknown command {verb}"), io),
+    }
 }
 
 fn kernel_verb(
