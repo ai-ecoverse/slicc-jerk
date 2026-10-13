@@ -92,9 +92,9 @@ trap 'rm -rf "$TMPDIR_WORK"' EXIT
 fetch_to "$DOWNLOAD_BASE/SHA256SUMS" "$TMPDIR_WORK/SHA256SUMS"
 fetch_to "$DOWNLOAD_BASE/$ASSET" "$TMPDIR_WORK/$ASSET"
 
-EXPECTED="$(grep "  ${ASSET}$" "$TMPDIR_WORK/SHA256SUMS" | cut -d' ' -f1)"
+EXPECTED="$(grep "  ${ASSET}$" "$TMPDIR_WORK/SHA256SUMS" | cut -d' ' -f1 || true)"
 if [ -z "$EXPECTED" ]; then
-  printf 'asset %s not found in SHA256SUMS\n' "$ASSET" >&2
+  printf 'no checksum for %s in SHA256SUMS\n' "$ASSET" >&2
   exit 1
 fi
 

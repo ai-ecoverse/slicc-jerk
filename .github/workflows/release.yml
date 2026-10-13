@@ -138,6 +138,16 @@ jobs:
           first="${first%% *}"
           test "$("out/${first##*:}" --version)" = "jerk $JERK_VERSION"
 
+      - name: Assert Linux binaries are static
+        if: matrix.name == 'linux'
+        shell: bash
+        run: |
+          for f in out/jerk-linux-*; do
+            info=$(file "$f")
+            printf '%s: %s\n' "$f" "$info"
+            echo "$info" | grep -qi 'static' || { printf 'FAIL: %s is not statically linked\n' "$f" >&2; exit 1; }
+          done
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: jerk-${{ matrix.name }}

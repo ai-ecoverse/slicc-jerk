@@ -169,5 +169,45 @@ tamper_rc=0
 SLICC_INSTALL_BASE_URL="http://127.0.0.1:${TAMPER_PORT}" INSTALL_DIR="$TDIR3" sh "$REPO_ROOT/install.sh" 2>/dev/null || tamper_rc=$?
 assert_fail "$tamper_rc" "tampered asset rejected"
 
+printf '\n=== test: missing checksum entry ===\n'
+MISSING_ROOT="$WORK_DIR/missing/latest/download"
+mkdir -p "$MISSING_ROOT"
+printf 'deadbeef  jerk-fake-none\n' > "$MISSING_ROOT/SHA256SUMS"
+cp "$SERVE_ROOT/latest/download/$ASSET_NAME" "$MISSING_ROOT/$ASSET_NAME"
+
+kill "$SERVER_PID" 2>/dev/null || true
+sleep 0.5
+
+if command -v python3 >/dev/null 2>&1; then
+  MPORT_FILE="$WORK_DIR/mport"
+  python3 -c "
+import http.server, socketserver, os
+os.chdir('$WORK_DIR/missing')
+h = http.server.SimpleHTTPRequestHandler
+h.log_message = lambda *a: None
+s = socketserver.TCPServer(('127.0.0.1', 0), h)
+open('$MPORT_FILE', 'w').write(str(s.server_address[1]))
+s.serve_forever()
+" &
+  SERVER_PID=$!
+  attempts=0
+  while [ ! -s "$MPORT_FILE" ] && [ "$attempts" -lt 30 ]; do
+    sleep 0.2
+    attempts=$((attempts + 1))
+  done
+  MISSING_PORT="$(cat "$MPORT_FILE")"
+else
+  MISSING_PORT=8385
+  busybox httpd -f -p "127.0.0.1:$MISSING_PORT" -h "$WORK_DIR/missing" -c "$CONF" &
+  SERVER_PID=$!
+  sleep 0.5
+fi
+
+TDIR4="$WORK_DIR/t4"
+mkdir -p "$TDIR4"
+missing_rc=0
+SLICC_INSTALL_BASE_URL="http://127.0.0.1:${MISSING_PORT}" INSTALL_DIR="$TDIR4" sh "$REPO_ROOT/install.sh" 2>/dev/null || missing_rc=$?
+assert_fail "$missing_rc" "missing checksum entry rejected"
+
 printf '\n=== results: %d passed, %d failed ===\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

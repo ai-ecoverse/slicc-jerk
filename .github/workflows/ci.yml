@@ -109,15 +109,10 @@ jobs:
   test-installer-alpine:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    container:
-      image: alpine:latest
     env:
       LEFTHOOK: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Install deps
-        run: apk add --no-cache python3 coreutils
 
       - name: Create fake assets
         run: |
@@ -130,7 +125,10 @@ jobs:
           hash=$(sha256sum "_test_assets/$asset" | cut -d' ' -f1)
           printf '%s  %s\n' "$hash" "$asset" > _test_assets/SHA256SUMS
 
-      - name: Run installer tests (wget only)
+      - name: Run installer tests in alpine (wget only)
         run: |
-          apk del curl 2>/dev/null || true
-          FAKE_VERSION=0.99.0 sh scripts/test-install.sh _test_assets
+          docker run --rm -v "$PWD:/w" alpine:latest sh -c '
+            apk add --no-cache python3 coreutils
+            apk del curl 2>/dev/null || true
+            FAKE_VERSION=0.99.0 sh /w/scripts/test-install.sh /w/_test_assets
+          '
