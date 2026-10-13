@@ -331,27 +331,23 @@ pub fn merge(config: &mut Config, source: Source, text: &str) {
 }
 
 fn sanitize_oauth_serde_error(msg: &str) -> String {
-    if let Some(start) = msg.find("unknown variant `") {
-        let rest = &msg[start + 17..];
-        if let Some(end) = rest.find('`') {
-            return format!("invalid field {}", &rest[..end]);
-        }
+    if let Some(name) = extract_between(msg, "unknown variant `", "`") {
+        return format!("invalid field {name}");
     }
-    if let Some(start) = msg.find("unknown field `") {
-        let rest = &msg[start + 15..];
-        if let Some(end) = rest.find('`') {
-            return format!("invalid field {}", &rest[..end]);
-        }
+    if let Some(name) = extract_between(msg, "unknown field `", "`") {
+        return format!("invalid field {name}");
     }
-    if msg.contains("missing field") {
-        if let Some(start) = msg.find('`') {
-            let rest = &msg[start + 1..];
-            if let Some(end) = rest.find('`') {
-                return format!("missing field {}", &rest[..end]);
-            }
-        }
+    if let Some(name) = extract_between(msg, "missing field `", "`") {
+        return format!("missing field {name}");
     }
     "invalid configuration".into()
+}
+
+fn extract_between<'a>(haystack: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+    let start = haystack.find(prefix)? + prefix.len();
+    let rest = &haystack[start..];
+    let end = rest.find(suffix)?;
+    Some(&rest[..end])
 }
 
 fn parse_oauth(
