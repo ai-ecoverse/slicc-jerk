@@ -2,7 +2,7 @@ use serde_json::Value;
 #[cfg(target_os = "wasi")]
 use std::io::{Read, Write};
 
-pub trait Sealed: Send + Sync {
+pub trait Sealed {
     fn request(&self, body: &Value) -> Result<Value, SealedError>;
     fn poll(&self, id: &str) -> Result<PollResult, SealedError>;
     fn cancel(&self, id: &str) -> Result<(), SealedError>;
@@ -139,5 +139,49 @@ impl Sealed for FakeSealed {
         let body = serde_json::json!({ "v": 1, "op": "cancel", "id": id });
         let _ = (self.handler)(&body);
         Ok(())
+    }
+}
+
+pub struct Waiting<'a> {
+    pub inner: &'a dyn Sealed,
+    pub sleep: &'a dyn Fn(u64),
+    pub limit: u32,
+}
+
+impl Waiting<'_> {
+    pub fn request(&self, body: &Value) -> Result<Value, SealedError> {
+        let reply = self.inner.request(body)?;
+        if reply.get("state").and_then(Value::as_str) != Some("pending") {
+            return Ok(reply);
+        }
+        let id = reply
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        for _ in 0..self.limit {
+            (self.sleep)(1);
+            if let PollResult::Done(done) = self.inner.poll(&id)? {
+                return Ok(done);
+            }
+        }
+        let _ = self.inner.cancel(&id);
+        Err(SealedError {
+            message: "seven did not answer in time".to_string(),
+        })
+    }
+}
+
+impl Sealed for Waiting<'_> {
+    fn request(&self, body: &Value) -> Result<Value, SealedError> {
+        Waiting::request(self, body)
+    }
+
+    fn poll(&self, id: &str) -> Result<PollResult, SealedError> {
+        self.inner.poll(id)
+    }
+
+    fn cancel(&self, id: &str) -> Result<(), SealedError> {
+        self.inner.cancel(id)
     }
 }
