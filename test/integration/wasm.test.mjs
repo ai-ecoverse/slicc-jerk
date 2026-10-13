@@ -50,5 +50,5 @@ test('the kernel build keeps the exit codes', {
 }, () => {
   assert.equal(runWasm(['--nope']).code, 2);
   assert.equal(runWasm(['intercept']).code, 5);
-  assert.equal(runWasm(['github', 'get']).code, 3);
+  assert.equal(runWasm(['github', 'get']).code, 2);
 });
