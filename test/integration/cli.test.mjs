@@ -104,12 +104,9 @@ test('config show prints the effective provider as TOML', () => {
   assert.equal(res.stderr, 'jerk: github comes from built-in\n');
 });
 
-test('provider commands exit 5 until they are built', () => {
+test('intercept exits 2 when not on a terminal', () => {
   const sb = sandbox();
-  for (const args of [['intercept']]) {
-    const res = sb.jerk(args);
-    assert.equal(res.status, 5, args.join(' '));
-    assert.match(res.stderr, /not implemented yet/);
-    assert.equal(res.stdout, '');
-  }
+  const res = sb.jerk(['intercept']);
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /terminal/);
 });

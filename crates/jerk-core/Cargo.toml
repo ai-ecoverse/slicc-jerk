@@ -28,6 +28,7 @@ windows-native-keyring-store = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-keyutils-keyring-store = "1"
+openssl = { version = "0.10", features = ["vendored"] }
 
 [lints]
 workspace = true
