@@ -16,7 +16,10 @@ const cargo = spawnSync(
 );
 if (cargo.status !== 0) process.exit(cargo.status ?? 1);
 
-const wasm = join(root, 'target', 'wasm32-unknown-unknown', 'release', 'jerk_oauth_wasm.wasm');
+const targetDir = process.env.CARGO_TARGET_DIR
+  ? resolve(process.env.CARGO_TARGET_DIR)
+  : join(root, 'target');
+const wasm = join(targetDir, 'wasm32-unknown-unknown', 'release', 'jerk_oauth_wasm.wasm');
 const bindgen = spawnSync(
   'wasm-bindgen',
   [wasm, '--out-dir', out, '--target', 'web', '--omit-default-module-path'],

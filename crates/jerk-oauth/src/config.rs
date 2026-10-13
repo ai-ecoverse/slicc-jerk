@@ -300,7 +300,7 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
         if parse_timeout(timeout).is_none() {
             errors.push(ValidationError {
                 field: "timeout".into(),
-                message: format!("{timeout:?} is not a valid duration such as 2m"),
+                message: "is not a valid duration such as 2m".into(),
             });
         }
     }
@@ -381,4 +381,12 @@ pub fn validate_entropy(random32: &[u8; 32], random16: &[u8; 16]) -> Result<(), 
         return Err("random16 failed a sanity check; the caller must supply CSPRNG bytes");
     }
     Ok(())
+}
+
+pub fn safe_field_name(name: &str) -> Option<&str> {
+    let ok = (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-');
+    ok.then_some(name)
 }
