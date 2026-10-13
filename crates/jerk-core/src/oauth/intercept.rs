@@ -62,7 +62,6 @@ pub fn run(
         vars.push(("code_challenge", c));
     }
     let authorize_url = template::render(&config.authorize_url, &vars);
-    let authorize_url = rewrite::apply_rewrites(&authorize_url, &config.rewrite);
 
     let browser_context = if config.isolate == Some(true) {
         let result = cdp
@@ -109,6 +108,16 @@ pub fn run(
     }
 
     let captured = outcome?;
+
+    if config.capture.at == CaptureAt::Network && config.capture.from == CaptureFrom::Header {
+        return Ok(Token {
+            access_token: captured,
+            refresh_token: None,
+            expires_at: None,
+            scope: None,
+            token_type: None,
+        });
+    }
 
     let result = capture::parse_redirect(
         &captured,

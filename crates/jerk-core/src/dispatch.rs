@@ -730,7 +730,9 @@ fn oauth_create_cmd(
     #[cfg(not(target_os = "wasi"))]
     let cdp_opener = {
         let cdp_url = flags.value("--cdp");
-        let seven_origin = flags.value("--seven-origin");
+        let seven_origin = flags
+            .value("--seven-origin")
+            .or(ctx.seven_origin.as_deref());
         let needs_cdp = matches!(
             config.mode,
             jerk_oauth::config::Mode::Intercept | jerk_oauth::config::Mode::Auto

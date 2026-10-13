@@ -50,6 +50,7 @@ pub struct Ctx<'a> {
     pub via_link: bool,
     pub sealed: Option<&'a dyn crate::sealed::Sealed>,
     pub sleep: &'a dyn Fn(u64),
+    pub seven_origin: Option<String>,
 }
 
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
@@ -77,6 +78,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
         #[cfg(not(target_os = "wasi"))]
         sealed: None,
         sleep: &|secs| std::thread::sleep(std::time::Duration::from_secs(secs)),
+        seven_origin: None,
     };
     run_with(args, &mut ctx, &mut Io { out, err })
 }
@@ -160,7 +162,8 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                         io,
                     );
                 };
-                if let Some(stripped) = crate::link::strip(args) {
+                if let Some((stripped, origin)) = crate::link::strip(args) {
+                    ctx.seven_origin = origin;
                     return crate::link::run(entry, verb, &stripped, ctx, io);
                 }
                 match verb {

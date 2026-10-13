@@ -5,8 +5,10 @@ use crate::oauth::{self, CdpOpener};
 use jerk_oauth::config::{Capture, CaptureAt, CaptureFrom, Flow, Mode, OAuthConfig, Rewrite};
 
 pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
+    let rewrites = parse_rewrites(args);
+    let filtered: Vec<String> = filter_rewrites(args);
     let flags = match parse_flags(
-        args,
+        &filtered,
         &[
             "--authorize-url",
             "--redirect",
@@ -22,8 +24,6 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
         Ok(flags) => flags,
         Err(e) => return usage(&format!("intercept: {e}"), io),
     };
-
-    let rewrites = parse_rewrites(args);
 
     let config = if let Some(path) = flags.value("--from-file") {
         match load_from_file(path) {
@@ -53,10 +53,6 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
             .value("--client-id")
             .unwrap_or("jerk-intercept")
             .to_string();
-
-        if pkce && token_url.is_none() && flags.has("--exchange") {
-            return usage("intercept: --token-url is required for PKCE exchange", io);
-        }
 
         OAuthConfig {
             mode: Mode::Intercept,
@@ -117,6 +113,9 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     let exchange = flags.has("--exchange");
 
     if exchange {
+        if config.flow == Flow::Pkce && config.token_url.is_none() {
+            return usage("intercept: --token-url is required for PKCE exchange", io);
+        }
         let token = match oauth::oauth_create(
             &config,
             None,
@@ -146,14 +145,17 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                 return Exit::Unavailable;
             }
         };
+        let mut capture_config = config.clone();
+        capture_config.flow = Flow::Implicit;
+        capture_config.token_url = None;
         match crate::oauth::intercept::run(
             &mut cdp,
-            &config,
+            &capture_config,
             None,
             ctx.now,
             &r32,
             &r16,
-            &|url, body| host.http_post(url, body),
+            &|_, _| Err("no exchange".into()),
             io.err,
         ) {
             Ok(token) => {
@@ -170,6 +172,21 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
         }
     };
     Exit::Ok
+}
+
+fn filter_rewrites(args: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--rewrite" {
+            iter.next();
+        } else if arg.starts_with("--rewrite=") {
+            continue;
+        } else {
+            result.push(arg.clone());
+        }
+    }
+    result
 }
 
 fn parse_rewrites(args: &[String]) -> Vec<Rewrite> {

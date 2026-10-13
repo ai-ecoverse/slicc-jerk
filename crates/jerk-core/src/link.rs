@@ -73,20 +73,23 @@ pub fn bare(provider: &str, message: &str, io: &mut Io<'_>) -> Exit {
     Exit::Usage
 }
 
-pub fn strip(args: &[String]) -> Option<Vec<String>> {
+pub fn strip(args: &[String]) -> Option<(Vec<String>, Option<String>)> {
     let mut found = false;
     let mut rest = Vec::new();
+    let mut origin = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if arg == "--via-link" {
             found = true;
         } else if arg == "--seven-origin" {
-            iter.next();
-        } else if !arg.starts_with("--seven-origin=") {
+            origin = iter.next().cloned();
+        } else if let Some(value) = arg.strip_prefix("--seven-origin=") {
+            origin = Some(value.to_string());
+        } else {
             rest.push(arg.clone());
         }
     }
-    found.then_some(rest)
+    found.then_some((rest, origin))
 }
 
 fn last_line(text: &str) -> Option<String> {
