@@ -11,12 +11,14 @@ pub mod fnox;
 pub mod grants;
 #[cfg(not(target_os = "wasi"))]
 pub mod intercept_cmd;
+pub mod kernel;
 pub mod link;
 pub mod mask;
 pub mod oauth;
 pub mod output;
 pub mod paths;
 pub mod run;
+pub mod sealed;
 pub mod source;
 pub mod state;
 pub mod template;
