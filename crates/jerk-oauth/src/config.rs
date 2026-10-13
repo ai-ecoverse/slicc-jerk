@@ -382,3 +382,11 @@ pub fn validate_entropy(random32: &[u8; 32], random16: &[u8; 16]) -> Result<(), 
     }
     Ok(())
 }
+
+pub fn safe_field_name(name: &str) -> Option<&str> {
+    let ok = (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-');
+    ok.then_some(name)
+}

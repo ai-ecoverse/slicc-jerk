@@ -334,11 +334,16 @@ fn sanitize_oauth_serde_error(msg: &str) -> String {
     if msg.contains("unknown variant") {
         return "invalid configuration".into();
     }
-    if let Some(name) = extract_between(msg, "unknown field `", "`") {
-        return format!("invalid field {name}");
-    }
-    if let Some(name) = extract_between(msg, "missing field `", "`") {
-        return format!("missing field {name}");
+    for (needle, kind) in [
+        ("unknown field `", "invalid"),
+        ("missing field `", "missing"),
+    ] {
+        if let Some(raw) = extract_between(msg, needle, "`") {
+            return match jerk_oauth::config::safe_field_name(raw) {
+                Some(name) => format!("{kind} field {name}"),
+                None => format!("{kind} field"),
+            };
+        }
     }
     "invalid configuration".into()
 }

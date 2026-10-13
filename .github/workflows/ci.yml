@@ -81,21 +81,21 @@ jobs:
       - run: npm ci
 
       - name: Build jerk-oauth wasm (first)
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/target-a
         run: |
           npm run build:oauth-wasm
           mkdir -p /tmp/build-a
-          cp dist/jerk-oauth/jerk_oauth_wasm_bg.wasm /tmp/build-a/
-          cp dist/jerk-oauth/jerk_oauth_wasm.js /tmp/build-a/
-          cp dist/jerk-oauth/jerk_oauth_wasm.d.ts /tmp/build-a/
+          cp dist/jerk-oauth/jerk_oauth_wasm_bg.wasm dist/jerk-oauth/jerk_oauth_wasm.js dist/jerk-oauth/jerk_oauth_wasm.d.ts /tmp/build-a/
 
-      - name: Build jerk-oauth wasm (second)
+      - name: Build jerk-oauth wasm (second, from a fresh target dir)
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/target-b
         run: |
-          cargo clean -p jerk-oauth-wasm
+          test ! -e "$CARGO_TARGET_DIR"
           npm run build:oauth-wasm
           mkdir -p /tmp/build-b
-          cp dist/jerk-oauth/jerk_oauth_wasm_bg.wasm /tmp/build-b/
-          cp dist/jerk-oauth/jerk_oauth_wasm.js /tmp/build-b/
-          cp dist/jerk-oauth/jerk_oauth_wasm.d.ts /tmp/build-b/
+          cp dist/jerk-oauth/jerk_oauth_wasm_bg.wasm dist/jerk-oauth/jerk_oauth_wasm.js dist/jerk-oauth/jerk_oauth_wasm.d.ts /tmp/build-b/
 
       - name: Compare builds
         run: |
@@ -103,6 +103,12 @@ jobs:
           diff /tmp/build-a/jerk_oauth_wasm.js /tmp/build-b/jerk_oauth_wasm.js
           diff /tmp/build-a/jerk_oauth_wasm.d.ts /tmp/build-b/jerk_oauth_wasm.d.ts
           echo "All jerk-oauth wasm artifacts are byte-identical across builds"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: jerk-oauth-reproducible
+          path: /tmp/build-a/
+          retention-days: 7
 
   test-installer:
     runs-on: ubuntu-latest

@@ -72,17 +72,16 @@ fn sanitize_serde_error(msg: &str) -> String {
     if msg.contains("unknown variant") {
         return "invalid config".into();
     }
-    if msg.contains("unknown field") {
-        if let Some(name) = extract_between(msg, "unknown field `", "`") {
-            return format!("invalid config: field {name}");
+    for (needle, kind) in [
+        ("unknown field `", "unknown"),
+        ("missing field `", "missing"),
+    ] {
+        if let Some(raw) = extract_between(msg, needle, "`") {
+            return match jerk_oauth::config::safe_field_name(raw) {
+                Some(name) => format!("invalid config: field {name}"),
+                None => format!("invalid config: {kind} field"),
+            };
         }
-        return "invalid config".into();
-    }
-    if msg.contains("missing field") {
-        if let Some(name) = extract_between(msg, "missing field `", "`") {
-            return format!("invalid config: field {name}");
-        }
-        return "invalid config".into();
     }
     "invalid config".into()
 }

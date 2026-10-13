@@ -253,3 +253,48 @@ jobs:
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           jerk --version
+
+  reproduce-jerk-oauth:
+    needs: [plan, release]
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.plan.outputs.version != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LEFTHOOK: '0'
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: v${{ needs.plan.outputs.version }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: rustup show active-toolchain || rustup toolchain install
+
+      - run: cargo install wasm-bindgen-cli@0.2.129
+
+      - name: Rebuild from the tag in a fresh target dir
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/target-fresh
+        run: npm run build:oauth-wasm
+
+      - name: Compare with the published package
+        run: |
+          mkdir -p "$RUNNER_TEMP/published"
+          npm pack "@ai-ecoverse/jerk-oauth@$VERSION" --pack-destination "$RUNNER_TEMP/published"
+          tar -xzf "$RUNNER_TEMP"/published/*.tgz -C "$RUNNER_TEMP/published"
+          for f in jerk_oauth_wasm_bg.wasm jerk_oauth_wasm.js jerk_oauth_wasm.d.ts; do
+            cmp "dist/jerk-oauth/$f" "$RUNNER_TEMP/published/package/$f"
+          done
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: jerk-oauth-rebuild-${{ needs.plan.outputs.version }}
+          path: dist/jerk-oauth/
+          retention-days: 30

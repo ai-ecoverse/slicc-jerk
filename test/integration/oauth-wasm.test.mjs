@@ -63,6 +63,19 @@ test('parseConfig with invalid JSON', { skip }, async () => {
   assert.ok(result.errors);
 });
 
+test('parseConfig never echoes an unsafe field name', { skip }, async () => {
+  const wasm = await loadWasm();
+  for (const key of ['a\u001b]0;x\u0007b', 'k'.repeat(420)]) {
+    const result = wasm.parseConfig(JSON.stringify({ ...JSON.parse(pkceConfig), [key]: 'v' }));
+    assert.equal(result.ok, false);
+    const text = JSON.stringify(result.errors);
+    assert.match(text, /invalid config: unknown field/);
+    assert.ok(!text.includes('kkkk') && !text.includes('\\u001b'), text);
+  }
+  const plain = wasm.parseConfig(JSON.stringify({ ...JSON.parse(pkceConfig), extra_field: 'v' }));
+  assert.match(JSON.stringify(plain.errors), /invalid config: field extra_field/);
+});
+
 test('parseConfig with valid TOML', { skip }, async () => {
   const wasm = await loadWasm();
   const toml = `
