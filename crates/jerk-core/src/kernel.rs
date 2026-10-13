@@ -93,7 +93,8 @@ pub fn host_list(sealed: &dyn Sealed) -> Result<Vec<KernelRow>, SealedError> {
         }
     }
     let items = reply
-        .get("items")
+        .get("rows")
+        .or_else(|| reply.get("items"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -307,16 +308,17 @@ pub fn create(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            return poll_until_done(&entry.id, &id, sealed, sleep, io);
+            return poll_until_done(&entry.id, &id, is_host, sealed, sleep, io);
         }
     }
 
-    finish_create(&entry.id, &reply, io)
+    finish_create(&entry.id, &reply, is_host, sealed, sleep, io)
 }
 
 fn poll_until_done(
     provider: &str,
     id: &str,
+    is_host: bool,
     sealed: &dyn Sealed,
     sleep: &dyn Fn(u64),
     io: &mut Io<'_>,
@@ -330,7 +332,7 @@ fn poll_until_done(
                 }
             }
             Ok(PollResult::Done(reply)) => {
-                return finish_create(provider, &reply, io);
+                return finish_create(provider, &reply, is_host, sealed, sleep, io);
             }
             Err(e) => {
                 let _ = writeln!(io.err, "jerk: {provider}: poll failed: {e}");
@@ -340,8 +342,45 @@ fn poll_until_done(
     }
 }
 
-fn finish_create(provider: &str, reply: &Value, io: &mut Io<'_>) -> Exit {
+fn finish_create(
+    provider: &str,
+    reply: &Value,
+    is_host: bool,
+    sealed: &dyn Sealed,
+    sleep: &dyn Fn(u64),
+    io: &mut Io<'_>,
+) -> Exit {
     let exit = reply.get("exit").and_then(Value::as_i64).unwrap_or(0);
+    if exit == 0 && is_host {
+        let waiting = crate::sealed::Waiting {
+            inner: sealed,
+            sleep,
+            limit: 120,
+        };
+        let body = json!({ "v": 1, "op": "request", "kind": "jerk-seal", "provider": provider });
+        let sealed_reply = match waiting.request(&body) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = writeln!(
+                    io.err,
+                    "jerk: {provider}: signed in on the host, but sealing failed: {e}"
+                );
+                return Exit::Error;
+            }
+        };
+        let code = sealed_reply
+            .get("exit")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        if code != 0 {
+            let msg = sealed_reply
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("sealing failed");
+            let _ = writeln!(io.err, "jerk: {provider}: signed in on the host, but {msg}");
+            return exit_from(code);
+        }
+    }
     if exit != 0 {
         let msg = reply
             .get("message")

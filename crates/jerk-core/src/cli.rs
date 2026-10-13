@@ -107,7 +107,12 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                 if let Some(code) = report(&config, io) {
                     return code;
                 }
-                return crate::kernel::list(&config, &rest[1..], sealed, io);
+                let waiting = crate::sealed::Waiting {
+                    inner: sealed,
+                    sleep: ctx.sleep,
+                    limit: 30,
+                };
+                return crate::kernel::list(&config, &rest[1..], &waiting, io);
             }
             list(&rest[1..], env, explicit.as_deref(), io, exists)
         }
@@ -454,7 +459,12 @@ fn kernel_verb_or_passthrough(
     if let Some(entry) = entry {
         return kernel_verb(entry, verb, args, ctx, sealed, io);
     }
-    let rows = crate::kernel::host_list(sealed).unwrap_or_default();
+    let waiting = crate::sealed::Waiting {
+        inner: sealed,
+        sleep: ctx.sleep,
+        limit: 30,
+    };
+    let rows = crate::kernel::host_list(&waiting).unwrap_or_default();
     let row = rows.into_iter().find(|r| r.provider == provider);
     let Some(row) = row else {
         return usage(
@@ -494,7 +504,12 @@ fn kernel_verb(
                 .first()
                 .and_then(|n| ctx.env.var(n))
                 .map(String::from);
-            crate::kernel::get(entry, args, env_val.as_deref(), sealed, io)
+            let waiting = crate::sealed::Waiting {
+                inner: sealed,
+                sleep: ctx.sleep,
+                limit: 30,
+            };
+            crate::kernel::get(entry, args, env_val.as_deref(), &waiting, io)
         }
         "create" => crate::kernel::create(entry, args, sealed, ctx.sleep, io),
         "drop" => {
@@ -505,7 +520,12 @@ fn kernel_verb(
                 let _ = input.read_line(&mut answer);
                 matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
             };
-            crate::kernel::drop_cmd(entry, args, stdin_terminal, sealed, &mut confirm, io)
+            let waiting = crate::sealed::Waiting {
+                inner: sealed,
+                sleep: ctx.sleep,
+                limit: 120,
+            };
+            crate::kernel::drop_cmd(entry, args, stdin_terminal, &waiting, &mut confirm, io)
         }
         "lease" => {
             let _ = writeln!(
