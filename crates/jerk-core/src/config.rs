@@ -331,8 +331,8 @@ pub fn merge(config: &mut Config, source: Source, text: &str) {
 }
 
 fn sanitize_oauth_serde_error(msg: &str) -> String {
-    if let Some(name) = extract_between(msg, "unknown variant `", "`") {
-        return format!("invalid field {name}");
+    if msg.contains("unknown variant") {
+        return "invalid configuration".into();
     }
     if let Some(name) = extract_between(msg, "unknown field `", "`") {
         return format!("invalid field {name}");

@@ -69,27 +69,29 @@ fn hex_val(b: u8) -> Option<u8> {
 }
 
 fn sanitize_serde_error(msg: &str) -> String {
-    if let Some(field_start) = msg.find("unknown field `") {
-        let rest = &msg[field_start + 15..];
-        if let Some(end) = rest.find('`') {
-            return format!("invalid config: field {}", &rest[..end]);
-        }
+    if msg.contains("unknown variant") {
+        return "invalid config".into();
     }
-    if let Some(field_start) = msg.find("unknown variant `") {
-        let rest = &msg[field_start + 17..];
-        if let Some(end) = rest.find('`') {
-            return format!("invalid config: field {}", &rest[..end]);
+    if msg.contains("unknown field") {
+        if let Some(name) = extract_between(msg, "unknown field `", "`") {
+            return format!("invalid config: field {name}");
         }
+        return "invalid config".into();
     }
     if msg.contains("missing field") {
-        if let Some(start) = msg.find('`') {
-            let rest = &msg[start + 1..];
-            if let Some(end) = rest.find('`') {
-                return format!("invalid config: field {}", &rest[..end]);
-            }
+        if let Some(name) = extract_between(msg, "missing field `", "`") {
+            return format!("invalid config: field {name}");
         }
+        return "invalid config".into();
     }
     "invalid config".into()
+}
+
+fn extract_between<'a>(haystack: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+    let start = haystack.find(prefix)? + prefix.len();
+    let rest = &haystack[start..];
+    let end = rest.find(suffix)?;
+    Some(&rest[..end])
 }
 
 fn sanitize_toml_error(msg: &str) -> String {
