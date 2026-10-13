@@ -12,8 +12,7 @@ pub struct TokenResponse {
     pub expires_in: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_type: Option<String>,
+    pub token_type: String,
 }
 
 impl Drop for TokenResponse {
@@ -28,9 +27,10 @@ impl Drop for TokenResponse {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExchangeError {
     MissingAccessToken,
+    MissingTokenType,
     EmptyAccessToken,
     InvalidJson(String),
-    InvalidTokenType(String),
+    InvalidTokenType,
     InvalidExpiresIn(String),
     ErrorWithToken,
     IdpError {
@@ -43,10 +43,11 @@ impl std::fmt::Display for ExchangeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ExchangeError::MissingAccessToken => write!(f, "token response missing access_token"),
+            ExchangeError::MissingTokenType => write!(f, "token_type must be Bearer"),
             ExchangeError::EmptyAccessToken => write!(f, "token response has empty access_token"),
             ExchangeError::InvalidJson(_) => write!(f, "invalid token response JSON"),
-            ExchangeError::InvalidTokenType(tt) => {
-                write!(f, "token_type must be Bearer, got {tt}")
+            ExchangeError::InvalidTokenType => {
+                write!(f, "token_type must be Bearer")
             }
             ExchangeError::InvalidExpiresIn(val) => {
                 write!(f, "invalid expires_in: {val}")
@@ -143,11 +144,13 @@ pub fn parse_token_response(body: &str) -> Result<TokenResponse, ExchangeError> 
     if let Some(tt_val) = map.get("token_type") {
         if let Some(tt) = tt_val.as_str() {
             if !tt.eq_ignore_ascii_case("bearer") {
-                return Err(ExchangeError::InvalidTokenType(sanitize_error_description(
-                    tt,
-                )));
+                return Err(ExchangeError::InvalidTokenType);
             }
+        } else {
+            return Err(ExchangeError::InvalidTokenType);
         }
+    } else {
+        return Err(ExchangeError::MissingTokenType);
     }
 
     let expires_in = match map.get("expires_in") {
@@ -159,16 +162,8 @@ pub fn parse_token_response(body: &str) -> Result<TokenResponse, ExchangeError> 
                 Some(n)
             } else if val.as_i64().is_some() {
                 return Err(ExchangeError::InvalidExpiresIn("negative".into()));
-            } else if let Some(n) = val.as_f64() {
-                if !(0.0..=315_360_000.0).contains(&n) || n.is_nan() || n.is_infinite() {
-                    return Err(ExchangeError::InvalidExpiresIn("out of range".into()));
-                }
-                Some(n as u64)
-            } else if let Some(s) = val.as_str() {
-                match s.parse::<u64>() {
-                    Ok(n) if n <= 315_360_000 => Some(n),
-                    _ => return Err(ExchangeError::InvalidExpiresIn("not a valid number".into())),
-                }
+            } else if val.as_f64().is_some() || val.as_str().is_some() {
+                return Err(ExchangeError::InvalidExpiresIn("must be an integer".into()));
             } else {
                 return Err(ExchangeError::InvalidExpiresIn("unexpected type".into()));
             }
@@ -189,7 +184,8 @@ pub fn parse_token_response(body: &str) -> Result<TokenResponse, ExchangeError> 
     let token_type = map
         .get("token_type")
         .and_then(|v| v.as_str())
-        .map(str::to_string);
+        .unwrap_or("Bearer")
+        .to_string();
 
     Ok(TokenResponse {
         access_token,

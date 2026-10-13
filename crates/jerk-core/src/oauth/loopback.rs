@@ -162,7 +162,7 @@ pub fn run(
             refresh_token: token_response.refresh_token.clone(),
             expires_at,
             scope: token_response.scope.clone(),
-            token_type: token_response.token_type.clone(),
+            token_type: Some(token_response.token_type.clone()),
         })
     } else {
         let expires_in = result

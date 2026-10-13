@@ -68,6 +68,46 @@ fn hex_val(b: u8) -> Option<u8> {
     }
 }
 
+fn sanitize_serde_error(msg: &str) -> String {
+    if let Some(field_start) = msg.find("unknown field `") {
+        let rest = &msg[field_start + 15..];
+        if let Some(end) = rest.find('`') {
+            return format!("invalid config: field {}", &rest[..end]);
+        }
+    }
+    if let Some(field_start) = msg.find("unknown variant `") {
+        let rest = &msg[field_start + 17..];
+        if let Some(end) = rest.find('`') {
+            return format!("invalid config: field {}", &rest[..end]);
+        }
+    }
+    if msg.contains("missing field") {
+        if let Some(start) = msg.find('`') {
+            let rest = &msg[start + 1..];
+            if let Some(end) = rest.find('`') {
+                return format!("invalid config: field {}", &rest[..end]);
+            }
+        }
+    }
+    "invalid config".into()
+}
+
+fn sanitize_toml_error(msg: &str) -> String {
+    for line in msg.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("TOML parse error at line ") {
+            if let Some(rest) = trimmed.strip_prefix("TOML parse error at line ") {
+                if let Some(comma) = rest.find(',') {
+                    if let Ok(n) = rest[..comma].parse::<u64>() {
+                        return format!("invalid config: line {n}");
+                    }
+                }
+            }
+        }
+    }
+    "invalid config".into()
+}
+
 fn make_parse_error(msg: &str) -> JsValue {
     let obj = js_sys::Object::new();
     js_sys::Reflect::set(&obj, &"ok".into(), &false.into()).ok();
@@ -84,7 +124,7 @@ fn parse_oauth_config(input: &str) -> Result<OAuthConfig, JsValue> {
     let trimmed = input.trim_start();
     if trimmed.starts_with('{') {
         serde_json::from_str::<OAuthConfig>(trimmed)
-            .map_err(|e| make_parse_error(&format!("json: {e}")))
+            .map_err(|e| make_parse_error(&sanitize_serde_error(&e.to_string())))
     } else {
         #[derive(serde::Deserialize)]
         struct Wrapper {
@@ -103,9 +143,10 @@ fn validate_config(config: OAuthConfig) -> Result<config::ValidConfig, JsValue> 
 }
 
 fn toml_parse<T: serde::de::DeserializeOwned>(input: &str) -> Result<T, JsValue> {
-    let value: serde_json::Value =
-        toml_to_json(input).map_err(|e| -> JsValue { make_parse_error(&format!("toml: {e}")) })?;
-    serde_json::from_value(value).map_err(|e| make_parse_error(&e.to_string()))
+    let value: serde_json::Value = toml_to_json(input)
+        .map_err(|e| -> JsValue { make_parse_error(&sanitize_toml_error(&e)) })?;
+    serde_json::from_value(value)
+        .map_err(|e| make_parse_error(&sanitize_serde_error(&e.to_string())))
 }
 
 fn toml_to_json(input: &str) -> Result<serde_json::Value, String> {
@@ -268,7 +309,7 @@ pub fn complete_sign_in(
     }
 
     let pending: Pending = serde_json::from_str(pending_json)
-        .map_err(|e| make_error("invalid_pending", &e.to_string()))?;
+        .map_err(|_| make_error("invalid_pending", "invalid pending state"))?;
 
     let redirect_check = match &cfg.relay {
         Some(r) => relay::relay_redirect_target(r),
@@ -372,16 +413,18 @@ pub fn parse_token_response(
             exchange::ExchangeError::MissingAccessToken => {
                 ("missing_access_token", "missing access_token".into())
             }
+            exchange::ExchangeError::MissingTokenType => {
+                ("invalid_token_type", "token_type must be Bearer".into())
+            }
             exchange::ExchangeError::EmptyAccessToken => {
                 ("empty_access_token", "empty access_token".into())
             }
             exchange::ExchangeError::InvalidJson(_) => {
                 ("invalid_json", "invalid token response JSON".into())
             }
-            exchange::ExchangeError::InvalidTokenType(tt) => (
-                "invalid_token_type",
-                format!("token_type must be Bearer, got {tt}"),
-            ),
+            exchange::ExchangeError::InvalidTokenType => {
+                ("invalid_token_type", "token_type must be Bearer".into())
+            }
             exchange::ExchangeError::InvalidExpiresIn(val) => {
                 ("invalid_expires_in", format!("invalid expires_in: {val}"))
             }

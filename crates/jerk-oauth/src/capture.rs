@@ -51,6 +51,10 @@ pub fn verify_redirect_uri(
         Err(_) => return Err(CaptureError::RedirectMismatch),
     };
 
+    if captured.username() != "" || captured.password().is_some() {
+        return Err(CaptureError::RedirectMismatch);
+    }
+
     if captured.scheme() != configured.scheme() {
         return Err(CaptureError::RedirectMismatch);
     }
