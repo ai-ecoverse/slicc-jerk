@@ -124,7 +124,10 @@ pub fn refresh_request(params: &RefreshParams<'_>) -> Result<(String, String), S
     for (_, v) in pairs.iter_mut() {
         v.zeroize();
     }
-    Ok((params.token_url.to_string(), body))
+    let url = url::Url::parse(params.token_url)
+        .map(|u| u.to_string())
+        .map_err(|_| "token_url must be an absolute URL".to_string())?;
+    Ok((url, body))
 }
 
 pub fn encode_form_body(pairs: &[(String, String)]) -> String {

@@ -147,7 +147,7 @@ The package is ESM with `.wasm` and `.d.ts`. The caller does every fetch, opens 
 
 ```js
 import init, { initSync, parseConfig, beginSignIn, completeSignIn,
-  parseTokenResponse, refreshRequest, refreshTokenRequest, scopesSatisfied, shouldBackoff } from '@ai-ecoverse/jerk-oauth';
+  parseTokenResponse, parseRefreshResponse, refreshRequest, refreshTokenRequest, refreshTokenRequestBytes, scopesSatisfied, shouldBackoff } from '@ai-ecoverse/jerk-oauth';
 ```
 
 - **`parseConfig(tomlOrJson)`** — returns `{ ok, config?, errors? }`. Accepts TOML (the `[oauth]` block) or JSON.
@@ -156,6 +156,8 @@ import init, { initSync, parseConfig, beginSignIn, completeSignIn,
 - **`parseTokenResponse(configJson, body, nowSecs)`** — returns `{ accessToken, refreshToken?, expiresAt?, scope? }`.
 - **`refreshRequest(configJson, refreshToken)`** — returns `{ url, body }`.
 - **`refreshTokenRequest(paramsJson)`** — a refresh that needs no sign-in config: `{ token_url, client_id, refresh_token, scope?, resource?, client_secret? }`. It returns `{ url, body }`, with `scope` and `resource` (RFC 8707) in the body. The `token_url` and `resource` must be https or loopback http. Errors use code `invalid_params`.
+- **`refreshTokenRequestBytes(uint8ArrayJson)`** — the same as `refreshTokenRequest`, but it takes the params as UTF-8 bytes and zeroes the caller's buffer before returning, so no copy of the refresh token outlives the call.
+- **`parseRefreshResponse(body, nowSecs)`** — parses a token endpoint's answer to a refresh with no sign-in config. It validates exactly as `parseTokenResponse` does and returns `{ accessToken, refreshToken?, expiresAt?, scope? }`. A missing `refreshToken` means the IdP didn't rotate it.
 - **`scopesSatisfied(granted, requested)`** — boolean.
 - **`shouldBackoff(lastFailureSecs, nowSecs)`** — boolean (5-minute window).
 

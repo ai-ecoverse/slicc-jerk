@@ -328,3 +328,108 @@ test('implicit flow defaults to expires_in param', { skip }, async () => {
   assert.equal(complete.kind, 'token');
   assert.equal(complete.expiresAt, now + 1800);
 });
+
+test('parseRefreshResponse needs no config and validates like parseTokenResponse', {
+  skip,
+}, async () => {
+  const wasm = await loadWasm();
+  const ok = wasm.parseRefreshResponse(
+    JSON.stringify({
+      access_token: 'at-new',
+      token_type: 'bearer',
+      expires_in: 3600,
+      refresh_token: 'rt-new',
+      scope: 'read',
+    }),
+    1700000000
+  );
+  assert.equal(ok.accessToken, 'at-new');
+  assert.equal(ok.refreshToken, 'rt-new');
+  assert.equal(ok.expiresAt, 1700003600);
+  assert.equal(ok.scope, 'read');
+  const noRotation = wasm.parseRefreshResponse(
+    JSON.stringify({ access_token: 'at', token_type: 'Bearer' }),
+    1700000000
+  );
+  assert.equal(noRotation.refreshToken, undefined);
+  for (const [body, code] of [
+    [{ access_token: 'at' }, 'invalid_token_type'],
+    [{ access_token: 'at', token_type: 'mac' }, 'invalid_token_type'],
+    [{ access_token: '', token_type: 'Bearer' }, 'empty_access_token'],
+    [{ access_token: 'at', token_type: 'Bearer', expires_in: '3600' }, 'invalid_expires_in'],
+    [{ access_token: 'at', token_type: 'Bearer', error: 'x' }, 'error_with_token'],
+  ]) {
+    assert.throws(
+      () => wasm.parseRefreshResponse(JSON.stringify(body), 1700000000),
+      (err) => err.code === code,
+      code
+    );
+  }
+  assert.throws(
+    () => wasm.parseRefreshResponse('"rt-secret-in-a-string"', 1700000000),
+    (err) => err.code === 'invalid_json' && !err.message.includes('rt-secret')
+  );
+  assert.throws(
+    () =>
+      wasm.parseRefreshResponse(
+        JSON.stringify({ error: 'invalid_grant', error_description: 'revoked' }),
+        1700000000
+      ),
+    (err) =>
+      err.code === 'idp_error' && err.error === 'invalid_grant' && err.description === 'revoked'
+  );
+});
+
+test('refreshTokenRequest never echoes a URL, and returns the parsed URL', { skip }, async () => {
+  const wasm = await loadWasm();
+  const long = `evil${'x'.repeat(2000)}.example`;
+  for (const token_url of [`http://${long}/t`, 'data://x/t', 'javascript://x/t']) {
+    assert.throws(
+      () =>
+        wasm.refreshTokenRequest(
+          JSON.stringify({ token_url, client_id: 'c', refresh_token: 'rt' })
+        ),
+      (err) =>
+        err.code === 'invalid_params' &&
+        err.message === 'token_url must use https (http only for loopback)' &&
+        !err.message.includes('xxxx')
+    );
+  }
+  assert.throws(
+    () =>
+      wasm.refreshTokenRequest(
+        JSON.stringify({
+          token_url: 'https://as.example/t',
+          client_id: 'c',
+          refresh_token: 'rt',
+          resource: `http://${long}/`,
+        })
+      ),
+    (err) => err.message === 'resource must use https (http only for loopback)'
+  );
+  const parsed = wasm.refreshTokenRequest(
+    JSON.stringify({ token_url: 'https://:@AS.example/t', client_id: 'c', refresh_token: 'rt' })
+  );
+  assert.equal(parsed.url, 'https://as.example/t');
+  const config = wasm.parseConfig(
+    JSON.stringify({ ...JSON.parse(pkceConfig), token_url: `http://${long}/t` })
+  );
+  assert.equal(config.ok, false);
+  assert.ok(!JSON.stringify(config.errors).includes('xxxx'));
+});
+
+test('refreshTokenRequestBytes zeroes the caller buffer', { skip }, async () => {
+  const wasm = await loadWasm();
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({ token_url: 'https://as.example/t', client_id: 'c', refresh_token: 'rt-bytes' })
+  );
+  const result = wasm.refreshTokenRequestBytes(bytes);
+  assert.match(result.body, /refresh_token=rt-bytes/);
+  assert.ok(bytes.every((b) => b === 0));
+  const bad = new Uint8Array([0xff, 0xfe]);
+  assert.throws(
+    () => wasm.refreshTokenRequestBytes(bad),
+    (err) => err.code === 'invalid_params'
+  );
+  assert.ok(bad.every((b) => b === 0));
+});

@@ -157,9 +157,7 @@ pub fn require_https_or_loopback(url_str: &str) -> Result<(), String> {
             if scheme == "http" && is_loopback_host(host) {
                 return Ok(());
             }
-            Err(format!(
-                "must use https (http only for loopback), got {scheme}://{host}"
-            ))
+            Err("must use https (http only for loopback)".into())
         }
         Err(_) => Err("must be an absolute URL".into()),
     }
@@ -185,9 +183,7 @@ fn validate_url_scheme(url_str: &str, field: &str, errors: &mut Vec<ValidationEr
             }
             errors.push(ValidationError {
                 field: field.into(),
-                message: format!(
-                    "must use https (http is only allowed for loopback hosts), got {scheme}://{host}"
-                ),
+                message: "must use https (http is only allowed for loopback hosts)".into(),
             });
         }
         Err(_) => {

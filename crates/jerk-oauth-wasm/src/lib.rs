@@ -417,7 +417,15 @@ pub fn parse_token_response(
 ) -> Result<JsValue, JsValue> {
     let raw_cfg = parse_oauth_config(config_json)?;
     let _valid = validate_config(raw_cfg)?;
+    token_response_to_js(body, now_secs)
+}
 
+#[wasm_bindgen(js_name = parseRefreshResponse)]
+pub fn parse_refresh_response(body: &str, now_secs: f64) -> Result<JsValue, JsValue> {
+    token_response_to_js(body, now_secs)
+}
+
+fn token_response_to_js(body: &str, now_secs: f64) -> Result<JsValue, JsValue> {
     let resp = exchange::parse_token_response(body).map_err(|e| -> JsValue {
         let (code, msg) = match &e {
             exchange::ExchangeError::MissingAccessToken => {
@@ -502,6 +510,19 @@ struct RefreshInput {
     resource: Option<String>,
     #[serde(default)]
     client_secret: Option<String>,
+}
+
+#[wasm_bindgen(js_name = refreshTokenRequestBytes)]
+pub fn refresh_token_request_bytes(params_json: &mut [u8]) -> Result<JsValue, JsValue> {
+    let result = match std::str::from_utf8(params_json) {
+        Ok(text) => refresh_token_request(text),
+        Err(_) => Err(make_error(
+            "invalid_params",
+            "refresh params must be UTF-8 JSON",
+        )),
+    };
+    params_json.zeroize();
+    result
 }
 
 #[wasm_bindgen(js_name = refreshTokenRequest)]
