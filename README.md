@@ -101,8 +101,9 @@ duration = "1h"
 - **`jerk <provider> lease`** prints fnox's lease JSON: every `env` name mapped to the token, an `expires_at` that is the earlier of the token's real expiry and now + `FNOX_LEASE_DURATION`, and a `lease_id`. It refuses to run on a terminal.
 - **`lease_via = "create"`** mints a fresh token per lease.
 - **`jerk <provider> drop --lease`** reads `FNOX_LEASE_ID`. It revokes upstream only a token jerk minted for that lease. A token jerk only read is left to expire.
-- **`--proxy`** adds `[[proxy.rules]]` for the provider's domains. They need a fnox build that lets proxy rules read lease credentials (F2, carried on ai-ecoverse/fnox).
-- **Until then, `jerk <provider> sync --fnox <SECRET> --provider <fnox provider> [--global]`** pipes the token into `fnox set` on stdin. It only writes to providers that encrypt or use an OS store (age, keychain, 1password, bitwarden, fido2, yubikey and the cloud KMSes), never `plain`.
+- **`jerk <provider> sync --fnox <SECRET> --provider <fnox provider> [--global]`** pipes the token into `fnox set` on stdin, which is how jerk tokens reach `fnox proxy`, since fnox's proxy reads only `[secrets]`. It only writes to providers that encrypt or use an OS store (age, keychain, 1password, bitwarden, fido2, yubikey and the cloud KMSes), never `plain`. Run it again when the token is refreshed.
+- **`--proxy`** adds `[[proxy.rules]]` for the provider's domains, naming the secret that `sync` writes.
+- **Windows:** fnox's `command` lease backend runs `sh -c`, so `fnox exec` with jerk leases needs an `sh` on `PATH` (Git for Windows, MSYS2 or similar). `sync` and `fnox proxy` don't.
 
 ## Over the slicc link
 
