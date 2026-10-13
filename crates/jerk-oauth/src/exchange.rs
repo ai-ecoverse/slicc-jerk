@@ -86,16 +86,59 @@ pub fn build_refresh_body(refresh_token: &str, client_id: &str) -> Vec<(String, 
     ]
 }
 
+pub struct RefreshParams<'a> {
+    pub token_url: &'a str,
+    pub client_id: &'a str,
+    pub refresh_token: &'a str,
+    pub scope: Option<&'a str>,
+    pub resource: Option<&'a str>,
+    pub client_secret: Option<&'a str>,
+}
+
+pub fn refresh_request(params: &RefreshParams<'_>) -> Result<(String, String), String> {
+    crate::config::require_https_or_loopback(params.token_url)
+        .map_err(|e| format!("token_url {e}"))?;
+    if params.client_id.is_empty() {
+        return Err("client_id must not be empty".into());
+    }
+    if params.refresh_token.is_empty() {
+        return Err("refresh_token must not be empty".into());
+    }
+    if let Some(resource) = params.resource {
+        crate::config::require_https_or_loopback(resource).map_err(|e| format!("resource {e}"))?;
+        if resource.contains('#') {
+            return Err("resource must not contain a fragment".into());
+        }
+    }
+    let mut pairs = build_refresh_body(params.refresh_token, params.client_id);
+    if let Some(scope) = params.scope.filter(|s| !s.trim().is_empty()) {
+        pairs.push(("scope".into(), scope.into()));
+    }
+    if let Some(resource) = params.resource {
+        pairs.push(("resource".into(), resource.into()));
+    }
+    if let Some(secret) = params.client_secret.filter(|s| !s.is_empty()) {
+        pairs.push(("client_secret".into(), secret.into()));
+    }
+    let body = encode_form_body(&pairs);
+    for (_, v) in pairs.iter_mut() {
+        v.zeroize();
+    }
+    Ok((params.token_url.to_string(), body))
+}
+
 pub fn encode_form_body(pairs: &[(String, String)]) -> String {
-    pairs
-        .iter()
-        .map(|(k, v)| {
-            let ek: String = url::form_urlencoded::byte_serialize(k.as_bytes()).collect();
-            let ev: String = url::form_urlencoded::byte_serialize(v.as_bytes()).collect();
-            format!("{ek}={ev}")
-        })
-        .collect::<Vec<_>>()
-        .join("&")
+    let capacity = pairs.iter().map(|(k, v)| 3 * (k.len() + v.len()) + 2).sum();
+    let mut out = String::with_capacity(capacity);
+    for (i, (k, v)) in pairs.iter().enumerate() {
+        if i > 0 {
+            out.push('&');
+        }
+        out.extend(url::form_urlencoded::byte_serialize(k.as_bytes()));
+        out.push('=');
+        out.extend(url::form_urlencoded::byte_serialize(v.as_bytes()));
+    }
+    out
 }
 
 pub fn parse_token_response(body: &str) -> Result<TokenResponse, ExchangeError> {

@@ -19,6 +19,19 @@ fn make_error(code: &str, message: &str) -> JsValue {
     obj.into()
 }
 
+fn make_idp_error(error: &str, description: Option<&String>) -> JsValue {
+    let message = match description {
+        Some(d) => format!("{error}: {d}"),
+        None => error.to_string(),
+    };
+    let obj = make_error("idp_error", &message);
+    js_sys::Reflect::set(&obj, &"error".into(), &error.into()).ok();
+    if let Some(d) = description {
+        js_sys::Reflect::set(&obj, &"description".into(), &d.as_str().into()).ok();
+    }
+    obj
+}
+
 fn extract_query_param(url_str: &str, name: &str) -> Option<String> {
     let query = url_str.find('?').map(|i| {
         let after = &url_str[i + 1..];
@@ -341,13 +354,9 @@ pub fn complete_sign_in(
                 "duplicate_param".into(),
                 format!("duplicate parameter: {name}"),
             ),
-            capture::CaptureError::IdpError { error, description } => (
-                "idp_error".into(),
-                match description {
-                    Some(d) => format!("{error}: {d}"),
-                    None => error.clone(),
-                },
-            ),
+            capture::CaptureError::IdpError { error, description } => {
+                return make_idp_error(error, description.as_ref());
+            }
         };
         make_error(&code, &msg)
     })?;
@@ -433,13 +442,9 @@ pub fn parse_token_response(
                 "error_with_token",
                 "response contains both error and access_token".into(),
             ),
-            exchange::ExchangeError::IdpError { error, description } => (
-                "idp_error",
-                match description {
-                    Some(d) => format!("{error}: {d}"),
-                    None => error.clone(),
-                },
-            ),
+            exchange::ExchangeError::IdpError { error, description } => {
+                return make_idp_error(error, description.as_ref());
+            }
         };
         make_error(code, &msg)
     })?;
@@ -482,6 +487,48 @@ pub fn refresh_request(config_json: &str, refresh_token: &str) -> Result<JsValue
     let obj = js_sys::Object::new();
     js_sys::Reflect::set(&obj, &"url".into(), &token_url.into()).ok();
     js_sys::Reflect::set(&obj, &"body".into(), &body.into()).ok();
+    Ok(obj.into())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RefreshInput {
+    token_url: String,
+    client_id: String,
+    refresh_token: String,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    resource: Option<String>,
+    #[serde(default)]
+    client_secret: Option<String>,
+}
+
+#[wasm_bindgen(js_name = refreshTokenRequest)]
+pub fn refresh_token_request(params_json: &str) -> Result<JsValue, JsValue> {
+    let mut input: RefreshInput = serde_json::from_str(params_json).map_err(|e| {
+        make_error(
+            "invalid_params",
+            &sanitize_serde_error(&e.to_string()).replace("config", "refresh params"),
+        )
+    })?;
+    let built = exchange::refresh_request(&exchange::RefreshParams {
+        token_url: &input.token_url,
+        client_id: &input.client_id,
+        refresh_token: &input.refresh_token,
+        scope: input.scope.as_deref(),
+        resource: input.resource.as_deref(),
+        client_secret: input.client_secret.as_deref(),
+    });
+    input.refresh_token.zeroize();
+    if let Some(secret) = input.client_secret.as_mut() {
+        secret.zeroize();
+    }
+    let (url, mut body) = built.map_err(|e| make_error("invalid_params", &e))?;
+    let obj = js_sys::Object::new();
+    js_sys::Reflect::set(&obj, &"url".into(), &url.into()).ok();
+    js_sys::Reflect::set(&obj, &"body".into(), &body.as_str().into()).ok();
+    body.zeroize();
     Ok(obj.into())
 }
 
