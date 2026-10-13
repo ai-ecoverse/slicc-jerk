@@ -147,7 +147,7 @@ The package is ESM with `.wasm` and `.d.ts`. The caller does every fetch, opens 
 
 ```js
 import init, { initSync, parseConfig, beginSignIn, completeSignIn,
-  parseTokenResponse, refreshRequest, scopesSatisfied, shouldBackoff } from '@ai-ecoverse/jerk-oauth';
+  parseTokenResponse, refreshRequest, refreshTokenRequest, scopesSatisfied, shouldBackoff } from '@ai-ecoverse/jerk-oauth';
 ```
 
 - **`parseConfig(tomlOrJson)`** — returns `{ ok, config?, errors? }`. Accepts TOML (the `[oauth]` block) or JSON.
@@ -155,8 +155,11 @@ import init, { initSync, parseConfig, beginSignIn, completeSignIn,
 - **`completeSignIn(configJson, pendingJson, capturedUrl)`** — returns `{ kind: "exchange", url, body }` (for PKCE) or `{ kind: "token", token, expiresAt?, scope? }` (implicit). Throws `{ kind: "error", code, message }` on state mismatch or IdP error.
 - **`parseTokenResponse(configJson, body, nowSecs)`** — returns `{ accessToken, refreshToken?, expiresAt?, scope? }`.
 - **`refreshRequest(configJson, refreshToken)`** — returns `{ url, body }`.
+- **`refreshTokenRequest(paramsJson)`** — a refresh that needs no sign-in config: `{ token_url, client_id, refresh_token, scope?, resource?, client_secret? }`. It returns `{ url, body }`, with `scope` and `resource` (RFC 8707) in the body. The `token_url` and `resource` must be https or loopback http. Errors use code `invalid_params`.
 - **`scopesSatisfied(granted, requested)`** — boolean.
 - **`shouldBackoff(lastFailureSecs, nowSecs)`** — boolean (5-minute window).
+
+IdP errors (`code: "idp_error"`) also carry `error`, the IdP's error code, and `description` when the IdP sent one. Both are cut to 128 printable ASCII characters. A caller that mustn't show the provider's free text should use `code` and `error`, not `message`.
 
 Validation notes:
 - `random32` and `random16` get a sanity check only. The caller must supply CSPRNG bytes (`crypto.getRandomValues`).

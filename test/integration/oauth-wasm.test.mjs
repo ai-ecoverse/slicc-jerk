@@ -201,7 +201,11 @@ test('completeSignIn handles IdP error', { skip }, async () => {
   const errorUrl = `http://127.0.0.1:9999/callback?error=access_denied&error_description=User+denied&state=${encodeURIComponent(begin.state)}`;
   assert.throws(
     () => wasm.completeSignIn(pkceConfig, begin.pending, errorUrl),
-    (err) => err.kind === 'error' && err.code === 'idp_error'
+    (err) =>
+      err.kind === 'error' &&
+      err.code === 'idp_error' &&
+      err.error === 'access_denied' &&
+      err.description === 'User denied'
   );
 });
 
@@ -221,7 +225,63 @@ test('parseTokenResponse handles IdP error', { skip }, async () => {
   const body = JSON.stringify({ error: 'invalid_grant', error_description: 'expired' });
   assert.throws(
     () => wasm.parseTokenResponse(pkceConfig, body, 1700000000),
-    (err) => err.kind === 'error' && err.code === 'idp_error'
+    (err) =>
+      err.kind === 'error' &&
+      err.code === 'idp_error' &&
+      err.error === 'invalid_grant' &&
+      err.description === 'expired'
+  );
+  const bare = JSON.stringify({ error: 'invalid_grant' });
+  assert.throws(
+    () => wasm.parseTokenResponse(pkceConfig, bare, 1700000000),
+    (err) =>
+      err.error === 'invalid_grant' && !('description' in err) && err.message === 'invalid_grant'
+  );
+});
+
+test('refreshTokenRequest builds a refresh with scope and resource, no sign-in config needed', {
+  skip,
+}, async () => {
+  const wasm = await loadWasm();
+  const result = wasm.refreshTokenRequest(
+    JSON.stringify({
+      token_url: 'https://as.example/token',
+      client_id: 'c1',
+      refresh_token: 'rt-secret',
+      scope: 'read',
+      resource: 'https://mcp.example/mcp',
+    })
+  );
+  assert.equal(result.url, 'https://as.example/token');
+  const body = new URLSearchParams(result.body);
+  assert.equal(body.get('grant_type'), 'refresh_token');
+  assert.equal(body.get('refresh_token'), 'rt-secret');
+  assert.equal(body.get('scope'), 'read');
+  assert.equal(body.get('resource'), 'https://mcp.example/mcp');
+  for (const [params, code] of [
+    [
+      { token_url: 'http://as.example/token', client_id: 'c', refresh_token: 'rt-secret' },
+      'invalid_params',
+    ],
+    [{ token_url: 'https://as.example/token', client_id: 'c' }, 'invalid_params'],
+    [
+      {
+        token_url: 'https://as.example/token',
+        client_id: 'c',
+        refresh_token: 'rt-secret',
+        extra: 'x',
+      },
+      'invalid_params',
+    ],
+  ]) {
+    assert.throws(
+      () => wasm.refreshTokenRequest(JSON.stringify(params)),
+      (err) => err.code === code && !err.message.includes('rt-secret')
+    );
+  }
+  assert.throws(
+    () => wasm.refreshTokenRequest('"rt-secret"'),
+    (err) => !err.message.includes('rt-secret')
   );
 });
 
