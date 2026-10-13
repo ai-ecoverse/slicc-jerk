@@ -30,7 +30,15 @@ Options:
 Exit codes: 0 ok, 1 error, 2 usage, 3 sign-in needed, 4 not available here, 5 unsupported
 ";
 
-pub(crate) const VERBS: [&str; 6] = ["get", "list", "create", "drop", "lease", "sync"];
+pub(crate) const VERBS: [&str; 7] = [
+    "get",
+    "list",
+    "create",
+    "drop",
+    "lease",
+    "sync",
+    "import-pi",
+];
 
 pub struct Io<'a> {
     pub out: &'a mut dyn Write,
@@ -165,6 +173,18 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                 if let Some((stripped, origin)) = crate::link::strip(args) {
                     ctx.seven_origin = origin;
                     return crate::link::run(entry, verb, &stripped, ctx, io);
+                }
+                if entry.provider.kind.as_deref() == Some("mcp") || provider.starts_with("mcp:") {
+                    return match verb {
+                        "get" => crate::mcp::get(entry, args, ctx, io),
+                        "create" => crate::mcp::create(entry, args, ctx, io),
+                        "drop" => crate::mcp::drop_cmd(entry, args, ctx, io),
+                        "import-pi" => crate::mcp::import_pi(entry, args, ctx, io),
+                        _ => usage(
+                            &format!("{provider}: {verb} is not supported for MCP providers"),
+                            io,
+                        ),
+                    };
                 }
                 match verb {
                     "get" => dispatch::get(entry, args, ctx, io),

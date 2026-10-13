@@ -22,6 +22,18 @@ impl OAuthHost for DefaultOAuthHost {
         super::http_client::post(url, body)
     }
 
+    fn http_get(&self, url: &str) -> Result<String, String> {
+        super::http_client::get(url)
+    }
+
+    fn http_post_json(&self, url: &str, body: &str) -> Result<String, String> {
+        super::http_client::post_json(url, body)
+    }
+
+    fn mcp_probe(&self, url: &str, body: &str) -> super::McpProbeResult {
+        super::http_client::mcp_probe(url, body)
+    }
+
     fn sleep(&self, secs: u64) {
         std::thread::sleep(std::time::Duration::from_secs(secs));
     }
