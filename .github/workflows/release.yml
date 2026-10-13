@@ -229,3 +229,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLICC_NPM_PUBLISH: ${{ vars.SLICC_NPM_PUBLISH }}
         run: npx semantic-release
+
+  smoke-installer:
+    needs: [release]
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install via one-liner
+        run: curl -fsSL https://github.com/ai-ecoverse/slicc-jerk/releases/latest/download/install.sh | sh
+
+      - name: Verify
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          jerk --version

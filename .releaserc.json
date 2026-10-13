@@ -15,7 +15,8 @@
         "assets": [
           { "path": "artifacts/release/jerk-*" },
           { "path": "artifacts/release/jerk.wasm" },
-          { "path": "artifacts/release/SHA256SUMS", "label": "SHA256SUMS" }
+          { "path": "artifacts/release/SHA256SUMS", "label": "SHA256SUMS" },
+          { "path": "install.sh", "label": "install.sh" }
         ]
       }
     ],
