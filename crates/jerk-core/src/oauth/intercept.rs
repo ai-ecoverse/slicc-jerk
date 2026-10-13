@@ -124,7 +124,11 @@ pub fn run(
         &config.capture.from,
         &config.capture.param,
         Some(&state),
-        Some(&config.redirect_uri),
+        if config.capture.at == CaptureAt::Network {
+            None
+        } else {
+            Some(config.redirect_uri.as_str())
+        },
         None,
     )
     .map_err(|e| OAuthError {

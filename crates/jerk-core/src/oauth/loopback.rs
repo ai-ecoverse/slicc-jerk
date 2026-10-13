@@ -110,7 +110,7 @@ pub fn run(
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
 
     let bound_port = listener.local_addr().map(|a| a.port()).unwrap_or(port);
-    let captured = wait_for_callback(&listener, &config.capture.from, deadline, bound_port)?;
+    let captured = wait_for_callback(&listener, &config.capture.from, deadline, bound_port, host)?;
 
     let result = capture::parse_redirect(
         &captured,
@@ -187,6 +187,7 @@ fn wait_for_callback(
     capture_from: &CaptureFrom,
     deadline: std::time::Instant,
     port: u16,
+    host: &str,
 ) -> Result<String, OAuthError> {
     loop {
         if std::time::Instant::now() >= deadline {
@@ -214,7 +215,7 @@ fn wait_for_callback(
             continue;
         }
 
-        let full_url = format!("http://127.0.0.1:{port}{}", parts[1]);
+        let full_url = format!("http://{host}:{port}{}", parts[1]);
 
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -225,7 +226,7 @@ fn wait_for_callback(
         drop(stream);
 
         if *capture_from == CaptureFrom::Fragment {
-            return wait_for_fragment(listener, &full_url, deadline, port);
+            return wait_for_fragment(listener, &full_url, deadline, port, host);
         }
 
         return Ok(full_url);
@@ -237,6 +238,7 @@ fn wait_for_fragment(
     base_url: &str,
     deadline: std::time::Instant,
     _port: u16,
+    _host: &str,
 ) -> Result<String, OAuthError> {
     loop {
         if std::time::Instant::now() >= deadline {

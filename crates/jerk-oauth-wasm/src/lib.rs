@@ -68,11 +68,23 @@ fn hex_val(b: u8) -> Option<u8> {
     }
 }
 
+fn make_parse_error(msg: &str) -> JsValue {
+    let obj = js_sys::Object::new();
+    js_sys::Reflect::set(&obj, &"ok".into(), &false.into()).ok();
+    js_sys::Reflect::set(
+        &obj,
+        &"errors".into(),
+        &serde_json::to_string(&[msg]).unwrap_or_default().into(),
+    )
+    .ok();
+    obj.into()
+}
+
 fn parse_oauth_config(input: &str) -> Result<OAuthConfig, JsValue> {
     let trimmed = input.trim_start();
     if trimmed.starts_with('{') {
         serde_json::from_str::<OAuthConfig>(trimmed)
-            .map_err(|e| make_error("config_parse", &format!("json: {e}")))
+            .map_err(|e| make_parse_error(&format!("json: {e}")))
     } else {
         #[derive(serde::Deserialize)]
         struct Wrapper {
@@ -91,9 +103,9 @@ fn validate_config(config: OAuthConfig) -> Result<config::ValidConfig, JsValue> 
 }
 
 fn toml_parse<T: serde::de::DeserializeOwned>(input: &str) -> Result<T, JsValue> {
-    let value: serde_json::Value = toml_to_json(input)
-        .map_err(|e| -> JsValue { make_error("config_parse", &format!("toml: {e}")) })?;
-    serde_json::from_value(value).map_err(|e| make_error("config_parse", &e.to_string()))
+    let value: serde_json::Value =
+        toml_to_json(input).map_err(|e| -> JsValue { make_parse_error(&format!("toml: {e}")) })?;
+    serde_json::from_value(value).map_err(|e| make_parse_error(&e.to_string()))
 }
 
 fn toml_to_json(input: &str) -> Result<serde_json::Value, String> {
@@ -258,12 +270,18 @@ pub fn complete_sign_in(
     let pending: Pending = serde_json::from_str(pending_json)
         .map_err(|e| make_error("invalid_pending", &e.to_string()))?;
 
+    let redirect_check = if cfg.relay.is_some() {
+        None
+    } else {
+        Some(cfg.redirect_uri.as_str())
+    };
+
     let result = capture::parse_redirect(
         captured_url,
         &cfg.capture.from,
         &cfg.capture.param,
         Some(&pending.state),
-        Some(&cfg.redirect_uri),
+        redirect_check,
         None,
     )
     .map_err(|e| -> JsValue {
