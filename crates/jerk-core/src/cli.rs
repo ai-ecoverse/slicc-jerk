@@ -48,6 +48,8 @@ pub struct Ctx<'a> {
     pub random: &'a dyn Fn(&mut [u8]),
     pub oauth: &'a dyn crate::oauth::OAuthHost,
     pub via_link: bool,
+    pub sealed: Option<&'a dyn crate::sealed::Sealed>,
+    pub sleep: &'a dyn Fn(u64),
 }
 
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
@@ -57,6 +59,8 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
     let oauth_host = crate::oauth::DefaultOAuthHost;
     #[cfg(target_os = "wasi")]
     let oauth_host = crate::oauth::NoOAuthHost;
+    #[cfg(target_os = "wasi")]
+    let dev_sealed = crate::sealed::DevSealed;
     let mut ctx = Ctx {
         env: &env,
         exists: &which::is_file,
@@ -68,6 +72,11 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
         random: &crate::fnox::os_random,
         oauth: &oauth_host,
         via_link: false,
+        #[cfg(target_os = "wasi")]
+        sealed: Some(&dev_sealed),
+        #[cfg(not(target_os = "wasi"))]
+        sealed: None,
+        sleep: &|secs| std::thread::sleep(std::time::Duration::from_secs(secs)),
     };
     run_with(args, &mut ctx, &mut Io { out, err })
 }
@@ -92,7 +101,16 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
             let _ = writeln!(io.out, "jerk {}", crate::version());
             Exit::Ok
         }
-        "list" => list(&rest[1..], env, explicit.as_deref(), io, exists),
+        "list" => {
+            if let Some(sealed) = ctx.sealed {
+                let config = config::load(env, explicit.as_deref());
+                if let Some(code) = report(&config, io) {
+                    return code;
+                }
+                return crate::kernel::list(&config, &rest[1..], sealed, io);
+            }
+            list(&rest[1..], env, explicit.as_deref(), io, exists)
+        }
         "config" => config_command(&rest[1..], env, explicit.as_deref(), io),
         "intercept" => not_yet("intercept", io),
         flag if flag.starts_with('-') => usage(&format!("unknown option {flag}"), io),
@@ -116,6 +134,19 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                 if let Some(code) = report(&config, io) {
                     return code;
                 }
+                let args = &rest[2..];
+                if let Some(sealed) = ctx.sealed {
+                    let entry = config.get(provider).cloned();
+                    return kernel_verb_or_passthrough(
+                        provider,
+                        entry.as_ref(),
+                        verb,
+                        args,
+                        ctx,
+                        sealed,
+                        io,
+                    );
+                }
                 let Some(entry) = config.get(provider) else {
                     return usage(
                         &format!(
@@ -124,7 +155,6 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                         io,
                     );
                 };
-                let args = &rest[2..];
                 if let Some(stripped) = crate::link::strip(args) {
                     return crate::link::run(entry, verb, &stripped, ctx, io);
                 }
@@ -387,4 +417,97 @@ fn not_yet(what: &str, io: &mut Io<'_>) -> Exit {
 pub(crate) fn usage(message: &str, io: &mut Io<'_>) -> Exit {
     let _ = writeln!(io.err, "jerk: {message}\nRun jerk --help for usage.");
     Exit::Usage
+}
+
+fn kernel_verb_or_passthrough(
+    provider: &str,
+    entry: Option<&crate::config::Entry>,
+    verb: &str,
+    args: &[String],
+    ctx: &mut Ctx<'_>,
+    sealed: &dyn crate::sealed::Sealed,
+    io: &mut Io<'_>,
+) -> Exit {
+    if let Some(entry) = entry {
+        return kernel_verb(entry, verb, args, ctx, sealed, io);
+    }
+    let rows = crate::kernel::host_list(sealed).unwrap_or_default();
+    let row = rows.into_iter().find(|r| r.provider == provider);
+    let Some(row) = row else {
+        return usage(
+            &format!("unknown provider {provider}; jerk list shows the configured ones"),
+            io,
+        );
+    };
+    let stub = crate::config::Entry {
+        id: row.provider.clone(),
+        provider: crate::config::Provider {
+            name: Some(row.name.clone()),
+            env: row.env.clone(),
+            ..crate::config::Provider::default()
+        },
+        source: crate::config::Source {
+            layer: crate::config::Layer::BuiltIn,
+            path: None,
+        },
+        oauth_config: None,
+    };
+    kernel_verb(&stub, verb, args, ctx, sealed, io)
+}
+
+fn kernel_verb(
+    entry: &crate::config::Entry,
+    verb: &str,
+    args: &[String],
+    ctx: &mut Ctx<'_>,
+    sealed: &dyn crate::sealed::Sealed,
+    io: &mut Io<'_>,
+) -> Exit {
+    match verb {
+        "get" => {
+            let env_val = entry
+                .provider
+                .env
+                .first()
+                .and_then(|n| ctx.env.var(n))
+                .map(String::from);
+            crate::kernel::get(entry, args, env_val.as_deref(), sealed, io)
+        }
+        "create" => crate::kernel::create(entry, args, sealed, ctx.sleep, io),
+        "drop" => {
+            let stdin_terminal = ctx.stdin_terminal;
+            let input = &mut *ctx.input;
+            let mut confirm = || {
+                let mut answer = String::new();
+                let _ = input.read_line(&mut answer);
+                matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+            };
+            crate::kernel::drop_cmd(entry, args, stdin_terminal, sealed, &mut confirm, io)
+        }
+        "lease" => {
+            let _ = writeln!(
+                io.err,
+                "jerk {}: lease is not supported in the kernel",
+                entry.id
+            );
+            Exit::Unsupported
+        }
+        "sync" => {
+            let _ = writeln!(
+                io.err,
+                "jerk {}: sync is not supported in the kernel",
+                entry.id
+            );
+            Exit::Unsupported
+        }
+        "list" => {
+            let _ = writeln!(
+                io.err,
+                "jerk {}: per-provider list is not supported in the kernel",
+                entry.id
+            );
+            Exit::Unsupported
+        }
+        _ => usage(&format!("unknown command {verb}"), io),
+    }
 }
