@@ -62,7 +62,16 @@ pub trait OAuthHost: Send + Sync {
     fn browser(&self) -> &dyn Browser;
     fn grants(&self, store: Option<&str>) -> Box<dyn Grants>;
     fn http_post(&self, url: &str, body: &str) -> Result<String, String>;
+    fn http_get(&self, url: &str) -> Result<String, String>;
+    fn http_post_json(&self, url: &str, body: &str) -> Result<String, String>;
+    fn mcp_probe(&self, url: &str, body: &str) -> McpProbeResult;
     fn sleep(&self, secs: u64);
+}
+
+pub struct McpProbeResult {
+    pub status: u16,
+    pub www_authenticate: Option<String>,
+    pub body: String,
 }
 
 #[cfg(not(target_os = "wasi"))]
@@ -84,6 +93,19 @@ impl OAuthHost for NoOAuthHost {
     }
     fn http_post(&self, _: &str, _: &str) -> Result<String, String> {
         Err("not available".into())
+    }
+    fn http_get(&self, _: &str) -> Result<String, String> {
+        Err("not available".into())
+    }
+    fn http_post_json(&self, _: &str, _: &str) -> Result<String, String> {
+        Err("not available".into())
+    }
+    fn mcp_probe(&self, _: &str, _: &str) -> McpProbeResult {
+        McpProbeResult {
+            status: 0,
+            www_authenticate: None,
+            body: String::new(),
+        }
     }
     fn sleep(&self, _: u64) {}
 }

@@ -60,6 +60,10 @@ impl Env {
         PathBuf::from(self.var(name).unwrap_or("/"))
     }
 
+    pub fn home_dir(&self) -> PathBuf {
+        self.home()
+    }
+
     fn windows_dir(&self, var: &str, fallback: &[&str]) -> PathBuf {
         match self.var(var) {
             Some(dir) => PathBuf::from(dir),

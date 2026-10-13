@@ -14,6 +14,8 @@ pub mod intercept_cmd;
 pub mod kernel;
 pub mod link;
 pub mod mask;
+pub mod mcp;
+pub mod mcp_config;
 pub mod oauth;
 pub mod output;
 pub mod paths;
@@ -39,4 +41,9 @@ pub(crate) fn pick_version(built: Option<&'static str>) -> &'static str {
 #[cfg(all(test, jerk_unit))]
 mod unit {
     include!("../../../test/unit/jerk_core.rs");
+}
+
+#[cfg(all(test, jerk_unit))]
+mod mcp_unit {
+    include!("../../../test/unit/mcp_tests.rs");
 }
