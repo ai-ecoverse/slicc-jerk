@@ -270,10 +270,9 @@ pub fn complete_sign_in(
     let pending: Pending = serde_json::from_str(pending_json)
         .map_err(|e| make_error("invalid_pending", &e.to_string()))?;
 
-    let redirect_check = if cfg.relay.is_some() {
-        None
-    } else {
-        Some(cfg.redirect_uri.as_str())
+    let redirect_check = match &cfg.relay {
+        Some(r) => relay::relay_redirect_target(r),
+        None => cfg.redirect_uri.clone(),
     };
 
     let result = capture::parse_redirect(
@@ -281,7 +280,7 @@ pub fn complete_sign_in(
         &cfg.capture.from,
         &cfg.capture.param,
         Some(&pending.state),
-        redirect_check,
+        Some(&redirect_check),
         None,
     )
     .map_err(|e| -> JsValue {

@@ -66,7 +66,7 @@ pub fn run(
     let browser_context = if config.isolate == Some(true) {
         let result = cdp
             .call("Target.createBrowserContext", json!({}), None)
-            .map_err(cdp_err)?;
+            .map_err(map_cdp_error)?;
         result["browserContextId"].as_str().map(String::from)
     } else {
         None
@@ -109,16 +109,26 @@ pub fn run(
 
     let captured = outcome?;
 
-    if config.capture.at == CaptureAt::Network && config.capture.from == CaptureFrom::Header {
-        return Ok(Token {
-            access_token: captured,
-            refresh_token: None,
-            expires_at: None,
-            scope: None,
-            token_type: None,
-        });
+    if config.capture.at == CaptureAt::Network {
+        if config.capture.from == CaptureFrom::Header {
+            return Ok(Token {
+                access_token: captured,
+                refresh_token: None,
+                expires_at: None,
+                scope: None,
+                token_type: None,
+            });
+        }
+        jerk_oauth::config::require_https_or_loopback(&captured).map_err(|e| OAuthError {
+            exit: Exit::Error,
+            message: format!("captured network URL: {e}"),
+        })?;
     }
 
+    let redirect_target = match &config.relay {
+        Some(r) => Some(relay::relay_redirect_target(r)),
+        None => Some(config.redirect_uri.clone()),
+    };
     let result = capture::parse_redirect(
         &captured,
         &config.capture.from,
@@ -127,7 +137,7 @@ pub fn run(
         if config.capture.at == CaptureAt::Network {
             None
         } else {
-            Some(config.redirect_uri.as_str())
+            redirect_target.as_deref()
         },
         None,
     )
@@ -235,7 +245,11 @@ fn run_in_target(
 
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
-    let redirect_base = redirect_base_url(&config.redirect_uri);
+    let effective_redirect = match &config.relay {
+        Some(r) => relay::relay_redirect_target(r),
+        None => config.redirect_uri.clone(),
+    };
+    let redirect_base = redirect_base_url(&effective_redirect);
 
     match config.capture.at {
         CaptureAt::Navigation => capture_navigation(
@@ -413,7 +427,11 @@ fn build_patterns(config: &OAuthConfig) -> Vec<Pattern> {
 
     match config.capture.at {
         CaptureAt::Request => {
-            let pattern = redirect_pattern(&config.redirect_uri);
+            let effective = match &config.relay {
+                Some(r) => relay::relay_redirect_target(r),
+                None => config.redirect_uri.clone(),
+            };
+            let pattern = redirect_pattern(&effective);
             patterns.push(Pattern::request(pattern));
         }
         CaptureAt::Response => {
@@ -486,24 +504,15 @@ fn url_matches_pattern(url: &str, pattern: &str) -> bool {
 }
 
 fn remaining_timeout(deadline: Instant) -> Result<Duration, OAuthError> {
-    let now = Instant::now();
-    if now >= deadline {
-        return Err(timeout_err());
-    }
-    Ok(deadline - now)
+    deadline
+        .checked_duration_since(Instant::now())
+        .ok_or_else(timeout_err)
 }
 
 fn timeout_err() -> OAuthError {
     OAuthError {
         exit: Exit::Error,
         message: "timed out waiting for sign-in".into(),
-    }
-}
-
-fn cdp_err(message: String) -> OAuthError {
-    OAuthError {
-        exit: Exit::Error,
-        message,
     }
 }
 
