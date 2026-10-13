@@ -402,10 +402,10 @@ fn complete_auth(
                 let grant = crate::grants::Grant {
                     provider: entry.id.clone(),
                     user: account,
-                    refresh_token: tr.refresh_token.unwrap_or_default(),
-                    access_token: Some(tr.access_token),
+                    refresh_token: tr.refresh_token.clone().unwrap_or_default(),
+                    access_token: Some(tr.access_token.clone()),
                     expires_at,
-                    scope: tr.scope.or_else(|| scope.map(String::from)),
+                    scope: tr.scope.clone().or_else(|| scope.map(String::from)),
                 };
                 let grants = host.grants(entry.provider.store.as_deref());
                 if let Err(e) = grants.store(&grant) {
@@ -661,6 +661,10 @@ fn discover_oauth(
         let _ = writeln!(io.err, "jerk: {id}: invalid server URL: {e}");
         Exit::Error
     })?;
+    jerk_oauth::config::require_https_or_loopback(server_url.as_str()).map_err(|e| {
+        let _ = writeln!(io.err, "jerk: {id}: server URL: {e}");
+        Exit::Error
+    })?;
     let prm = discover_prm(&server_url, host, io, id);
     let as_url = prm
         .as_ref()
@@ -672,6 +676,10 @@ fn discover_oauth(
             u.set_fragment(None);
             u.to_string()
         });
+    jerk_oauth::config::require_https_or_loopback(&as_url).map_err(|e| {
+        let _ = writeln!(io.err, "jerk: {id}: authorization server URL: {e}");
+        Exit::Error
+    })?;
     let as_meta = discover_as(&as_url, host, io, id)?;
     Ok((prm, as_meta))
 }
@@ -726,6 +734,7 @@ fn probe_server(
             let prm = result.www_authenticate.as_deref().and_then(|header| {
                 let challenge = jerk_oauth::www_authenticate::parse_www_authenticate(header);
                 let rm_url = challenge.resource_metadata.as_deref()?;
+                jerk_oauth::discovery::validate_resource_metadata_url(rm_url).ok()?;
                 let body = host.http_get(rm_url).ok()?;
                 jerk_oauth::discovery::parse_protected_resource_metadata(&body).ok()
             });
@@ -746,7 +755,7 @@ fn discover_as(
     let urls = jerk_oauth::discovery::as_discovery_urls(as_url);
     for (url, _kind) in &urls {
         match host.http_get(url.as_str()) {
-            Ok(body) => match jerk_oauth::discovery::parse_authorization_server_metadata(&body) {
+            Ok(body) => match jerk_oauth::discovery::parse_and_validate_as_metadata(&body) {
                 Ok(meta) => {
                     if let Err(e) = jerk_oauth::discovery::validate_issuer(&meta, as_url) {
                         let _ = writeln!(io.err, "jerk: {id}: {e}");
@@ -774,12 +783,18 @@ fn fetch_as_metadata(
     io: &mut Io<'_>,
     id: &str,
 ) -> Result<jerk_oauth::discovery::AuthorizationServerMetadata, Exit> {
+    jerk_oauth::config::require_https_or_loopback(url).map_err(|e| {
+        let _ = writeln!(io.err, "jerk: {id}: {url}: {e}");
+        Exit::Error
+    })?;
     match host.http_get(url) {
         Ok(body) => {
-            jerk_oauth::discovery::parse_authorization_server_metadata(&body).map_err(|e| {
-                let _ = writeln!(io.err, "jerk: {id}: AS metadata at {url}: {e}");
-                Exit::Error
-            })
+            let meta =
+                jerk_oauth::discovery::parse_and_validate_as_metadata(&body).map_err(|e| {
+                    let _ = writeln!(io.err, "jerk: {id}: AS metadata at {url}: {e}");
+                    Exit::Error
+                })?;
+            Ok(meta)
         }
         Err(e) => {
             let _ = writeln!(io.err, "jerk: {id}: cannot fetch {url}: {e}");
@@ -806,9 +821,10 @@ fn try_discover_as(
         .ok_or(())?;
     let urls = jerk_oauth::discovery::as_discovery_urls(&as_url);
     for (url, _) in &urls {
-        let parsed = host.http_get(url.as_str()).ok().and_then(|body| {
-            jerk_oauth::discovery::parse_authorization_server_metadata(&body).ok()
-        });
+        let parsed = host
+            .http_get(url.as_str())
+            .ok()
+            .and_then(|body| jerk_oauth::discovery::parse_and_validate_as_metadata(&body).ok());
         if let Some(meta) = parsed {
             return Ok(Some(meta));
         }

@@ -143,6 +143,25 @@ pub fn is_loopback_host(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1")
 }
 
+pub fn require_https_or_loopback(url_str: &str) -> Result<(), String> {
+    match url::Url::parse(url_str) {
+        Ok(parsed) => {
+            let scheme = parsed.scheme();
+            let host = parsed.host_str().unwrap_or("");
+            if scheme == "https" {
+                return Ok(());
+            }
+            if scheme == "http" && is_loopback_host(host) {
+                return Ok(());
+            }
+            Err(format!(
+                "must use https (http only for loopback), got {scheme}://{host}"
+            ))
+        }
+        Err(_) => Err("must be an absolute URL".into()),
+    }
+}
+
 fn validate_url_scheme(url_str: &str, field: &str, errors: &mut Vec<ValidationError>) {
     match url::Url::parse(url_str) {
         Ok(parsed) => {
