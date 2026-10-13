@@ -1,3 +1,4 @@
+use crate::config::require_https_or_loopback;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -112,6 +113,12 @@ pub fn parse_authorization_server_metadata(
         client_id_metadata_document_supported,
         authorization_response_iss_parameter_supported,
     })
+}
+
+pub fn parse_and_validate_as_metadata(json: &str) -> Result<AuthorizationServerMetadata, String> {
+    let meta = parse_authorization_server_metadata(json)?;
+    validate_as_metadata(&meta)?;
+    Ok(meta)
 }
 
 fn string_array(map: &BTreeMap<String, serde_json::Value>, key: &str) -> Vec<String> {
@@ -236,4 +243,22 @@ pub fn select_resource(
         ));
     }
     Ok(metadata.resource.clone())
+}
+
+pub fn validate_as_metadata(meta: &AuthorizationServerMetadata) -> Result<(), String> {
+    require_https_or_loopback(&meta.issuer).map_err(|e| format!("issuer: {e}"))?;
+    require_https_or_loopback(&meta.authorization_endpoint)
+        .map_err(|e| format!("authorization_endpoint: {e}"))?;
+    require_https_or_loopback(&meta.token_endpoint).map_err(|e| format!("token_endpoint: {e}"))?;
+    if let Some(ref ep) = meta.registration_endpoint {
+        require_https_or_loopback(ep).map_err(|e| format!("registration_endpoint: {e}"))?;
+    }
+    if let Some(ref ep) = meta.revocation_endpoint {
+        require_https_or_loopback(ep).map_err(|e| format!("revocation_endpoint: {e}"))?;
+    }
+    Ok(())
+}
+
+pub fn validate_resource_metadata_url(url: &str) -> Result<(), String> {
+    require_https_or_loopback(url).map_err(|e| format!("resource_metadata URL: {e}"))
 }

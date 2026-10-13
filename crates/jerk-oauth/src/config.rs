@@ -111,6 +111,22 @@ pub struct OAuthConfig {
     pub isolate: Option<bool>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ValidConfig(OAuthConfig);
+
+impl ValidConfig {
+    pub fn inner(&self) -> &OAuthConfig {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for ValidConfig {
+    type Target = OAuthConfig;
+    fn deref(&self) -> &OAuthConfig {
+        &self.0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidationError {
     pub field: String,
@@ -123,6 +139,56 @@ impl std::fmt::Display for ValidationError {
     }
 }
 
+pub fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1")
+}
+
+pub fn require_https_or_loopback(url_str: &str) -> Result<(), String> {
+    match url::Url::parse(url_str) {
+        Ok(parsed) => {
+            let scheme = parsed.scheme();
+            let host = parsed.host_str().unwrap_or("");
+            if scheme == "https" {
+                return Ok(());
+            }
+            if scheme == "http" && is_loopback_host(host) {
+                return Ok(());
+            }
+            Err(format!(
+                "must use https (http only for loopback), got {scheme}://{host}"
+            ))
+        }
+        Err(_) => Err("must be an absolute URL".into()),
+    }
+}
+
+fn validate_url_scheme(url_str: &str, field: &str, errors: &mut Vec<ValidationError>) {
+    match url::Url::parse(url_str) {
+        Ok(parsed) => {
+            let scheme = parsed.scheme();
+            let host = parsed.host_str().unwrap_or("");
+            if scheme == "https" {
+                return;
+            }
+            if scheme == "http" && is_loopback_host(host) {
+                return;
+            }
+            errors.push(ValidationError {
+                field: field.into(),
+                message: format!(
+                    "must use https (http is only allowed for loopback hosts), got {scheme}://{host}"
+                ),
+            });
+        }
+        Err(_) => {
+            errors.push(ValidationError {
+                field: field.into(),
+                message: "must be an absolute URL".into(),
+            });
+        }
+    }
+}
+
 pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
@@ -131,6 +197,9 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
             field: "authorize_url".into(),
             message: "must not be empty".into(),
         });
+    } else {
+        let raw = strip_placeholders(&config.authorize_url);
+        validate_url_scheme(&raw, "authorize_url", &mut errors);
     }
 
     if config.client_id.is_empty() {
@@ -145,6 +214,19 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
             field: "redirect_uri".into(),
             message: "must not be empty".into(),
         });
+    } else {
+        validate_url_scheme(&config.redirect_uri, "redirect_uri", &mut errors);
+    }
+
+    if let Some(ref token_url) = config.token_url {
+        if token_url.is_empty() {
+            errors.push(ValidationError {
+                field: "token_url".into(),
+                message: "must not be empty".into(),
+            });
+        } else {
+            validate_url_scheme(token_url, "token_url", &mut errors);
+        }
     }
 
     if config.capture.param.is_empty() {
@@ -231,6 +313,31 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
     errors
 }
 
+pub fn validated(config: OAuthConfig) -> Result<ValidConfig, Vec<ValidationError>> {
+    let errors = validate(&config);
+    if errors.is_empty() {
+        Ok(ValidConfig(config))
+    } else {
+        Err(errors)
+    }
+}
+
+fn strip_placeholders(url: &str) -> String {
+    let mut result = String::with_capacity(url.len());
+    let mut in_placeholder = false;
+    for ch in url.chars() {
+        if ch == '{' {
+            in_placeholder = true;
+            result.push_str("_placeholder_");
+        } else if ch == '}' {
+            in_placeholder = false;
+        } else if !in_placeholder {
+            result.push(ch);
+        }
+    }
+    result
+}
+
 pub fn parse_timeout(text: &str) -> Option<u64> {
     let split = text.find(|c: char| !c.is_ascii_digit())?;
     let (number, unit) = text.split_at(split);
@@ -254,4 +361,14 @@ pub fn timeout_ms(config: &OAuthConfig) -> u64 {
         .as_deref()
         .and_then(parse_timeout)
         .unwrap_or_else(default_timeout_ms)
+}
+
+pub fn validate_entropy(random32: &[u8; 32], random16: &[u8; 16]) -> Result<(), &'static str> {
+    if random32.iter().all(|&b| b == random32[0]) {
+        return Err("random32 has no entropy (all bytes equal)");
+    }
+    if random16.iter().all(|&b| b == random16[0]) {
+        return Err("random16 has no entropy (all bytes equal)");
+    }
+    Ok(())
 }

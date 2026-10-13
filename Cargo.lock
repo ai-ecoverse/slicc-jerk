@@ -439,6 +439,7 @@ dependencies = [
  "ureq",
  "url",
  "windows-native-keyring-store",
+ "zeroize",
 ]
 
 [[package]]
@@ -450,6 +451,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -462,6 +464,7 @@ dependencies = [
  "serde_json",
  "toml",
  "wasm-bindgen",
+ "zeroize",
 ]
 
 [[package]]
@@ -893,9 +896,9 @@ dependencies = [
 
 [[package]]
 name = "slicc-cdp-client"
-version = "1.10.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4aafdb00363ba6c3cfe712c33207ea2c7613bf837622c8c903450662d1270ec0"
+checksum = "b218b25362e01a146b110bccf81f5f73a927466a47418345668448e5231a0a51"
 dependencies = [
  "native-tls",
  "serde_json",

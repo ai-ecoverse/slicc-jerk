@@ -110,6 +110,19 @@ impl OAuthHost for NoOAuthHost {
     fn sleep(&self, _: u64) {}
 }
 
+fn validate_config(config: &OAuthConfig) -> Result<(), OAuthError> {
+    let errors = jerk_oauth::config::validate(config);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+        Err(OAuthError {
+            exit: Exit::Usage,
+            message: format!("invalid oauth config: {}", msgs.join("; ")),
+        })
+    }
+}
+
 pub fn oauth_create(
     config: &OAuthConfig,
     scope: Option<&str>,
@@ -121,10 +134,17 @@ pub fn oauth_create(
 ) -> Result<Token, OAuthError> {
     use jerk_oauth::config::Mode;
 
+    validate_config(config)?;
+
     let mut r32 = [0u8; 32];
     let mut r16 = [0u8; 16];
     random(&mut r32);
     random(&mut r16);
+
+    jerk_oauth::config::validate_entropy(&r32, &r16).map_err(|msg| OAuthError {
+        exit: Exit::Error,
+        message: msg.into(),
+    })?;
 
     match config.mode {
         Mode::Loopback => {
@@ -296,6 +316,8 @@ pub fn oauth_refresh(
     host: &dyn OAuthHost,
     now_secs: u64,
 ) -> Result<Token, OAuthError> {
+    validate_config(config)?;
+
     let token_url = config.token_url.as_deref().ok_or_else(|| OAuthError {
         exit: Exit::Error,
         message: "no token_url for refresh".into(),
@@ -324,10 +346,10 @@ pub fn oauth_refresh(
     })?;
     let expires_at = jerk_oauth::expiry::compute_expiry(now_secs, parsed.expires_in, None);
     Ok(Token {
-        access_token: parsed.access_token,
-        refresh_token: parsed.refresh_token,
+        access_token: parsed.access_token.clone(),
+        refresh_token: parsed.refresh_token.clone(),
         expires_at,
-        scope: parsed.scope,
-        token_type: parsed.token_type,
+        scope: parsed.scope.clone(),
+        token_type: parsed.token_type.clone(),
     })
 }

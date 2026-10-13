@@ -66,7 +66,7 @@ pub fn run(
     let browser_context = if config.isolate == Some(true) {
         let result = cdp
             .call("Target.createBrowserContext", json!({}), None)
-            .map_err(cdp_err)?;
+            .map_err(map_cdp_error)?;
         result["browserContextId"].as_str().map(String::from)
     } else {
         None
@@ -78,7 +78,7 @@ pub fn run(
     };
     let result = cdp
         .call("Target.createTarget", target_params, None)
-        .map_err(cdp_err)?;
+        .map_err(map_cdp_error)?;
     let target_id = result["targetId"]
         .as_str()
         .ok_or_else(|| OAuthError {
@@ -109,21 +109,37 @@ pub fn run(
 
     let captured = outcome?;
 
-    if config.capture.at == CaptureAt::Network && config.capture.from == CaptureFrom::Header {
-        return Ok(Token {
-            access_token: captured,
-            refresh_token: None,
-            expires_at: None,
-            scope: None,
-            token_type: None,
-        });
+    if config.capture.at == CaptureAt::Network {
+        if config.capture.from == CaptureFrom::Header {
+            return Ok(Token {
+                access_token: captured,
+                refresh_token: None,
+                expires_at: None,
+                scope: None,
+                token_type: None,
+            });
+        }
+        jerk_oauth::config::require_https_or_loopback(&captured).map_err(|e| OAuthError {
+            exit: Exit::Error,
+            message: format!("captured network URL: {e}"),
+        })?;
     }
 
+    let redirect_target = match &config.relay {
+        Some(r) => Some(relay::relay_redirect_target(r)),
+        None => Some(config.redirect_uri.clone()),
+    };
     let result = capture::parse_redirect(
         &captured,
         &config.capture.from,
         &config.capture.param,
         Some(&state),
+        if config.capture.at == CaptureAt::Network {
+            None
+        } else {
+            redirect_target.as_deref()
+        },
+        None,
     )
     .map_err(|e| OAuthError {
         exit: Exit::Error,
@@ -163,11 +179,11 @@ pub fn run(
         })?;
         let expires_at = expiry::compute_expiry(now_secs, token_response.expires_in, None);
         Ok(Token {
-            access_token: token_response.access_token,
-            refresh_token: token_response.refresh_token,
+            access_token: token_response.access_token.clone(),
+            refresh_token: token_response.refresh_token.clone(),
             expires_at,
-            scope: token_response.scope,
-            token_type: token_response.token_type,
+            scope: token_response.scope.clone(),
+            token_type: token_response.token_type.clone(),
         })
     } else {
         let expires_in = result
@@ -209,24 +225,31 @@ fn run_in_target(
         patterns.push(Pattern::request("__jerk_placeholder_never_matches__"));
     }
 
-    let mut interception = Interception::attach(cdp, target_id, &patterns).map_err(cdp_err)?;
+    let mut interception =
+        Interception::attach(cdp, target_id, &patterns).map_err(map_cdp_error)?;
 
     let session = interception.session_id().to_string();
     interception
         .call("Page.enable", json!({}), Some(&session))
-        .map_err(cdp_err)?;
+        .map_err(map_cdp_error)?;
 
     let _ = writeln!(err, "jerk: sign-in opened in browser");
 
-    interception.notify(
-        "Page.navigate",
-        json!({ "url": authorize_url }),
-        Some(&session),
-    );
+    interception
+        .notify(
+            "Page.navigate",
+            json!({ "url": authorize_url }),
+            Some(&session),
+        )
+        .map_err(map_cdp_error)?;
 
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
-    let redirect_base = redirect_base_url(&config.redirect_uri);
+    let effective_redirect = match &config.relay {
+        Some(r) => relay::relay_redirect_target(r),
+        None => config.redirect_uri.clone(),
+    };
+    let redirect_base = redirect_base_url(&effective_redirect);
 
     match config.capture.at {
         CaptureAt::Navigation => capture_navigation(
@@ -306,15 +329,10 @@ fn capture_fetch(
     loop {
         let remaining = remaining_timeout(deadline)?;
 
-        let paused = match interception.next(remaining) {
+        let paused = match interception.next(remaining).map_err(map_cdp_error) {
             Ok(Some(p)) => p,
             Ok(None) => return Err(timeout_err()),
-            Err(e) => {
-                return Err(OAuthError {
-                    exit: Exit::Error,
-                    message: e,
-                })
-            }
+            Err(e) => return Err(e),
         };
 
         if is_network {
@@ -409,7 +427,11 @@ fn build_patterns(config: &OAuthConfig) -> Vec<Pattern> {
 
     match config.capture.at {
         CaptureAt::Request => {
-            let pattern = redirect_pattern(&config.redirect_uri);
+            let effective = match &config.relay {
+                Some(r) => relay::relay_redirect_target(r),
+                None => config.redirect_uri.clone(),
+            };
+            let pattern = redirect_pattern(&effective);
             patterns.push(Pattern::request(pattern));
         }
         CaptureAt::Response => {
@@ -482,11 +504,9 @@ fn url_matches_pattern(url: &str, pattern: &str) -> bool {
 }
 
 fn remaining_timeout(deadline: Instant) -> Result<Duration, OAuthError> {
-    let now = Instant::now();
-    if now >= deadline {
-        return Err(timeout_err());
-    }
-    Ok(deadline - now)
+    deadline
+        .checked_duration_since(Instant::now())
+        .ok_or_else(timeout_err)
 }
 
 fn timeout_err() -> OAuthError {
@@ -496,9 +516,20 @@ fn timeout_err() -> OAuthError {
     }
 }
 
-fn cdp_err(message: String) -> OAuthError {
-    OAuthError {
-        exit: Exit::Error,
-        message,
+pub(crate) fn is_blocked_error(message: &str) -> bool {
+    message.contains("BlockedByClient") || message.starts_with("slicc: refused:")
+}
+
+pub(crate) fn map_cdp_error(message: String) -> OAuthError {
+    if is_blocked_error(&message) {
+        OAuthError {
+            exit: Exit::Usage,
+            message: "sign-in blocked by browser (protected origin)".into(),
+        }
+    } else {
+        OAuthError {
+            exit: Exit::Error,
+            message,
+        }
     }
 }

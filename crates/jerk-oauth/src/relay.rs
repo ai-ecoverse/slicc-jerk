@@ -96,3 +96,15 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     }
     diff == 0
 }
+
+pub fn relay_redirect_target(relay: &Relay) -> String {
+    match relay {
+        Relay::Origin { origin } => {
+            let trimmed = origin.trim_end_matches('/');
+            format!("{trimmed}/auth/callback")
+        }
+        Relay::Local { port } => {
+            format!("http://127.0.0.1:{port}/auth/callback")
+        }
+    }
+}

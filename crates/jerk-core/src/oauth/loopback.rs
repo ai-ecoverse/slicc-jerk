@@ -60,6 +60,8 @@ pub fn run(
         message: format!("cannot bind {bind_addr}: {e}"),
     })?;
 
+    let actual_port = listener.local_addr().ok().map(|a| a.port());
+
     let timeout_ms = jerk_oauth::config::timeout_ms(config);
 
     let _ = listener.set_nonblocking(true);
@@ -107,13 +109,16 @@ pub fn run(
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
 
-    let captured = wait_for_callback(&listener, &config.capture.from, deadline)?;
+    let bound_port = listener.local_addr().map(|a| a.port()).unwrap_or(port);
+    let captured = wait_for_callback(&listener, &config.capture.from, deadline, bound_port, host)?;
 
     let result = capture::parse_redirect(
         &captured,
         &config.capture.from,
         &config.capture.param,
         Some(&state),
+        Some(redirect_uri),
+        actual_port,
     )
     .map_err(|e| OAuthError {
         exit: Exit::Error,
@@ -153,11 +158,11 @@ pub fn run(
         })?;
         let expires_at = expiry::compute_expiry(now_secs, token_response.expires_in, None);
         Ok(Token {
-            access_token: token_response.access_token,
-            refresh_token: token_response.refresh_token,
+            access_token: token_response.access_token.clone(),
+            refresh_token: token_response.refresh_token.clone(),
             expires_at,
-            scope: token_response.scope,
-            token_type: token_response.token_type,
+            scope: token_response.scope.clone(),
+            token_type: token_response.token_type.clone(),
         })
     } else {
         let expires_in = result
@@ -181,6 +186,8 @@ fn wait_for_callback(
     listener: &TcpListener,
     capture_from: &CaptureFrom,
     deadline: std::time::Instant,
+    port: u16,
+    host: &str,
 ) -> Result<String, OAuthError> {
     loop {
         if std::time::Instant::now() >= deadline {
@@ -208,7 +215,7 @@ fn wait_for_callback(
             continue;
         }
 
-        let full_url = format!("http://127.0.0.1{}", parts[1]);
+        let full_url = format!("http://{host}:{port}{}", parts[1]);
 
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -219,7 +226,7 @@ fn wait_for_callback(
         drop(stream);
 
         if *capture_from == CaptureFrom::Fragment {
-            return wait_for_fragment(listener, &full_url, deadline);
+            return wait_for_fragment(listener, &full_url, deadline, port, host);
         }
 
         return Ok(full_url);
@@ -230,6 +237,8 @@ fn wait_for_fragment(
     listener: &TcpListener,
     base_url: &str,
     deadline: std::time::Instant,
+    _port: u16,
+    _host: &str,
 ) -> Result<String, OAuthError> {
     loop {
         if std::time::Instant::now() >= deadline {
