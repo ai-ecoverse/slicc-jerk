@@ -84,12 +84,14 @@ pub fn build_dcr_body(redirect_uri: &str, client_name: &str, scope: Option<&str>
 
 pub fn parse_dcr_response(body: &str) -> Result<ClientInformation, String> {
     let map: BTreeMap<String, serde_json::Value> =
-        serde_json::from_str(body).map_err(|e| format!("invalid JSON: {e}"))?;
+        serde_json::from_str(body).map_err(|_| "invalid JSON".to_string())?;
     if let Some(error) = map.get("error").and_then(|v| v.as_str()) {
+        let error = crate::capture::sanitize_error_description(error);
         let desc = map
             .get("error_description")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .map(crate::capture::sanitize_error_description)
+            .unwrap_or_default();
         return Err(format!("registration error: {error}: {desc}"));
     }
     let client_id = map

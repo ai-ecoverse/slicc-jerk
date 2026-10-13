@@ -300,7 +300,7 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
         if parse_timeout(timeout).is_none() {
             errors.push(ValidationError {
                 field: "timeout".into(),
-                message: format!("{timeout:?} is not a valid duration such as 2m"),
+                message: "is not a valid duration such as 2m".into(),
             });
         }
     }

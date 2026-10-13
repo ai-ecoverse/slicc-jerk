@@ -161,5 +161,5 @@ import init, { initSync, parseConfig, beginSignIn, completeSignIn,
 Validation notes:
 - `random32` and `random16` get a sanity check only. The caller must supply CSPRNG bytes (`crypto.getRandomValues`).
 - URLs with userinfo (`https://user:pass@host`) are refused, in config and in captured redirects. An empty userinfo (`http://:@127.0.0.1:8765/…`) is dropped by the URL parser and then treated as no userinfo.
-- Error messages never contain values from the config, the pending state or a response. An unknown or missing config field is named only when the name matches `[A-Za-z0-9_.-]{1,64}`.
+- Error messages never contain values from the config or the pending state, and never contain a response body. An unknown or missing config field is named only when the name matches `[A-Za-z0-9_.-]{1,64}`. The IdP's own `error` and `error_description` are passed through, cut to 128 printable ASCII characters.
 - Every release rebuilds the wasm from its tag in a fresh target directory and checks that it's byte-identical to the published package.

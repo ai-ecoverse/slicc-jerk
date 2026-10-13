@@ -256,7 +256,7 @@ jobs:
 
   reproduce-jerk-oauth:
     needs: [plan, release]
-    if: ${{ !cancelled() && needs.release.result == 'success' && needs.plan.outputs.version != '' }}
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.plan.outputs.version != '' && vars.SLICC_NPM_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
