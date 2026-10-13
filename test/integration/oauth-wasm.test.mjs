@@ -328,3 +328,54 @@ test('implicit flow defaults to expires_in param', { skip }, async () => {
   assert.equal(complete.kind, 'token');
   assert.equal(complete.expiresAt, now + 1800);
 });
+
+test('parseRefreshResponse needs no config and validates like parseTokenResponse', {
+  skip,
+}, async () => {
+  const wasm = await loadWasm();
+  const ok = wasm.parseRefreshResponse(
+    JSON.stringify({
+      access_token: 'at-new',
+      token_type: 'bearer',
+      expires_in: 3600,
+      refresh_token: 'rt-new',
+      scope: 'read',
+    }),
+    1700000000
+  );
+  assert.equal(ok.accessToken, 'at-new');
+  assert.equal(ok.refreshToken, 'rt-new');
+  assert.equal(ok.expiresAt, 1700003600);
+  assert.equal(ok.scope, 'read');
+  const noRotation = wasm.parseRefreshResponse(
+    JSON.stringify({ access_token: 'at', token_type: 'Bearer' }),
+    1700000000
+  );
+  assert.equal(noRotation.refreshToken, undefined);
+  for (const [body, code] of [
+    [{ access_token: 'at' }, 'invalid_token_type'],
+    [{ access_token: 'at', token_type: 'mac' }, 'invalid_token_type'],
+    [{ access_token: '', token_type: 'Bearer' }, 'empty_access_token'],
+    [{ access_token: 'at', token_type: 'Bearer', expires_in: '3600' }, 'invalid_expires_in'],
+    [{ access_token: 'at', token_type: 'Bearer', error: 'x' }, 'error_with_token'],
+  ]) {
+    assert.throws(
+      () => wasm.parseRefreshResponse(JSON.stringify(body), 1700000000),
+      (err) => err.code === code,
+      code
+    );
+  }
+  assert.throws(
+    () => wasm.parseRefreshResponse('"rt-secret-in-a-string"', 1700000000),
+    (err) => err.code === 'invalid_json' && !err.message.includes('rt-secret')
+  );
+  assert.throws(
+    () =>
+      wasm.parseRefreshResponse(
+        JSON.stringify({ error: 'invalid_grant', error_description: 'revoked' }),
+        1700000000
+      ),
+    (err) =>
+      err.code === 'idp_error' && err.error === 'invalid_grant' && err.description === 'revoked'
+  );
+});
