@@ -339,7 +339,8 @@ fn list(
                     "cli": entry.provider.requires.as_ref().map(|cmd| which::find(cmd, env, exists).is_some()),
                     "env": entry.provider.env,
                 });
-                if steps.len() > 1 {
+                let requires = entry.provider.requires.as_deref();
+                if steps.iter().any(|(cmd, _)| Some(cmd.as_str()) != requires) {
                     item["steps"] = steps
                         .iter()
                         .map(|(cmd, found)| match found {
