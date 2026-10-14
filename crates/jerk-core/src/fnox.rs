@@ -58,7 +58,8 @@ pub fn lease(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>)
         .unwrap_or(DEFAULT_DURATION);
     let minting = entry.provider.lease_via.as_deref() == Some("create");
     let (value, upstream, expires_at) = match (&entry.provider.create, minting) {
-        (Some(verb), true) if verb.parse.is_some() => {
+        (Some(chain), true) if chain.first().is_some_and(|v| v.parse.is_some()) => {
+            let verb = chain.first().unwrap();
             match mint_token(entry, verb, &vars, false, ctx, io) {
                 Ok((value, id)) => (value, id, None),
                 Err(code) => return code,
@@ -134,9 +135,16 @@ pub fn drop_lease(entry: &Entry, flags: &Flags, ctx: &mut Ctx<'_>, io: &mut Io<'
         );
         return Exit::Ok;
     };
-    let Some(verb) = &entry.provider.drop else {
+    let Some(chain) = &entry.provider.drop else {
         let _ = writeln!(io.err, "jerk: {} has no drop command", entry.id);
         return Exit::Unsupported;
+    };
+    let verb = match chain.iter().find(|v| !v.oauth) {
+        Some(v) => v,
+        None => {
+            let _ = writeln!(io.err, "jerk: {} has no drop command", entry.id);
+            return Exit::Unsupported;
+        }
     };
     let mut lease_flags = Flags::default();
     lease_flags.positionals.push(id.clone());
@@ -173,6 +181,7 @@ pub fn config_fnox(args: &[String], config: &Config, io: &mut Io<'_>) -> Exit {
                 .provider
                 .create
                 .as_ref()
+                .and_then(|c| c.first())
                 .is_some_and(|c| c.parse.is_some())
     };
     let entries: Vec<&Entry> = config

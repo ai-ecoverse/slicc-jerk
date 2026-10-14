@@ -244,6 +244,94 @@ fn json_flag(args: &[String], what: &str, io: &mut Io<'_>) -> Result<bool, Exit>
     }
 }
 
+fn chain_steps_json(
+    entry: &config::Entry,
+    env: &Env,
+    exists: &dyn Fn(&Path) -> bool,
+) -> Vec<serde_json::Value> {
+    let get_chain = entry.provider.get.as_ref();
+    let chain = match get_chain {
+        Some(c) if c.len() > 1 => c,
+        _ => return Vec::new(),
+    };
+    chain
+        .iter()
+        .map(|verb| {
+            if verb.oauth {
+                return json!({ "type": "oauth" });
+            }
+            let cmd = verb
+                .requires
+                .as_deref()
+                .or(entry.provider.requires.as_deref())
+                .unwrap_or("");
+            let found = which::find(cmd, env, exists).is_some();
+            json!({ "cli": cmd, "found": found })
+        })
+        .collect()
+}
+
+fn chain_cli_summary(entry: &config::Entry, env: &Env, exists: &dyn Fn(&Path) -> bool) -> String {
+    let all_verbs: Vec<&config::Verb> = [
+        &entry.provider.get,
+        &entry.provider.list,
+        &entry.provider.create,
+        &entry.provider.drop,
+    ]
+    .into_iter()
+    .filter_map(|c| c.as_ref())
+    .flat_map(|c| c.iter())
+    .collect();
+    let mut seen = Vec::new();
+    for verb in &all_verbs {
+        if verb.oauth {
+            if !seen.iter().any(|(c, _)| *c == "oauth") {
+                seen.push(("oauth", true));
+            }
+            continue;
+        }
+        let cmd = verb
+            .requires
+            .as_deref()
+            .or(entry.provider.requires.as_deref());
+        if let Some(cmd) = cmd {
+            if !seen.iter().any(|(c, _)| *c == cmd) {
+                let found = which::find(cmd, env, exists).is_some();
+                seen.push((cmd, found));
+            }
+        }
+    }
+    if seen.is_empty() {
+        match &entry.provider.requires {
+            Some(cmd) if which::find(cmd, env, exists).is_some() => format!("{cmd} (found)"),
+            Some(cmd) => format!("{cmd} (missing)"),
+            None => "-".to_string(),
+        }
+    } else if seen.len() == 1 {
+        let (cmd, found) = seen[0];
+        if cmd == "oauth" {
+            "oauth".to_string()
+        } else if found {
+            format!("{cmd} (found)")
+        } else {
+            format!("{cmd} (missing)")
+        }
+    } else {
+        seen.iter()
+            .map(|(cmd, found)| {
+                if *cmd == "oauth" {
+                    "oauth".to_string()
+                } else if *found {
+                    cmd.to_string()
+                } else {
+                    format!("{cmd} (missing)")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 fn list(
     args: &[String],
     env: &Env,
@@ -263,11 +351,7 @@ fn list(
         .providers
         .values()
         .map(|entry| {
-            let cli = match &entry.provider.requires {
-                Some(cmd) if which::find(cmd, env, exists).is_some() => format!("{cmd} (found)"),
-                Some(cmd) => format!("{cmd} (missing)"),
-                None => "-".to_string(),
-            };
+            let cli = chain_cli_summary(entry, env, exists);
             [
                 entry.id.clone(),
                 entry
@@ -286,14 +370,19 @@ fn list(
             .values()
             .zip(&rows)
             .map(|(entry, row)| {
-                json!({
+                let steps = chain_steps_json(entry, env, exists);
+                let mut obj = json!({
                     "provider": entry.id,
                     "name": row[1],
                     "source": row[2],
                     "requires": entry.provider.requires,
-                    "cli": entry.provider.requires.as_ref().map(|_| row[3].ends_with("(found)")),
+                    "cli": entry.provider.requires.as_ref().map(|cmd| which::find(cmd, env, exists).is_some()),
                     "env": entry.provider.env,
-                })
+                });
+                if !steps.is_empty() {
+                    obj["steps"] = serde_json::Value::Array(steps);
+                }
+                obj
             })
             .collect();
         let _ = writeln!(io.out, "{}", serde_json::Value::Array(items));

@@ -109,8 +109,9 @@ fn status(entry: &Entry, message: String, extra: &[(&str, Value)]) -> Value {
 
 fn refuse(entry: &Entry, verb: &str, args: &[String], io: &mut Io<'_>) -> Option<Exit> {
     let create = entry.provider.create.as_ref();
-    let minting = create.is_some_and(|c| c.parse.is_some());
-    let terminal_only = match create {
+    let first_create = create.and_then(|c| c.first());
+    let minting = first_create.is_some_and(|c| c.parse.is_some());
+    let terminal_only = match first_create {
         Some(c) => !c.link,
         None => entry.oauth_config.is_none(),
     };
