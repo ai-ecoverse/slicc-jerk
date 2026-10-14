@@ -32,12 +32,6 @@ const ACK_HTML: &str = r#"<!DOCTYPE html>
 </body></html>
 "#;
 
-const CORS_ORIGINS: &[&str] = &[
-    "https://admin.hlx.page",
-    "https://admin-ci.hlx.page",
-    "https://api.aem.live",
-];
-
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     config: &OAuthConfig,
@@ -48,6 +42,7 @@ pub fn run(
     random_16: &[u8; 16],
     http_post: &dyn Fn(&str, &str) -> Result<String, String>,
     extra_vars: &[(&str, &str)],
+    cors_origins: &[String],
 ) -> Result<Token, OAuthError> {
     let redirect_uri = &config.redirect_uri;
     let parsed = url::Url::parse(redirect_uri).map_err(|e| OAuthError {
@@ -107,11 +102,7 @@ pub fn run(
 
     let actual_scope = scope.or(config.scope.as_deref()).unwrap_or("");
 
-    for name in ["org", "site", "login_host"] {
-        let needle = format!("{{{name}}}");
-        if !config.authorize_url.contains(&needle) {
-            continue;
-        }
+    for name in template::extra_placeholders(&config.authorize_url) {
         let value = extra_vars
             .iter()
             .find(|(k, _)| *k == name)
@@ -161,6 +152,7 @@ pub fn run(
         deadline,
         bound_port,
         host,
+        cors_origins,
     )?;
 
     let result = if config.capture.from == CaptureFrom::Body {
@@ -250,9 +242,10 @@ fn wait_for_callback(
     deadline: std::time::Instant,
     port: u16,
     host: &str,
+    cors_origins: &[String],
 ) -> Result<String, OAuthError> {
     if *capture_from == CaptureFrom::Body {
-        return wait_for_json_body(listener, redirect_path, deadline);
+        return wait_for_json_body(listener, redirect_path, deadline, cors_origins);
     }
 
     loop {
@@ -314,6 +307,7 @@ fn wait_for_json_body(
     listener: &TcpListener,
     redirect_path: &str,
     deadline: std::time::Instant,
+    cors_origins: &[String],
 ) -> Result<String, OAuthError> {
     let mut captured: Option<String> = None;
     loop {
@@ -371,7 +365,7 @@ fn wait_for_json_body(
             }
         }
 
-        let cors = cors_headers(&origin, private_network);
+        let cors = cors_headers(cors_origins, &origin, private_network);
 
         if method == "OPTIONS" && path_ok {
             let response = format!(
@@ -426,9 +420,9 @@ fn wait_for_json_body(
     }
 }
 
-fn cors_headers(origin: &str, private_network: bool) -> String {
+fn cors_headers(allowed: &[String], origin: &str, private_network: bool) -> String {
     let mut out = String::new();
-    if CORS_ORIGINS.contains(&origin) {
+    if allowed.iter().any(|o| o == origin) {
         out.push_str(&format!("Access-Control-Allow-Origin: {origin}\r\n"));
     }
     if private_network {

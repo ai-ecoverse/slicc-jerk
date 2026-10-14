@@ -83,7 +83,7 @@ param = "code"
 
 `jerk xai create` opens the sign-in in the system browser. The refresh token goes to the OS keyring (service `slicc-jerk`, account `xai/default`), or to a file store (mode 0600) with `store = "file"`. `jerk xai get` refreshes the token at `token_url` and prints the access token by the same rules as CLI providers. `jerk xai drop --yes` removes the grant.
 
-`jerk aem create -p org=… -p site=…` uses the aem-cli loopback login (`client_id=aem-cli`, redirect `/.aem/cli/login/ack`). After you click Send, jerk stores the admin JWT (`authToken`) for `api.aem.live` as `AEM_TOKEN` (`X-Auth-Token` / `Authorization: token …`). The login host defaults to `admin.hlx.page` (Helix 6 sites still use that login endpoint today); override with `-p login_host=…` when `api.aem.live` returns `authToken` itself.
+`jerk aem create -p org=… -p site=…` uses the aem-cli loopback login (`client_id=aem-cli`, redirect `/.aem/cli/login/ack`). After you click Send, jerk stores the admin JWT (`authToken`) for `api.aem.live` as `AEM_TOKEN` (`X-Auth-Token` / `Authorization: token …`). The login host defaults to `admin.hlx.page` (Helix 6 sites still use that login endpoint today); override with `-p login_host=…` when `api.aem.live` returns `authToken` itself. Body capture CORS allow-list is the provider's `cors_origins`; any `{placeholder}` in `authorize_url` beyond the built-in OAuth vars must be supplied with `-p`.
 
 The `device` mode sends the first request to `authorize_url` as the device authorization endpoint, prints the verification URI and user code on stderr, then polls `token_url`. `intercept` and `popup` modes exit 5 until they land.
 

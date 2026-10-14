@@ -70,6 +70,8 @@ pub struct Provider {
     pub max_age: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cors_origins: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_via: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

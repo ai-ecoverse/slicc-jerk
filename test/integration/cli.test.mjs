@@ -66,6 +66,7 @@ test('aem is a built-in oauth provider that needs org and site for create', () =
   assert.match(shown.stdout, /from = "body"/);
   assert.match(shown.stdout, /param = "authToken"/);
   assert.match(shown.stdout, /api\.aem\.live/);
+  assert.match(shown.stdout, /cors_origins/);
   const missing = sb.jerk(['aem', 'create']);
   assert.equal(missing.status, 2);
   assert.match(missing.stderr, /-p org=/);

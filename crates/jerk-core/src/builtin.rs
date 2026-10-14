@@ -51,6 +51,11 @@ name = "AEM Admin (api.aem.live)"
 env = ["AEM_TOKEN"]
 domains = ["api.aem.live"]
 params = { org = "", site = "", login_host = "admin.hlx.page" }
+cors_origins = [
+  "https://admin.hlx.page",
+  "https://admin-ci.hlx.page",
+  "https://api.aem.live",
+]
 [providers.aem.oauth]
 mode = "loopback"
 flow = "implicit"

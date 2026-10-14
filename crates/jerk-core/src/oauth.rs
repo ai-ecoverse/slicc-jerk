@@ -132,7 +132,7 @@ pub fn oauth_create(
     err: &mut dyn std::io::Write,
     cdp: Option<&dyn CdpOpener>,
 ) -> Result<Token, OAuthError> {
-    oauth_create_with_vars(config, scope, host, now_secs, random, err, cdp, &[])
+    oauth_create_with_vars(config, scope, host, now_secs, random, err, cdp, &[], &[])
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -145,6 +145,7 @@ pub fn oauth_create_with_vars(
     err: &mut dyn std::io::Write,
     cdp: Option<&dyn CdpOpener>,
     extra_vars: &[(&str, &str)],
+    cors_origins: &[String],
 ) -> Result<Token, OAuthError> {
     use jerk_oauth::config::Mode;
 
@@ -173,11 +174,12 @@ pub fn oauth_create_with_vars(
                     &r16,
                     &|url, body| host.http_post(url, body),
                     extra_vars,
+                    cors_origins,
                 )
             }
             #[cfg(target_os = "wasi")]
             {
-                let _ = (scope, err, r32, r16, extra_vars);
+                let _ = (scope, err, r32, r16, extra_vars, cors_origins);
                 Err(OAuthError {
                     exit: Exit::Unsupported,
                     message: "loopback is not available in this environment".into(),
@@ -200,6 +202,7 @@ pub fn oauth_create_with_vars(
                             &r16,
                             &|url, body| host.http_post(url, body),
                             extra_vars,
+                            cors_origins,
                         );
                     }
                 }
@@ -224,7 +227,7 @@ pub fn oauth_create_with_vars(
             }
             #[cfg(target_os = "wasi")]
             {
-                let _ = (scope, err, r32, r16, extra_vars);
+                let _ = (scope, err, r32, r16, extra_vars, cors_origins);
                 Err(OAuthError {
                     exit: Exit::Unsupported,
                     message: "auto mode is not available in this environment".into(),
