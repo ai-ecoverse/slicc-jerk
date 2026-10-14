@@ -143,6 +143,7 @@ pub fn run_verb_env(
 ) -> Result<Ran, Exit> {
     let run: &[String] = verb.run.as_deref().unwrap_or(&[]);
     let path = program(entry, ctx, io)?;
+    check_version(entry, verb, ctx, io)?;
     let args = render_args(run.get(1..).unwrap_or(&[]), vars);
     let linked = interactive && ctx.via_link;
     let interactive = interactive && !ctx.via_link;
@@ -890,7 +891,6 @@ pub fn mint_token(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Result<(String, Option<String>), Exit> {
-    check_version(entry, verb, ctx, io)?;
     let ran = run_verb(entry, "create", verb, vars, interactive, ctx, io)?;
     let Some(token) = extract::token(&ran.stdout, verb.parse.as_deref()) else {
         let _ = writeln!(io.err, "jerk: {}: create printed no token", entry.id);

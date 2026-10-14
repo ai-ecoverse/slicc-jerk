@@ -234,6 +234,7 @@ pub fn run(
 }
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+const BODY_ACK_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 fn wait_for_callback(
     listener: &TcpListener,
@@ -310,8 +311,10 @@ fn wait_for_json_body(
     cors_origins: &[String],
 ) -> Result<String, OAuthError> {
     let mut captured: Option<String> = None;
+    let mut ack_deadline: Option<std::time::Instant> = None;
     loop {
-        if std::time::Instant::now() >= deadline {
+        let now = std::time::Instant::now();
+        if now >= deadline {
             if let Some(body) = captured {
                 return Ok(body);
             }
@@ -319,6 +322,11 @@ fn wait_for_json_body(
                 exit: Exit::Error,
                 message: "timed out waiting for callback".into(),
             });
+        }
+        if let (Some(body), Some(until)) = (&captured, ack_deadline) {
+            if now >= until {
+                return Ok(body.clone());
+            }
         }
 
         let stream = match listener.accept() {
@@ -395,6 +403,7 @@ fn wait_for_json_body(
             );
             let _ = (&stream).write_all(response.as_bytes());
             captured = Some(body);
+            ack_deadline = Some(std::time::Instant::now() + BODY_ACK_GRACE);
             continue;
         }
 

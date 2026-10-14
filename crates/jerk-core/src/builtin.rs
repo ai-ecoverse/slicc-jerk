@@ -31,9 +31,9 @@ env = ["CLOUDFLARE_API_TOKEN"]
 domains = ["api.cloudflare.com"]
 requires = "wrangler"
 max_age = "50m"
-get = { run = ["wrangler", "auth", "token", "--json"], parse = "json:/token" }
-list = { run = ["wrangler", "whoami", "--json"], parse = "json:" }
-create = { run = ["wrangler", "login", "--scopes", "{scope}"], interactive = true }
+get = { run = ["wrangler", "auth", "token", "--json"], parse = "json:/token", min_version = "4.57.0" }
+list = { run = ["wrangler", "whoami", "--json"], parse = "json:", min_version = "4.65.0" }
+create = { run = ["wrangler", "login", "--scopes", "{scope}"], interactive = true, min_version = "4.57.0" }
 drop = { run = ["wrangler", "logout"], interactive = true }
 
 [providers.adobe-aio]
@@ -61,7 +61,7 @@ mode = "loopback"
 flow = "implicit"
 authorize_url = "https://{login_host}/login/{org}/{site}/main?client_id={client_id}&redirect_uri={redirect_uri}&state={state}&selectAccount=true"
 client_id = "aem-cli"
-redirect_uri = "http://localhost:56122/.aem/cli/login/ack"
+redirect_uri = "http://127.0.0.1:56122/.aem/cli/login/ack"
 capture = { at = "callback", from = "body", param = "authToken" }
 timeout = "5m"
 
@@ -72,7 +72,7 @@ domains = ["api.x.ai"]
 [providers.xai.oauth]
 mode = "auto"
 flow = "pkce"
-authorize_url = "https://auth.x.ai/oauth2/auth?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&code_challenge={code_challenge}&code_challenge_method=S256&state={state}&nonce={nonce}&plan=generic&referrer=slicc"
+authorize_url = "https://auth.x.ai/oauth2/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&code_challenge={code_challenge}&code_challenge_method=S256&state={state}&nonce={nonce}&plan=generic&referrer=slicc"
 token_url = "https://auth.x.ai/oauth2/token"
 client_id = "b1a00492-073a-47ea-816f-4c329264a828"
 redirect_uri = "http://127.0.0.1:56121/callback"
