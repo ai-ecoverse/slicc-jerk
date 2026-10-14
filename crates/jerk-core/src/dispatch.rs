@@ -817,9 +817,19 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
     if entry.provider.create.is_none() && entry.oauth_config.is_some() {
         return oauth_create_cmd(entry, &vars, &flags, ctx, io);
     }
-    let chain = entry.provider.create.as_ref();
-    let minting = chain.is_some_and(|c| c.iter().any(|v| v.parse.is_some()));
-    if !minting && !flags.has("--force") && entry.provider.get.is_some() {
+    let mut held = Vec::new();
+    let step = create_step(
+        entry,
+        ctx,
+        &mut Io {
+            out: &mut std::io::sink(),
+            err: &mut held,
+        },
+    );
+    if let Some(verb) = step.as_ref().ok().filter(|v| v.parse.is_some()) {
+        return mint(entry, verb, &vars, &flags, ctx, io);
+    }
+    if !flags.has("--force") && entry.provider.get.is_some() {
         let mut quiet = Io {
             out: &mut std::io::sink(),
             err: &mut std::io::sink(),
@@ -842,15 +852,15 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
             }
         }
     }
-    let verb = match create_step(entry, ctx, io) {
+    let verb = match step {
         Ok(verb) => verb,
-        Err(code) => return code,
+        Err(code) => {
+            let _ = io.err.write_all(&held);
+            return code;
+        }
     };
     if verb.oauth {
         return oauth_create_cmd(entry, &vars, &flags, ctx, io);
-    }
-    if verb.parse.is_some() {
-        return mint(entry, &verb, &vars, &flags, ctx, io);
     }
     match run_verb(entry, "create", &verb, &vars, verb.interactive, ctx, io) {
         Ok(_) => {

@@ -148,15 +148,17 @@ pub fn drop_lease(entry: &Entry, flags: &Flags, ctx: &mut Ctx<'_>, io: &mut Io<'
         );
         return Exit::Ok;
     };
-    let step = entry
+    let revokers = entry
         .provider
         .drop
         .as_ref()
-        .map(|chain| pick(entry, "drop", chain, ctx, io));
+        .map(|chain| VerbChain(chain.iter().filter(|v| !v.oauth).cloned().collect()))
+        .filter(|chain| !chain.0.is_empty());
+    let step = revokers.map(|chain| pick(entry, "drop", &chain, ctx, io));
     let verb = match step {
-        Some(Ok(verb)) if !verb.oauth => verb,
+        Some(Ok(verb)) => verb,
         Some(Err(code)) => return code,
-        _ => {
+        None => {
             let _ = writeln!(io.err, "jerk: {} has no drop command", entry.id);
             return Exit::Unsupported;
         }
