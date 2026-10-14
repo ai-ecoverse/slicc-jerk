@@ -1,6 +1,8 @@
 use crate::mask::mask;
+use crate::time;
 use base64::Engine;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 pub fn token(stdout: &str, parse: Option<&str>) -> Option<String> {
     let value = match parse.unwrap_or("text") {
@@ -17,6 +19,28 @@ pub fn json(stdout: &str, parse: &str) -> Option<Value> {
     let pointer = parse.strip_prefix("json:")?;
     let doc: Value = serde_json::from_str(stdout.trim()).ok()?;
     doc.pointer(pointer).cloned()
+}
+
+pub fn fields(stdout: &str, map: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (name, parse) in map {
+        if let Some(value) = token(stdout, Some(parse)) {
+            out.insert(name.clone(), value);
+        }
+    }
+    out
+}
+
+pub fn expiry(stdout: &str, token_value: &str, expiry: Option<&str>) -> Option<u64> {
+    match expiry {
+        Some("jwt") => jwt_expiry(token_value),
+        Some(parse) if parse.starts_with("json:") => match json(stdout, parse)? {
+            Value::String(s) => time::parse_rfc3339(&s),
+            Value::Number(n) => n.as_u64(),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 pub fn scopes(value: &Value) -> Option<String> {

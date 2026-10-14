@@ -95,6 +95,17 @@ redirect_uri = "http://localhost:8877/oauth/callback"
 scope = "account:read user:read workers:write workers_kv:write workers_scripts:write d1:write pages:write zone:read offline_access"
 capture = { at = "request", from = "query", param = "code" }
 
+[providers.aws]
+name = "AWS"
+env = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
+requires = "aws"
+params = { profile = "", region = "" }
+get = { run = ["aws", "configure", "export-credentials", "--profile", "{profile}", "--region", "{region}"], parse = "json:/AccessKeyId", fields = { AWS_SECRET_ACCESS_KEY = "json:/SecretAccessKey", AWS_SESSION_TOKEN = "json:/SessionToken" }, expiry = "json:/Expiration" }
+list = { run = ["aws", "sts", "get-caller-identity", "--profile", "{profile}", "--region", "{region}"], parse = "json:" }
+user = { run = ["aws", "sts", "get-caller-identity", "--profile", "{profile}", "--region", "{region}"], parse = "json:/Arn" }
+create = { run = ["aws", "sso", "login", "--profile", "{profile}"], interactive = true }
+drop = { run = ["aws", "sso", "logout", "--profile", "{profile}"], interactive = true }
+
 [providers.fastly]
 name = "Fastly"
 env = ["FASTLY_API_TOKEN"]

@@ -231,9 +231,57 @@ fn sign_in_hint(entry: &Entry, io: &mut Io<'_>) {
 
 pub struct Token {
     pub value: String,
+    pub fields: BTreeMap<String, String>,
     pub source: &'static str,
     pub expires_at: Option<u64>,
     pub scope: Option<String>,
+}
+
+impl Token {
+    pub fn credentials(&self, entry: &Entry) -> BTreeMap<String, String> {
+        if self.fields.is_empty() {
+            return entry
+                .provider
+                .env
+                .iter()
+                .map(|name| (name.clone(), self.value.clone()))
+                .collect();
+        }
+        let mut map = BTreeMap::new();
+        if let Some(primary) = entry.provider.env.first() {
+            map.insert(primary.clone(), self.value.clone());
+        }
+        map.extend(self.fields.clone());
+        map
+    }
+
+    pub fn value_for<'a>(&'a self, secret: &str, entry: &Entry) -> Option<&'a str> {
+        if entry.provider.env.first().map(String::as_str) == Some(secret) {
+            return Some(&self.value);
+        }
+        if let Some(value) = self.fields.get(secret) {
+            return Some(value);
+        }
+        if self.fields.is_empty() && entry.provider.env.iter().any(|e| e == secret) {
+            return Some(&self.value);
+        }
+        None
+    }
+}
+
+fn env_fields(entry: &Entry, ctx: &Ctx<'_>) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::new();
+    let Some(chain) = &entry.provider.get else {
+        return fields;
+    };
+    for verb in chain.iter() {
+        for name in verb.fields.keys() {
+            if let Some(value) = ctx.env.var(name) {
+                fields.insert(name.clone(), value.to_string());
+            }
+        }
+    }
+    fields
 }
 
 pub fn fetch(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<Token, Exit> {
@@ -252,6 +300,7 @@ pub fn fetch_from(
         return Ok(Token {
             expires_at: None,
             value: value.to_string(),
+            fields: env_fields(entry, ctx),
             source: "env",
             scope: None,
         });
@@ -417,12 +466,8 @@ fn fetch_step(
         sign_in_hint(entry, io);
         return Err(Exit::SignIn);
     };
-    let expires_at = if verb.expiry.as_deref() == Some("jwt") {
-        extract::jwt_expiry(&value)
-    } else {
-        None
-    }
-    .or_else(|| {
+    let fields = extract::fields(&ran.stdout, &verb.fields);
+    let expires_at = extract::expiry(&ran.stdout, &value, verb.expiry.as_deref()).or_else(|| {
         entry
             .provider
             .max_age
@@ -432,6 +477,7 @@ fn fetch_step(
     });
     Ok(Token {
         value,
+        fields,
         source: "cli",
         expires_at,
         scope: None,
@@ -453,6 +499,7 @@ fn read_token(
     match value {
         Some(value) => Ok(Token {
             value,
+            fields: BTreeMap::new(),
             source: "file",
             expires_at: None,
             scope: None,
@@ -493,6 +540,7 @@ fn fetch_oauth(
         if fresh {
             return Ok(Token {
                 value: at.clone(),
+                fields: BTreeMap::new(),
                 source: "oauth",
                 expires_at: grant.expires_at,
                 scope: grant.scope.clone(),
@@ -526,6 +574,7 @@ fn fetch_oauth(
             }
             Ok(Token {
                 value: token.access_token,
+                fields: BTreeMap::new(),
                 source: "oauth",
                 expires_at: token.expires_at,
                 scope: token.scope.or(grant.scope),

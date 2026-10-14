@@ -78,6 +78,7 @@ A token already in the provider's first `env` variable (`GH_TOKEN`, …) wins ov
 | `github` | `gh` | `gh auth token` | `--scope` understands GitHub's implied scopes (`repo` covers `public_repo`). Sign-out is `gh auth logout`. |
 | `npm` | `npm` | `//registry.npmjs.org/:_authToken` from `$NPM_CONFIG_USERCONFIG` or `~/.npmrc` | `npm config get` won't print auth keys, so jerk reads the file. `create` mints a granular token (npm 11.6.3 or newer) and records only its id, so `drop <id>` can revoke it. |
 | `cloudflare` | `cf`, then `wrangler`, then browser OAuth | `cf accounts tokens create` (when `-p policies=…`), else `wrangler auth token --json`, else the stored OAuth grant | `create` / `drop` / `list` prefer `cf` (`auth login` / `logout` / `whoami`), then wrangler. `get` via `cf` mints an account-owned API token and needs `CLOUDFLARE_ACCOUNT_ID` plus `-p policies=…`; with the default empty `policies` that step fails and `get` moves on. Wrangler needs 4.57.0+ for `create`/`get` and 4.65.0 for `list`. Browser fallback uses Cloudflare's `cf` OAuth app on `localhost:8877`. Session tokens are treated as expiring after 50 minutes. |
+| `aws` | `aws` (CLI v2) | `aws configure export-credentials` | Prints `AccessKeyId`; `lease` maps `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` from the JSON (session token omitted when absent). Env `AWS_*` wins when `AWS_ACCESS_KEY_ID` is set, including sealed environments with no binary. `-p profile=` / `-p region=` are optional. `create` / `drop` are `aws sso login` / `logout`; `list` / `user` use `sts get-caller-identity`. |
 | `adobe-aio` | `aio` | `aio login --bare --no-open` | The expiry comes from the IMS token itself. |
 | `aem` | `aem-ext`, then browser OAuth | env `AEM_TOKEN` / `AEM_API_KEY`, else the stored OAuth grant | When `aem-ext` is on `PATH`, `create` / `list` / `drop` wrap `aem-ext auth key` create, list, and delete (365-day admin API keys, `X-Auth-Token`). `create` prints the key once (`--json` → `/value`, id `/id`) and records the jti for `drop`. Needs `-p org=… -p site=…`. Without `aem-ext`, `create` / `drop` / `get` use the aem-cli loopback OAuth (`authToken`, ~20 minutes). Cookie login (`aem-ext auth login`) stays on the CLI for curl-only use. |
 | `fastly` | `fastly` | `fastly profile token` | Env `FASTLY_API_TOKEN` wins. `create` runs `fastly sso`; `list` is `profile list --json`; `drop <profile>` is `profile delete`. Optional `-p profile=…` selects a named profile for get/create. |
@@ -134,7 +135,8 @@ Commands are argument lists, never shell strings, and the CLI runs without the p
 | `run` | the argument list |
 | `read` | `get` only: `{ ini = path, key = k }` reads a value from an ini file instead |
 | `parse` | `text`, `jwt` or `json:<pointer>` |
-| `expiry` | `jwt` to read the expiry from the token |
+| `fields` | `get` only: map extra `env` names to `json:<pointer>` values from the same CLI stdout (for multi-value credentials such as AWS) |
+| `expiry` | `jwt` to read the expiry from the token, or `json:<pointer>` for an RFC3339 / unix timestamp in the CLI JSON |
 | `timeout` | such as `10s` |
 | `min_version` | the oldest CLI version that supports this command (exit 4 below it) |
 | `interactive` | the command keeps the terminal (sign-ins) |
