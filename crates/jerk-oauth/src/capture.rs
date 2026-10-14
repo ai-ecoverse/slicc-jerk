@@ -132,6 +132,54 @@ fn extract_params_with_duplicates(
     }
 }
 
+pub fn parse_json_body(
+    body: &str,
+    param: &str,
+    expected_state: Option<&str>,
+) -> Result<CaptureResult, CaptureError> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| CaptureError::MissingParam(param.to_string()))?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| CaptureError::MissingParam(param.to_string()))?;
+
+    let mut params = BTreeMap::new();
+    for (k, v) in obj {
+        let s = match v {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Null => continue,
+            _ => continue,
+        };
+        params.insert(k.clone(), s);
+    }
+
+    if let Some(error) = params.get("error") {
+        let desc = params
+            .get("error_description")
+            .map(|d| sanitize_error_description(d));
+        return Err(CaptureError::IdpError {
+            error: sanitize_error_description(error),
+            description: desc,
+        });
+    }
+
+    if let Some(expected) = expected_state {
+        let received = params.get("state").map(String::as_str).unwrap_or("");
+        if received != expected {
+            return Err(CaptureError::StateMismatch);
+        }
+    }
+
+    let value = params
+        .get(param)
+        .ok_or_else(|| CaptureError::MissingParam(param.to_string()))?
+        .clone();
+
+    Ok(CaptureResult { value, params })
+}
+
 fn parse_query_from_url_with_duplicates(url_str: &str) -> (BTreeMap<String, String>, Vec<String>) {
     let query = match url_str.find('?') {
         Some(i) => {

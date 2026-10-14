@@ -54,9 +54,22 @@ test('jerk list shows the built-in providers and finds their CLIs on PATH', () =
   const json = JSON.parse(sb.jerk(['list', '--json']).stdout);
   assert.deepEqual(
     json.map((p) => p.provider),
-    ['adobe-aio', 'cloudflare', 'github', 'npm', 'xai']
+    ['adobe-aio', 'aem', 'cloudflare', 'github', 'npm', 'xai']
   );
   assert.equal(json.find((p) => p.provider === 'github').cli, true);
+});
+
+test('aem is a built-in oauth provider that needs org and site for create', () => {
+  const sb = sandbox();
+  const shown = sb.jerk(['config', 'show', 'aem']);
+  assert.equal(shown.status, 0, shown.stderr);
+  assert.match(shown.stdout, /from = "body"/);
+  assert.match(shown.stdout, /param = "authToken"/);
+  assert.match(shown.stdout, /api\.aem\.live/);
+  assert.match(shown.stdout, /cors_origins/);
+  const missing = sb.jerk(['aem', 'create']);
+  assert.equal(missing.status, 2);
+  assert.match(missing.stderr, /-p org=/);
 });
 
 test('a user file replaces a built-in provider as a unit', () => {
@@ -71,7 +84,7 @@ test('a user file replaces a built-in provider as a unit', () => {
   assert.equal(github.requires, null);
   const check = sb.jerk(['config', 'check']);
   assert.equal(check.status, 0);
-  assert.equal(check.stdout, 'ok: 5 providers (4 built-in, 1 user)\n');
+  assert.equal(check.stdout, 'ok: 6 providers (5 built-in, 1 user)\n');
 });
 
 test('config check reports every problem and exits 2', () => {

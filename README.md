@@ -79,6 +79,7 @@ A token already in the provider's first `env` variable (`GH_TOKEN`, …) wins ov
 | `npm` | `npm` | `//registry.npmjs.org/:_authToken` from `$NPM_CONFIG_USERCONFIG` or `~/.npmrc` | `npm config get` won't print auth keys, so jerk reads the file. `create` mints a granular token (npm 11.6.3 or newer) and records only its id, so `drop <id>` can revoke it. |
 | `cloudflare` | `wrangler` | `wrangler auth token --json` | Needs wrangler 4.57.0 or newer for `create` and `get`, and 4.65.0 for `list`. An older wrangler exits 4 before signing in, not 3 after. Tokens are treated as expiring after 50 minutes. |
 | `adobe-aio` | `aio` | `aio login --bare --no-open` | The expiry comes from the IMS token itself. |
+| `aem` | jerk's own OAuth | loopback body capture of `authToken` | Admin JWT for `api.aem.live`. Needs `-p org=… -p site=…`. |
 | `xai` | jerk's own OAuth | PKCE through a loopback redirect | The sign-in opens in your browser. The grant is kept in the OS keyring. |
 
 `jerk config show <provider>` prints the definition that's in effect.
@@ -166,6 +167,8 @@ capture = { at = "request", from = "query", param = "code" }
 | `auto` | `loopback` when the port is free, otherwise `intercept` |
 
 `create` signs in and keeps the grant: in the OS keyring (service `slicc-jerk`), or with `store = "file"` in a 0600 file. `get` refreshes the token at `token_url` when it's close to expiring. `drop` removes the grant. On Linux the keyring is the kernel keyring, which doesn't survive a reboot.
+
+`jerk aem create -p org=… -p site=…` uses the aem-cli loopback login (`client_id=aem-cli`, redirect `/.aem/cli/login/ack`). After you click Send, jerk stores the admin JWT (`authToken`) for `api.aem.live` as `AEM_TOKEN` (`X-Auth-Token` / `Authorization: token …`). The login host defaults to `admin.hlx.page` (Helix 6 sites still use that login endpoint today); override with `-p login_host=…` when `api.aem.live` returns `authToken` itself. Body capture CORS allow-list is the provider's `cors_origins`; any `{placeholder}` in `authorize_url` beyond the built-in OAuth vars must be supplied with `-p`.
 
 For `intercept`, the browser is the one in `--cdp`, otherwise `SLICC_CDP_URL`, otherwise a running browser from `slicc browsers --json` (the one with seven open first), otherwise exit 4.
 

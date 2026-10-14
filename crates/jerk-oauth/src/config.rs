@@ -35,6 +35,7 @@ pub enum CaptureFrom {
     Fragment,
     Header,
     Url,
+    Body,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

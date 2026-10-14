@@ -779,8 +779,18 @@ fn oauth_create_cmd(
     #[cfg(target_os = "wasi")]
     let cdp_ref: Option<&dyn oauth::CdpOpener> = None;
 
-    let token = match oauth::oauth_create(config, scope, host, ctx.now, ctx.random, io.err, cdp_ref)
-    {
+    let extra: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let token = match oauth::oauth_create_with_vars(
+        config,
+        scope,
+        host,
+        ctx.now,
+        ctx.random,
+        io.err,
+        cdp_ref,
+        &extra,
+        &entry.provider.cors_origins,
+    ) {
         Ok(t) => t,
         Err(e) => {
             let _ = writeln!(io.err, "jerk: {}: {e}", entry.id);
