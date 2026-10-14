@@ -26,15 +26,74 @@ create = { run = ["npm", "token", "create", "--name", "{name}", "--expires", "{e
 drop = { run = ["npm", "token", "revoke", "{id}"] }
 
 [providers.cloudflare]
-name = "Cloudflare (wrangler)"
+name = "Cloudflare"
 env = ["CLOUDFLARE_API_TOKEN"]
 domains = ["api.cloudflare.com"]
-requires = "wrangler"
 max_age = "50m"
-get = { run = ["wrangler", "auth", "token", "--json"], parse = "json:/token", min_version = "4.57.0" }
-list = { run = ["wrangler", "whoami", "--json"], parse = "json:", min_version = "4.65.0" }
-create = { run = ["wrangler", "login", "--scopes", "{scope}"], interactive = true, min_version = "4.57.0" }
-drop = { run = ["wrangler", "logout"], interactive = true }
+params = { name = "jerk", policies = "" }
+
+[[providers.cloudflare.get]]
+requires = "cf"
+run = ["cf", "accounts", "tokens", "create", "--quiet", "--name", "{name}", "--policies", "{policies}"]
+parse = "json:/value"
+
+[[providers.cloudflare.get]]
+requires = "wrangler"
+run = ["wrangler", "auth", "token", "--json"]
+parse = "json:/token"
+min_version = "4.57.0"
+
+[[providers.cloudflare.get]]
+oauth = true
+
+[[providers.cloudflare.list]]
+requires = "cf"
+run = ["cf", "auth", "whoami"]
+parse = "json:"
+
+[[providers.cloudflare.list]]
+requires = "wrangler"
+run = ["wrangler", "whoami", "--json"]
+parse = "json:"
+min_version = "4.65.0"
+
+[[providers.cloudflare.create]]
+requires = "cf"
+run = ["cf", "auth", "login", "--scopes", "{scope}"]
+interactive = true
+min_version = "0.4.0"
+
+[[providers.cloudflare.create]]
+requires = "wrangler"
+run = ["wrangler", "login", "--scopes", "{scope}"]
+interactive = true
+min_version = "4.57.0"
+
+[[providers.cloudflare.create]]
+oauth = true
+
+[[providers.cloudflare.drop]]
+requires = "cf"
+run = ["cf", "auth", "logout"]
+interactive = true
+
+[[providers.cloudflare.drop]]
+requires = "wrangler"
+run = ["wrangler", "logout"]
+interactive = true
+
+[[providers.cloudflare.drop]]
+oauth = true
+
+[providers.cloudflare.oauth]
+mode = "loopback"
+flow = "pkce"
+authorize_url = "https://dash.cloudflare.com/oauth2/auth?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&state={state}&code_challenge={code_challenge}&code_challenge_method=S256"
+token_url = "https://dash.cloudflare.com/oauth2/token"
+client_id = "cbca97e7-c331-4cdd-8fd8-e25a451b98bf"
+redirect_uri = "http://localhost:8877/oauth/callback"
+scope = "account:read user:read workers:write workers_kv:write workers_scripts:write d1:write pages:write zone:read offline_access"
+capture = { at = "request", from = "query", param = "code" }
 
 [providers.adobe-aio]
 name = "Adobe IMS (aio CLI)"
