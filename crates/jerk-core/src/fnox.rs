@@ -67,7 +67,7 @@ pub fn lease(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>)
                     .cloned()
                     .collect(),
             );
-            match pick(entry, "create", &minters, ctx, io) {
+            match pick(entry, "create", &minters, &vars, ctx, io) {
                 Ok(verb) => Some(verb),
                 Err(code) => return code,
             }
@@ -155,13 +155,16 @@ pub fn drop_lease(entry: &Entry, flags: &Flags, ctx: &mut Ctx<'_>, io: &mut Io<'
         );
         return Exit::Ok;
     };
+    let mut lease_flags = Flags::default();
+    lease_flags.positionals.push(id.clone());
+    let vars = vars(entry, &lease_flags).unwrap_or_default();
     let revokers = entry
         .provider
         .drop
         .as_ref()
         .map(|chain| VerbChain(chain.iter().filter(|v| !v.oauth).cloned().collect()))
         .filter(|chain| !chain.0.is_empty());
-    let step = revokers.map(|chain| pick(entry, "drop", &chain, ctx, io));
+    let step = revokers.map(|chain| pick(entry, "drop", &chain, &vars, ctx, io));
     let verb = match step {
         Some(Ok(verb)) => verb,
         Some(Err(code)) => return code,
@@ -170,9 +173,6 @@ pub fn drop_lease(entry: &Entry, flags: &Flags, ctx: &mut Ctx<'_>, io: &mut Io<'
             return Exit::Unsupported;
         }
     };
-    let mut lease_flags = Flags::default();
-    lease_flags.positionals.push(id.clone());
-    let vars = vars(entry, &lease_flags).unwrap_or_default();
     if let Err(code) = run_verb(entry, "drop", &verb, &vars, false, ctx, io) {
         return code;
     }

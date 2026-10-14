@@ -162,13 +162,49 @@ capture = { at = "request", from = "query", param = "code" }
 
 [providers.adobe-aio]
 name = "Adobe IMS (aio CLI)"
-env = ["ADOBE_IMS_TOKEN"]
+env = ["ADOBE_IMS_TOKEN", "AEM_EDGE_FUNCTIONS_TOKEN"]
 domains = ["ims-na1.adobelogin.com", "firefall.adobe.io", "admin.da.live"]
+params = { ctx = "cli", client_id = "", client_secret = "", scope = "openid,AdobeID,aem.cdn,additional_info.projectedProductContext" }
+
+[[providers.adobe-aio.get]]
 requires = "aio"
-params = { ctx = "cli" }
-get = { run = ["aio", "login", "--bare", "--no-open", "--ctx", "{ctx}"], parse = "text", expiry = "jwt", timeout = "10s" }
-create = { run = ["aio", "login", "--force", "--ctx", "{ctx}"], interactive = true, link = true }
-drop = { run = ["aio", "logout", "--ctx", "{ctx}"], interactive = true }
+run = ["aio", "login", "--bare", "--no-open", "--ctx", "{ctx}"]
+parse = "text"
+expiry = "jwt"
+timeout = "10s"
+unless = ["client_id"]
+
+[[providers.adobe-aio.get]]
+oauth = true
+needs = ["client_id", "client_secret"]
+
+[[providers.adobe-aio.create]]
+requires = "aio"
+run = ["aio", "login", "--force", "--ctx", "{ctx}"]
+interactive = true
+link = true
+unless = ["client_id"]
+
+[[providers.adobe-aio.create]]
+oauth = true
+needs = ["client_id", "client_secret"]
+
+[[providers.adobe-aio.drop]]
+requires = "aio"
+run = ["aio", "logout", "--ctx", "{ctx}"]
+interactive = true
+unless = ["client_id"]
+
+[[providers.adobe-aio.drop]]
+oauth = true
+needs = ["client_id"]
+
+[providers.adobe-aio.oauth]
+mode = "client_credentials"
+token_url = "https://ims-na1.adobelogin.com/ims/token/v3"
+client_id = "{client_id}"
+client_secret = "{client_secret}"
+scope = "{scope}"
 
 [providers.firefly]
 name = "Adobe Firefly Services"
