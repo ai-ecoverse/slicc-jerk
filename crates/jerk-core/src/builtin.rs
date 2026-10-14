@@ -95,6 +95,17 @@ redirect_uri = "http://localhost:8877/oauth/callback"
 scope = "account:read user:read workers:write workers_kv:write workers_scripts:write d1:write pages:write zone:read offline_access"
 capture = { at = "request", from = "query", param = "code" }
 
+[providers.fastly]
+name = "Fastly"
+env = ["FASTLY_API_TOKEN"]
+domains = ["api.fastly.com"]
+requires = "fastly"
+params = { profile = "" }
+get = { run = ["fastly", "profile", "token", "{profile}", "--quiet"], parse = "text" }
+list = { run = ["fastly", "profile", "list", "--json", "--quiet"], parse = "json:" }
+create = { run = ["fastly", "sso", "{profile}"], interactive = true }
+drop = { run = ["fastly", "profile", "delete", "{id}", "--auto-yes"], interactive = true }
+
 [providers.adobe-aio]
 name = "Adobe IMS (aio CLI)"
 env = ["ADOBE_IMS_TOKEN"]
