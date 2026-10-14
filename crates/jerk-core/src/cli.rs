@@ -9,18 +9,22 @@ use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 
 pub(crate) const HELP: &str =
-    "jerk: get, list, create and drop OAuth tokens through each provider's own CLI
+    "jerk: get, list, create and drop OAuth tokens through each provider's own CLI, or its own OAuth flow
 
 Usage:
   jerk list [--json]
-  jerk <provider> get    [--scope S] [--reveal] [--refresh] [--login] [--json]
+  jerk <provider> get    [--scope S] [--reveal] [--refresh] [--login] [--json] [-p k=v]
   jerk <provider> list   [--json]
-  jerk <provider> create [--scope S] [--force]
-  jerk <provider> drop   [<id>] [--lease] [--yes]
+  jerk <provider> create [--scope S] [--force] [--name N] [--expires D] [--cdp URL] [-p k=v]
+  jerk <provider> drop   [<id>] [--yes]
   jerk <provider> lease
-  jerk <provider> sync --fnox <SECRET> --provider <fnox provider>
-  jerk config path [--json] | check | show <provider> | fnox
-  jerk intercept --authorize-url <url> --redirect <url>
+  jerk <provider> drop --lease
+  jerk <provider> sync --fnox <SECRET> --provider <fnox provider> [--global]
+  jerk mcp:<server> create [--scope S] [--no-browser] | get | drop | import-pi
+  jerk config path [--json] | check | show <provider> | fnox [--proxy] [<provider>...]
+  jerk intercept --authorize-url U --redirect R [--rewrite m=k=v]... [--pkce]
+                 [--exchange --token-url T --client-id C] [--cdp URL]
+  jerk intercept --from-file F.toml
 
 Options:
   --config <file>  read this providers file after the others (or SLICC_JERK_CONFIG)

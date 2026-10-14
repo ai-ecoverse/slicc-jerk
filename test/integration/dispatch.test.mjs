@@ -112,7 +112,8 @@ test('wrangler tokens get a max_age expiry', () => {
   const sb = sandbox();
   sb.script(
     'wrangler',
-    `process.stdout.write(JSON.stringify({ type: 'oauth', token: 'cfoauthtoken123456789' }));`
+    `if (args[0] === '--version') process.stdout.write(' ⛅️ wrangler 4.151.0\\n');
+else process.stdout.write(JSON.stringify({ type: 'oauth', token: 'cfoauthtoken123456789' }));`
   );
   const res = JSON.parse(sb.jerk(['cloudflare', 'get', '--json']).stdout);
   assert.equal(res.masked, 'cfoa…6789');
@@ -181,4 +182,26 @@ test('npm create refuses an npm that cannot make granular tokens', () => {
   assert.equal(res.status, 4);
   assert.match(res.stderr, /npm 11\.4\.2 is too old; this needs 11\.6\.3 or newer/);
   assert.equal(sb.calls().length, 1);
+});
+
+test('an old wrangler is reported as too old, not as signed out', () => {
+  const sb = sandbox();
+  sb.script(
+    'wrangler',
+    `if (args[0] === '--version') process.stdout.write(' ⛅️ wrangler 4.14.4\\n'); else process.exit(1);`
+  );
+  const res = sb.jerk(['cloudflare', 'get']);
+  assert.equal(res.status, 4);
+  assert.match(res.stderr, /wrangler 4\.14\.4 is too old; this needs 4\.57\.0 or newer/);
+  assert.equal(sb.calls().length, 1);
+  const create = sb.jerk(['cloudflare', 'create']);
+  assert.equal(create.status, 4);
+  assert.match(create.stderr, /this needs 4\.57\.0 or newer/);
+});
+
+test('the built-in xai provider signs in at the discovered authorize endpoint', () => {
+  const sb = sandbox();
+  const res = sb.jerk(['config', 'show', 'xai']);
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /authorize_url = "https:\/\/auth\.x\.ai\/oauth2\/authorize\?/);
 });
