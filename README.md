@@ -212,7 +212,7 @@ The npm package also carries `bin/jerk.wasm`, a `wasm32-wasip1` build that seven
 - **`jerk <provider> get`** prints the placeholder.
 - **`create`** asks the linked machine's jerk to sign in, or bios to run an `[oauth]` sign-in, and the result is sealed.
 - **`drop`** removes the sealed record.
-- **`lease`, `sync` and `intercept`** exit 5.
+- **`<provider> list`, `lease`, `sync` and `intercept`** exit 5.
 
 All of this goes through `/dev/sealed`.
 
