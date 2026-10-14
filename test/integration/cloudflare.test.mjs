@@ -129,8 +129,13 @@ test('with neither CLI, get reaches oauth and list --json shows the chain', () =
   const sb = sandbox();
   const res = sb.jerk(['cloudflare', 'get']);
   assert.equal(res.status, 3);
-  assert.match(res.stderr, /\n {2}cf: not on PATH\n {2}wrangler: not on PATH\n {2}oauth: not signed in\n/);
-  const entry = JSON.parse(sb.jerk(['list', '--json']).stdout).find((p) => p.provider === 'cloudflare');
+  assert.match(
+    res.stderr,
+    /\n {2}cf: not on PATH\n {2}wrangler: not on PATH\n {2}oauth: not signed in\n/
+  );
+  const entry = JSON.parse(sb.jerk(['list', '--json']).stdout).find(
+    (p) => p.provider === 'cloudflare'
+  );
   assert.deepEqual(entry.steps, [
     { cli: 'cf', found: false },
     { cli: 'wrangler', found: false },
