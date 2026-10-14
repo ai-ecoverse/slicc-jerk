@@ -244,6 +244,54 @@ fn json_flag(args: &[String], what: &str, io: &mut Io<'_>) -> Result<bool, Exit>
     }
 }
 
+fn cli_steps(
+    entry: &config::Entry,
+    env: &Env,
+    exists: &dyn Fn(&Path) -> bool,
+) -> Vec<(String, Option<bool>)> {
+    let provider = &entry.provider;
+    let named = config::verbs(provider)
+        .into_iter()
+        .filter_map(|(_, verb)| match verb.oauth {
+            true => Some(None),
+            false => verb
+                .requires
+                .as_deref()
+                .or(provider.requires.as_deref())
+                .map(Some),
+        });
+    let mut steps: Vec<(String, Option<bool>)> = Vec::new();
+    for cli in named.chain(provider.requires.as_deref().map(Some)) {
+        let step = match cli {
+            None => ("oauth".to_string(), None),
+            Some(cmd) => (
+                cmd.to_string(),
+                Some(which::find(cmd, env, exists).is_some()),
+            ),
+        };
+        if !steps.iter().any(|s| s.0 == step.0) {
+            steps.push(step);
+        }
+    }
+    steps
+}
+
+fn cli_summary(steps: &[(String, Option<bool>)]) -> String {
+    match steps {
+        [] => "-".to_string(),
+        [(cmd, Some(true))] => format!("{cmd} (found)"),
+        [(cmd, Some(false))] => format!("{cmd} (missing)"),
+        many => many
+            .iter()
+            .map(|(cmd, found)| match found {
+                Some(false) => format!("{cmd} (missing)"),
+                _ => cmd.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
+}
+
 fn list(
     args: &[String],
     env: &Env,
@@ -263,11 +311,7 @@ fn list(
         .providers
         .values()
         .map(|entry| {
-            let cli = match &entry.provider.requires {
-                Some(cmd) if which::find(cmd, env, exists).is_some() => format!("{cmd} (found)"),
-                Some(cmd) => format!("{cmd} (missing)"),
-                None => "-".to_string(),
-            };
+            let cli = cli_summary(&cli_steps(entry, env, exists));
             [
                 entry.id.clone(),
                 entry
@@ -286,14 +330,25 @@ fn list(
             .values()
             .zip(&rows)
             .map(|(entry, row)| {
-                json!({
+                let steps = cli_steps(entry, env, exists);
+                let mut item = json!({
                     "provider": entry.id,
                     "name": row[1],
                     "source": row[2],
                     "requires": entry.provider.requires,
-                    "cli": entry.provider.requires.as_ref().map(|_| row[3].ends_with("(found)")),
+                    "cli": entry.provider.requires.as_ref().map(|cmd| which::find(cmd, env, exists).is_some()),
                     "env": entry.provider.env,
-                })
+                });
+                if steps.len() > 1 {
+                    item["steps"] = steps
+                        .iter()
+                        .map(|(cmd, found)| match found {
+                            Some(found) => json!({ "cli": cmd, "found": found }),
+                            None => json!({ "oauth": true }),
+                        })
+                        .collect();
+                }
+                item
             })
             .collect();
         let _ = writeln!(io.out, "{}", serde_json::Value::Array(items));

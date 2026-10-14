@@ -1,6 +1,6 @@
 use crate::paths::Env;
 use jerk_oauth::config::OAuthConfig;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
@@ -45,6 +45,41 @@ pub struct Verb {
     pub interactive: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub link: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub oauth: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VerbChain(pub Vec<Verb>);
+
+impl VerbChain {
+    pub fn iter(&self) -> std::slice::Iter<'_, Verb> {
+        self.0.iter()
+    }
+}
+
+impl Serialize for VerbChain {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0.as_slice() {
+            [only] => only.serialize(serializer),
+            many => many.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for VerbChain {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let verbs = match toml::Value::deserialize(deserializer)? {
+            toml::Value::Array(items) => items
+                .into_iter()
+                .map(Verb::deserialize)
+                .collect::<Result<Vec<_>, _>>(),
+            other => Verb::deserialize(other).map(|verb| vec![verb]),
+        };
+        verbs.map(VerbChain).map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -75,17 +110,17 @@ pub struct Provider {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_via: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub get: Option<Verb>,
+    pub get: Option<VerbChain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub list: Option<Verb>,
+    pub list: Option<VerbChain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scopes: Option<Verb>,
+    pub scopes: Option<VerbChain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user: Option<Verb>,
+    pub user: Option<VerbChain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub create: Option<Verb>,
+    pub create: Option<VerbChain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drop: Option<Verb>,
+    pub drop: Option<VerbChain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<toml::Table>,
 }
@@ -435,10 +470,10 @@ pub fn validate(id: &str, provider: &Provider, source: &Source) -> Vec<Problem> 
         if value != "get" && value != "create" {
             messages.push("lease_via must be get or create".to_string());
         }
-        let revocable = provider
-            .create
-            .as_ref()
-            .is_some_and(|c| c.parse.is_some() && (c.id.is_some() || c.lookup.is_some()));
+        let revocable = provider.create.as_ref().is_some_and(|c| {
+            c.iter()
+                .any(|v| v.parse.is_some() && (v.id.is_some() || v.lookup.is_some()))
+        });
         if value == "create" && !revocable {
             messages.push(
                 "lease_via = \"create\" needs a create with parse and an id or lookup, so the lease can be revoked"
@@ -446,11 +481,17 @@ pub fn validate(id: &str, provider: &Provider, source: &Source) -> Vec<Problem> 
             );
         }
     }
-    if provider.get.is_none() && provider.oauth.is_none() && !is_mcp {
+    let has_cli_get = provider
+        .get
+        .as_ref()
+        .is_some_and(|c| c.iter().any(|v| !v.oauth));
+    if !has_cli_get && provider.oauth.is_none() && !is_mcp {
         messages.push("needs a get command or an oauth block".to_string());
     }
-    for (name, verb) in verbs(provider) {
-        validate_verb(name, verb, provider, &mut messages);
+    for (name, chain) in verb_chains(provider) {
+        for (i, verb) in chain.iter().enumerate() {
+            validate_verb(name, verb, i, chain.0.len(), provider, &mut messages);
+        }
     }
     messages
         .into_iter()
@@ -463,7 +504,7 @@ pub fn validate(id: &str, provider: &Provider, source: &Source) -> Vec<Problem> 
         .collect()
 }
 
-pub fn verbs(provider: &Provider) -> Vec<(&'static str, &Verb)> {
+pub fn verb_chains(provider: &Provider) -> Vec<(&'static str, &VerbChain)> {
     [
         ("get", &provider.get),
         ("list", &provider.list),
@@ -473,36 +514,73 @@ pub fn verbs(provider: &Provider) -> Vec<(&'static str, &Verb)> {
         ("drop", &provider.drop),
     ]
     .into_iter()
-    .filter_map(|(name, verb)| verb.as_ref().map(|v| (name, v)))
+    .filter_map(|(name, chain)| chain.as_ref().map(|c| (name, c)))
     .collect()
 }
 
-fn validate_verb(name: &str, verb: &Verb, provider: &Provider, messages: &mut Vec<String>) {
+pub fn verbs(provider: &Provider) -> Vec<(&'static str, &Verb)> {
+    verb_chains(provider)
+        .into_iter()
+        .flat_map(|(name, chain)| chain.iter().map(move |v| (name, v)))
+        .collect()
+}
+
+fn validate_verb(
+    name: &str,
+    verb: &Verb,
+    step: usize,
+    chain_len: usize,
+    provider: &Provider,
+    messages: &mut Vec<String>,
+) {
+    let label = if chain_len > 1 {
+        format!("{name}[{step}]")
+    } else {
+        name.to_string()
+    };
+    if verb.oauth {
+        if !["get", "create", "drop"].contains(&name) {
+            messages.push(format!(
+                "{label}: oauth = true only applies to get, create and drop"
+            ));
+        }
+        if verb.run.is_some() {
+            messages.push(format!("{label}: oauth = true cannot have run"));
+        }
+        if verb.read.is_some() {
+            messages.push(format!("{label}: oauth = true cannot have read"));
+        }
+        if provider.oauth.is_none() {
+            messages.push(format!("{label}: oauth = true but no [oauth] block"));
+        }
+        return;
+    }
+    let step_requires = verb.requires.as_ref().or(provider.requires.as_ref());
     match (&verb.run, &verb.read) {
-        (Some(_), Some(_)) => messages.push(format!("{name}: use either run or read, not both")),
-        (None, None) => messages.push(format!("{name}: needs run or read")),
-        (Some(run), None) if run.is_empty() => messages.push(format!("{name}: run is empty")),
-        (Some(_), None) if provider.requires.is_none() => {
-            messages.push(format!("{name}: run needs requires to name the CLI"))
+        (Some(_), Some(_)) => messages.push(format!("{label}: use either run or read, not both")),
+        (None, None) => messages.push(format!("{label}: needs run or read")),
+        (Some(run), None) if run.is_empty() => messages.push(format!("{label}: run is empty")),
+        (Some(_), None) if step_requires.is_none() => {
+            messages.push(format!("{label}: run needs requires to name the CLI"))
         }
         _ => {}
     }
     if verb.read.is_some() && name != "get" {
-        messages.push(format!("{name}: read only applies to get"));
+        messages.push(format!("{label}: read only applies to get"));
     }
     if let Some(lookup) = &verb.lookup {
         if name != "create" || verb.parse.is_none() {
             messages.push(format!(
-                "{name}: lookup only applies to a create with parse"
+                "{label}: lookup only applies to a create with parse"
             ));
         }
         if lookup.run.is_empty() {
-            messages.push(format!("{name}: lookup.run is empty"));
+            messages.push(format!("{label}: lookup.run is empty"));
         }
         for pointer in [&lookup.items, &lookup.prefix, &lookup.id] {
             if !pointer.is_empty() && !pointer.starts_with('/') {
                 messages.push(format!(
-                    "{name}: lookup pointer {pointer:?} must start with /"
+                    "{label}: lookup pointer {pointer:?} must start with /"
                 ));
             }
         }
@@ -510,14 +588,14 @@ fn validate_verb(name: &str, verb: &Verb, provider: &Provider, messages: &mut Ve
     if let Some(version) = &verb.min_version {
         if parse_version(version).is_none() {
             messages.push(format!(
-                "{name}: min_version {version:?} must look like 11.6.3"
+                "{label}: min_version {version:?} must look like 11.6.3"
             ));
         }
     }
     if let Some(id) = &verb.id {
         if name != "create" || !id.starts_with("json:") || !valid_parse(id) {
             messages.push(format!(
-                "{name}: id {id:?} must be json:<pointer>, on create only"
+                "{label}: id {id:?} must be json:<pointer>, on create only"
             ));
         }
         if verb
@@ -525,25 +603,25 @@ fn validate_verb(name: &str, verb: &Verb, provider: &Provider, messages: &mut Ve
             .as_deref()
             .is_none_or(|p| !p.starts_with("json:"))
         {
-            messages.push(format!("{name}: id needs parse = \"json:<pointer>\""));
+            messages.push(format!("{label}: id needs parse = \"json:<pointer>\""));
         }
     }
     if let Some(parse) = &verb.parse {
         if !valid_parse(parse) {
             messages.push(format!(
-                "{name}: parse {parse:?} must be text, jwt or json:<pointer>"
+                "{label}: parse {parse:?} must be text, jwt or json:<pointer>"
             ));
         }
     }
     if let Some(expiry) = &verb.expiry {
         if expiry != "jwt" {
-            messages.push(format!("{name}: expiry {expiry:?} must be jwt"));
+            messages.push(format!("{label}: expiry {expiry:?} must be jwt"));
         }
     }
     if let Some(timeout) = &verb.timeout {
         if parse_duration(timeout).is_none() {
             messages.push(format!(
-                "{name}: timeout {timeout:?} is not a duration such as 10s"
+                "{label}: timeout {timeout:?} is not a duration such as 10s"
             ));
         }
     }
@@ -561,11 +639,11 @@ fn validate_verb(name: &str, verb: &Verb, provider: &Provider, messages: &mut Ve
                 for var in names {
                     if !provider.params.contains_key(&var) && !TEMPLATE_VARS.contains(&var.as_str())
                     {
-                        messages.push(format!("{name}: unknown placeholder {{{var}}}"));
+                        messages.push(format!("{label}: unknown placeholder {{{var}}}"));
                     }
                 }
             }
-            Err(e) => messages.push(format!("{name}: {e} in {text:?}")),
+            Err(e) => messages.push(format!("{label}: {e} in {text:?}")),
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::cli::{usage, Ctx, Io};
-use crate::config::{parse_duration, parse_version, Entry, Verb};
+use crate::config::{parse_duration, parse_version, Entry, Verb, VerbChain};
 use crate::exit::Exit;
 use crate::oauth;
 use crate::output::{choose, Shown};
@@ -103,8 +103,18 @@ pub struct Ran {
     pub stdout: String,
 }
 
-fn program(entry: &Entry, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<PathBuf, Exit> {
-    let command = entry.provider.requires.as_deref().unwrap_or_default();
+fn step_requires<'a>(verb: &'a Verb, entry: &'a Entry) -> Option<&'a str> {
+    verb.requires
+        .as_deref()
+        .or(entry.provider.requires.as_deref())
+}
+
+fn program_for(
+    entry: &Entry,
+    command: &str,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<PathBuf, Exit> {
     match which::find(command, ctx.env, ctx.exists) {
         Some(path) => Ok(path),
         None => {
@@ -141,9 +151,10 @@ pub fn run_verb_env(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Result<Ran, Exit> {
+    let command = step_requires(verb, entry).unwrap_or_default();
     let run: &[String] = verb.run.as_deref().unwrap_or(&[]);
-    let path = program(entry, ctx, io)?;
-    check_version(entry, verb, ctx, io)?;
+    let path = program_for(entry, command, ctx, io)?;
+    check_version_for(entry, command, verb, ctx, io)?;
     let args = render_args(run.get(1..).unwrap_or(&[]), vars);
     let linked = interactive && ctx.via_link;
     let interactive = interactive && !ctx.via_link;
@@ -198,11 +209,11 @@ pub fn run_verb_env(
 fn need<'a>(
     entry: &'a Entry,
     name: &str,
-    verb: &'a Option<Verb>,
+    chain: &'a Option<VerbChain>,
     io: &mut Io<'_>,
-) -> Result<&'a Verb, Exit> {
-    match verb {
-        Some(verb) => Ok(verb),
+) -> Result<&'a VerbChain, Exit> {
+    match chain {
+        Some(chain) => Ok(chain),
         None => {
             let _ = writeln!(io.err, "jerk: {} has no {name} command", entry.id);
             Err(Exit::Unsupported)
@@ -245,10 +256,146 @@ pub fn fetch_from(
             scope: None,
         });
     }
-    if let Some(oauth_config) = &entry.oauth_config {
-        return fetch_oauth(entry, oauth_config, vars, ctx, io);
+    let chain = entry.provider.get.as_ref();
+    let placed = chain.is_some_and(|c| c.iter().any(|v| v.oauth));
+    if let Some(config) = entry.oauth_config.as_ref().filter(|_| !placed) {
+        return fetch_oauth(entry, config, vars, ctx, io);
     }
-    let verb = entry.provider.get.as_ref().expect("validated");
+    let chain = chain.expect("validated");
+    run_chain(entry, "get", chain, Exit::SignIn, ctx, io, |verb, io| {
+        fetch_step(entry, verb, vars, ctx, io)
+    })
+}
+
+fn step_name(entry: &Entry, verb: &Verb) -> String {
+    if verb.oauth {
+        return "oauth".to_string();
+    }
+    step_requires(verb, entry).unwrap_or("read").to_string()
+}
+
+fn reason(entry: &Entry, verb: &Verb, err: &[u8]) -> String {
+    let text = String::from_utf8_lossy(err);
+    let line = text.lines().next().unwrap_or("printed nothing usable");
+    let line = line
+        .strip_prefix(&format!("jerk: {}: ", entry.id))
+        .unwrap_or(line);
+    if line.starts_with("sign in with") {
+        return "not signed in".to_string();
+    }
+    let name = step_name(entry, verb);
+    line.strip_prefix(&format!("{name} "))
+        .unwrap_or(line)
+        .to_string()
+}
+
+fn unavailable(entry: &Entry, verb: &Verb, ctx: &Ctx<'_>) -> Option<String> {
+    verb.run.as_ref()?;
+    let command = step_requires(verb, entry).unwrap_or_default();
+    if which::find(command, ctx.env, ctx.exists).is_none() {
+        return Some("not on PATH".to_string());
+    }
+    let mut err = Vec::new();
+    let mut quiet = Io {
+        out: &mut std::io::sink(),
+        err: &mut err,
+    };
+    check_version_for(entry, command, verb, ctx, &mut quiet)
+        .err()
+        .map(|_| reason(entry, verb, &err))
+}
+
+fn report(entry: &Entry, name: &str, tried: &[(String, String)], io: &mut Io<'_>) {
+    let _ = writeln!(io.err, "jerk: {}: no {name} step worked:", entry.id);
+    for (step, why) in tried {
+        let _ = writeln!(io.err, "  {step}: {why}");
+    }
+}
+
+fn run_chain<T>(
+    entry: &Entry,
+    name: &str,
+    chain: &VerbChain,
+    failed: Exit,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+    mut step: impl FnMut(&Verb, &mut Io<'_>) -> Result<T, Exit>,
+) -> Result<T, Exit> {
+    if let [only] = chain.0.as_slice() {
+        return step(only, io);
+    }
+    let mut tried = Vec::new();
+    let mut ran = false;
+    for verb in chain.iter() {
+        if let Some(why) = unavailable(entry, verb, ctx) {
+            tried.push((step_name(entry, verb), why));
+            continue;
+        }
+        ran = true;
+        let checked = Verb {
+            min_version: None,
+            ..verb.clone()
+        };
+        let mut err = Vec::new();
+        let result = step(
+            &checked,
+            &mut Io {
+                out: &mut *io.out,
+                err: &mut err,
+            },
+        );
+        match result {
+            Ok(value) => return Ok(value),
+            Err(_) => tried.push((step_name(entry, verb), reason(entry, verb, &err))),
+        }
+    }
+    report(entry, name, &tried, io);
+    if !ran {
+        return Err(Exit::Unavailable);
+    }
+    if failed == Exit::SignIn {
+        sign_in_hint(entry, io);
+    }
+    Err(failed)
+}
+
+pub fn pick(
+    entry: &Entry,
+    name: &str,
+    chain: &VerbChain,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<Verb, Exit> {
+    if let [only] = chain.0.as_slice() {
+        return Ok(only.clone());
+    }
+    let mut tried = Vec::new();
+    for verb in chain.iter() {
+        match unavailable(entry, verb, ctx) {
+            None => {
+                return Ok(Verb {
+                    min_version: None,
+                    ..verb.clone()
+                })
+            }
+            Some(why) => tried.push((step_name(entry, verb), why)),
+        }
+    }
+    report(entry, name, &tried, io);
+    Err(Exit::Unavailable)
+}
+
+fn fetch_step(
+    entry: &Entry,
+    verb: &Verb,
+    vars: &Vars,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<Token, Exit> {
+    if verb.oauth {
+        let config = entry.oauth_config.as_ref().expect("validated");
+        return fetch_oauth(entry, config, vars, ctx, io);
+    }
     if let Some(read) = &verb.read {
         return read_token(entry, read, vars, ctx, io);
     }
@@ -265,7 +412,7 @@ pub fn fetch_from(
             io.err,
             "jerk: {}: {} printed no token",
             entry.id,
-            entry.provider.requires.as_deref().unwrap_or_default()
+            step_requires(verb, entry).unwrap_or_default()
         );
         sign_in_hint(entry, io);
         return Err(Exit::SignIn);
@@ -402,26 +549,19 @@ pub fn whoami(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Option<String> {
-    let verb = entry.provider.user.as_ref()?;
-    let ran = run_verb_env(
-        entry,
-        "user",
-        verb,
-        vars,
-        false,
-        token.source != "env",
-        ctx,
-        io,
-    )
-    .ok()?;
-    let parse = verb.parse.as_deref().unwrap_or("text");
-    let value = match parse.strip_prefix("json:") {
-        Some(_) => extract::json(&ran.stdout, &crate::template::render_text(parse, vars))?
-            .as_str()?
-            .to_string(),
-        None => ran.stdout.trim().to_string(),
-    };
-    (!value.is_empty()).then_some(value)
+    let chain = entry.provider.user.as_ref()?;
+    let scrub = token.source != "env";
+    run_chain(entry, "user", chain, Exit::Error, ctx, io, |verb, io| {
+        let ran = run_verb_env(entry, "user", verb, vars, false, scrub, ctx, io)?;
+        let parse = verb.parse.as_deref().unwrap_or("text");
+        let value = match parse.strip_prefix("json:") {
+            Some(_) => extract::json(&ran.stdout, &crate::template::render_text(parse, vars))
+                .and_then(|v| v.as_str().map(String::from)),
+            None => Some(ran.stdout.trim().to_string()),
+        };
+        value.filter(|v| !v.is_empty()).ok_or(Exit::Error)
+    })
+    .ok()
 }
 
 pub fn details(
@@ -469,18 +609,22 @@ pub fn granted(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Option<String> {
-    let verb = entry.provider.scopes.as_ref()?;
+    let chain = entry.provider.scopes.as_ref()?;
     let scrub = token.source != "env";
-    let ran = run_verb_env(entry, "scopes", verb, vars, false, scrub, ctx, io).ok()?;
-    match verb.parse.as_deref() {
-        Some(parse) if parse.starts_with("json:") => {
-            let pointer = crate::template::render_text(parse, vars);
-            extract::json(&ran.stdout, &pointer)
-                .as_ref()
-                .and_then(extract::scopes)
-        }
-        _ => Some(ran.stdout.trim().to_string()).filter(|s| !s.is_empty()),
-    }
+    run_chain(entry, "scopes", chain, Exit::Error, ctx, io, |verb, io| {
+        let ran = run_verb_env(entry, "scopes", verb, vars, false, scrub, ctx, io)?;
+        let scopes = match verb.parse.as_deref() {
+            Some(parse) if parse.starts_with("json:") => {
+                let pointer = crate::template::render_text(parse, vars);
+                extract::json(&ran.stdout, &pointer)
+                    .as_ref()
+                    .and_then(extract::scopes)
+            }
+            _ => Some(ran.stdout.trim().to_string()).filter(|s| !s.is_empty()),
+        };
+        scopes.ok_or(Exit::Error)
+    })
+    .ok()
 }
 
 pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
@@ -581,21 +725,39 @@ pub fn list(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
         Ok(vars) => vars,
         Err(e) => return usage(&e, io),
     };
-    let verb = match need(entry, "list", &entry.provider.list, io) {
-        Ok(verb) => verb,
+    let chain = match need(entry, "list", &entry.provider.list, io) {
+        Ok(chain) => chain,
         Err(code) => return code,
     };
-    let ran = match run_verb(entry, "list", verb, &vars, false, ctx, io) {
-        Ok(ran) => ran,
-        Err(code) => return code,
-    };
+    let as_json = flags.has("--json");
+    let listed = run_chain(entry, "list", chain, Exit::Error, ctx, io, |verb, io| {
+        list_step(entry, verb, &vars, as_json, ctx, io)
+    });
+    match listed {
+        Ok(text) => {
+            let _ = writeln!(io.out, "{text}");
+            Exit::Ok
+        }
+        Err(code) => code,
+    }
+}
+
+fn list_step(
+    entry: &Entry,
+    verb: &Verb,
+    vars: &Vars,
+    as_json: bool,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<String, Exit> {
+    let ran = run_verb(entry, "list", verb, vars, false, ctx, io)?;
     let value = match verb.parse.as_deref() {
         Some(parse) if parse.starts_with("json:") => {
-            match extract::json(&ran.stdout, &crate::template::render_text(parse, &vars)) {
+            match extract::json(&ran.stdout, &crate::template::render_text(parse, vars)) {
                 Some(value) => extract::redact(&value),
                 None => {
                     let _ = writeln!(io.err, "jerk: {}: list printed no usable JSON", entry.id);
-                    return Exit::Error;
+                    return Err(Exit::Error);
                 }
             }
         }
@@ -605,36 +767,37 @@ pub fn list(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
             .filter(|l| !l.trim().is_empty())
             .collect::<Vec<_>>()),
     };
-    let text = if flags.has("--json") {
+    if as_json {
         let items = match value {
             serde_json::Value::Array(items) => items,
             other => vec![other],
         };
-        json!({ "items": items }).to_string()
-    } else {
-        serde_json::to_string_pretty(&value).unwrap_or_default()
-    };
-    let _ = writeln!(io.out, "{text}");
-    Exit::Ok
+        return Ok(json!({ "items": items }).to_string());
+    }
+    Ok(serde_json::to_string_pretty(&value).unwrap_or_default())
 }
 
 fn do_create(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit {
+    let flags = Flags::default();
     if entry.oauth_config.is_some() && entry.provider.create.is_none() {
-        let flags = Flags::default();
         return oauth_create_cmd(entry, vars, &flags, ctx, io);
     }
-    create_run(entry, vars, ctx, io)
-}
-
-fn create_run(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit {
-    let verb = match need(entry, "create", &entry.provider.create, io) {
+    let verb = match create_step(entry, ctx, io) {
         Ok(verb) => verb,
         Err(code) => return code,
     };
-    match run_verb(entry, "create", verb, vars, verb.interactive, ctx, io) {
+    if verb.oauth {
+        return oauth_create_cmd(entry, vars, &flags, ctx, io);
+    }
+    match run_verb(entry, "create", &verb, vars, verb.interactive, ctx, io) {
         Ok(_) => Exit::Ok,
         Err(code) => code,
     }
+}
+
+fn create_step(entry: &Entry, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<Verb, Exit> {
+    let chain = need(entry, "create", &entry.provider.create, io)?;
+    pick(entry, "create", chain, ctx, io)
 }
 
 pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
@@ -654,7 +817,17 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
     if entry.provider.create.is_none() && entry.oauth_config.is_some() {
         return oauth_create_cmd(entry, &vars, &flags, ctx, io);
     }
-    if let Some(verb) = entry.provider.create.as_ref().filter(|v| v.parse.is_some()) {
+    let step = match &entry.provider.create {
+        Some(chain) => match pick(entry, "create", chain, ctx, io) {
+            Ok(verb) => Some(verb),
+            Err(code) => return code,
+        },
+        None => None,
+    };
+    if step.as_ref().is_some_and(|v| v.oauth) {
+        return oauth_create_cmd(entry, &vars, &flags, ctx, io);
+    }
+    if let Some(verb) = step.as_ref().filter(|v| v.parse.is_some()) {
         return mint(entry, verb, &vars, &flags, ctx, io);
     }
     if !flags.has("--force") && entry.provider.get.is_some() {
@@ -680,11 +853,17 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
             }
         }
     }
-    let code = create_run(entry, &vars, ctx, io);
-    if code == Exit::Ok {
-        let _ = writeln!(io.out, "{}: signed in", entry.id);
+    let Some(verb) = step else {
+        let _ = writeln!(io.err, "jerk: {} has no create command", entry.id);
+        return Exit::Unsupported;
+    };
+    match run_verb(entry, "create", &verb, &vars, verb.interactive, ctx, io) {
+        Ok(_) => {
+            let _ = writeln!(io.out, "{}: signed in", entry.id);
+            Exit::Ok
+        }
+        Err(code) => code,
     }
-    code
 }
 
 fn oauth_create_cmd(
@@ -827,15 +1006,19 @@ fn oauth_create_cmd(
     Exit::Ok
 }
 
-fn check_version(entry: &Entry, verb: &Verb, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<(), Exit> {
+fn check_version_for(
+    entry: &Entry,
+    command: &str,
+    verb: &Verb,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<(), Exit> {
     let Some(min) = verb.min_version.as_deref().and_then(parse_version) else {
         return Ok(());
     };
     let probe = Verb {
-        run: Some(vec![
-            entry.provider.requires.clone().unwrap_or_default(),
-            "--version".to_string(),
-        ]),
+        run: Some(vec![command.to_string(), "--version".to_string()]),
+        requires: Some(command.to_string()),
         ..Verb::default()
     };
     let ran = run_verb(entry, "version", &probe, &Vars::new(), false, ctx, io)?;
@@ -848,9 +1031,8 @@ fn check_version(entry: &Entry, verb: &Verb, ctx: &Ctx<'_>, io: &mut Io<'_>) -> 
             let (a, b, c) = min;
             let _ = writeln!(
                 io.err,
-                "jerk: {}: {} {shown} is too old; this needs {a}.{b}.{c} or newer",
-                entry.id,
-                entry.provider.requires.as_deref().unwrap_or_default()
+                "jerk: {}: {command} {shown} is too old; this needs {a}.{b}.{c} or newer",
+                entry.id
             );
             Err(Exit::Unavailable)
         }
@@ -961,10 +1143,17 @@ pub fn drop(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
     if entry.oauth_config.is_some() && entry.provider.drop.is_none() {
         return oauth_drop_cmd(entry, &vars, &flags, ctx, io);
     }
-    let verb = match need(entry, "drop", &entry.provider.drop, io) {
+    let chain = match need(entry, "drop", &entry.provider.drop, io) {
+        Ok(chain) => chain,
+        Err(code) => return code,
+    };
+    let verb = match pick(entry, "drop", chain, ctx, io) {
         Ok(verb) => verb,
         Err(code) => return code,
     };
+    if verb.oauth {
+        return oauth_drop_cmd(entry, &vars, &flags, ctx, io);
+    }
     if !flags.has("--yes") {
         if !ctx.stdin_terminal {
             return usage(
@@ -986,7 +1175,7 @@ pub fn drop(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
             return Exit::Error;
         }
     }
-    match run_verb(entry, "drop", verb, &vars, verb.interactive, ctx, io) {
+    match run_verb(entry, "drop", &verb, &vars, verb.interactive, ctx, io) {
         Ok(_) => {
             if let Some(id) = flags.positionals.first() {
                 let _ = state::forget(ctx.env, &entry.id, id);
