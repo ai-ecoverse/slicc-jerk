@@ -138,6 +138,18 @@ redirect_uri = "http://127.0.0.1:56121/callback"
 scope = "openid profile email offline_access grok-cli:access api:access"
 capture = { at = "request", from = "query", param = "code" }
 rewrite = [{ match = "auth.x.ai", append = { plan = "generic" } }]
+
+[providers.printful]
+name = "Printful"
+env = ["PRINTFUL_API_TOKEN"]
+domains = ["api.printful.com"]
+requires = "printful"
+params = { name = "jerk", days = "90", token = "" }
+get = { run = ["printful", "auth", "token"], parse = "text" }
+list = { run = ["printful", "auth", "status", "--json"], parse = "json:" }
+user = { run = ["printful", "whoami", "--json"], parse = "json:/stores/0/name" }
+create = { run = ["printful", "auth", "login", "--token", "{token}", "--name", "{name}", "--days", "{days}"], interactive = true }
+drop = { run = ["printful", "auth", "logout"], interactive = true }
 "#;
 
 #[cfg(target_os = "wasi")]
