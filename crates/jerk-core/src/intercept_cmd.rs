@@ -60,6 +60,7 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
             authorize_url: authorize_url.to_string(),
             token_url,
             client_id,
+            client_secret: None,
             redirect_uri: redirect_uri.to_string(),
             scope: None,
             capture: Capture {

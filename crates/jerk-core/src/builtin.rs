@@ -170,6 +170,22 @@ redirect_uri = "http://127.0.0.1:56122/.aem/cli/login/ack"
 capture = { at = "callback", from = "body", param = "authToken" }
 timeout = "5m"
 
+[providers.linkedin]
+name = "LinkedIn"
+env = ["LINKEDIN_ACCESS_TOKEN"]
+domains = ["api.linkedin.com", "www.linkedin.com"]
+params = { client_id = "", client_secret = "", scope = "openid profile w_member_social" }
+[providers.linkedin.oauth]
+mode = "intercept"
+flow = "code"
+authorize_url = "https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&state={state}"
+token_url = "https://www.linkedin.com/oauth/v2/accessToken"
+client_id = "{client_id}"
+client_secret = "{client_secret}"
+redirect_uri = "http://localhost/callback"
+scope = "openid profile w_member_social"
+capture = { at = "request", from = "query", param = "code" }
+
 [providers.xai]
 name = "xAI Grok"
 env = ["XAI_API_KEY"]

@@ -378,16 +378,28 @@ pub fn complete_sign_in(
     }
 
     match pending.flow {
-        Flow::Pkce => {
-            let token_url = cfg
-                .token_url
-                .as_deref()
-                .ok_or_else(|| make_error("config_invalid", "token_url required for pkce"))?;
-            let body_pairs = exchange::build_authorization_code_body(
+        Flow::Pkce | Flow::Code => {
+            let token_url = cfg.token_url.as_deref().ok_or_else(|| {
+                make_error(
+                    "config_invalid",
+                    match pending.flow {
+                        Flow::Pkce => "token_url required for pkce",
+                        Flow::Code => "token_url required for code",
+                        Flow::Implicit => "token_url required",
+                    },
+                )
+            })?;
+            let verifier = match pending.flow {
+                Flow::Pkce => Some(pending.verifier.as_str()),
+                Flow::Code => None,
+                Flow::Implicit => None,
+            };
+            let body_pairs = exchange::build_code_exchange_body(
                 &result.value,
                 &cfg.client_id,
                 &cfg.redirect_uri,
-                &pending.verifier,
+                verifier,
+                cfg.client_secret.as_deref(),
             );
             let body = exchange::encode_form_body(&body_pairs);
 
@@ -500,11 +512,18 @@ pub fn refresh_request(config_json: &str, refresh_token: &str) -> Result<JsValue
         .as_deref()
         .ok_or_else(|| make_error("config_invalid", "token_url required for refresh"))?;
 
-    let body_pairs = exchange::build_refresh_body(refresh_token, &cfg.client_id);
-    let body = exchange::encode_form_body(&body_pairs);
+    let (url, body) = exchange::refresh_request(&exchange::RefreshParams {
+        token_url,
+        client_id: &cfg.client_id,
+        refresh_token,
+        scope: None,
+        resource: None,
+        client_secret: cfg.client_secret.as_deref(),
+    })
+    .map_err(|e| make_error("invalid_params", &e))?;
 
     let obj = js_sys::Object::new();
-    js_sys::Reflect::set(&obj, &"url".into(), &token_url.into()).ok();
+    js_sys::Reflect::set(&obj, &"url".into(), &url.into()).ok();
     js_sys::Reflect::set(&obj, &"body".into(), &body.into()).ok();
     Ok(obj.into())
 }

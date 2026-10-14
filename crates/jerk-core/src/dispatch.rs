@@ -512,10 +512,45 @@ fn read_token(
     }
 }
 
+fn oauth_param_placeholder(value: &str, name: &str) -> bool {
+    value.is_empty() || value == format!("{{{name}}}")
+}
+
+fn resolve_oauth_config(
+    config: &jerk_oauth::config::OAuthConfig,
+    vars: &Vars,
+) -> Result<jerk_oauth::config::OAuthConfig, String> {
+    let mut resolved = config.clone();
+    if oauth_param_placeholder(&resolved.client_id, "client_id") {
+        let value = vars
+            .get("client_id")
+            .map(String::as_str)
+            .filter(|s| !s.is_empty() && !oauth_param_placeholder(s, "client_id"))
+            .ok_or_else(|| "pass -p client_id=… (required for this provider)".to_string())?;
+        resolved.client_id = value.to_string();
+    }
+    if resolved
+        .client_secret
+        .as_deref()
+        .is_some_and(|s| oauth_param_placeholder(s, "client_secret"))
+    {
+        let value = vars
+            .get("client_secret")
+            .map(String::as_str)
+            .filter(|s| !s.is_empty() && !oauth_param_placeholder(s, "client_secret"))
+            .ok_or_else(|| "pass -p client_secret=… (required for this provider)".to_string())?;
+        resolved.client_secret = Some(value.to_string());
+    }
+    if let Some(scope) = vars.get("scope").filter(|s| !s.is_empty()) {
+        resolved.scope = Some(scope.clone());
+    }
+    Ok(resolved)
+}
+
 fn fetch_oauth(
     entry: &Entry,
     config: &jerk_oauth::config::OAuthConfig,
-    _vars: &Vars,
+    vars: &Vars,
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Result<Token, Exit> {
@@ -553,7 +588,14 @@ fn fetch_oauth(
         sign_in_hint(entry, io);
         return Err(Exit::SignIn);
     }
-    match oauth::oauth_refresh(config, &grant.refresh_token, host, ctx.now) {
+    let config = match resolve_oauth_config(config, vars) {
+        Ok(c) => c,
+        Err(msg) => {
+            let _ = writeln!(io.err, "jerk: {}: {msg}", entry.id);
+            return Err(Exit::Usage);
+        }
+    };
+    match oauth::oauth_refresh(&config, &grant.refresh_token, host, ctx.now) {
         Ok(token) => {
             if let Some(new_rt) = &token.refresh_token {
                 let updated = crate::grants::Grant {
@@ -927,10 +969,18 @@ fn oauth_create_cmd(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Exit {
-    let config = entry.oauth_config.as_ref().unwrap();
+    let base = entry.oauth_config.as_ref().unwrap();
+    let config = match resolve_oauth_config(base, vars) {
+        Ok(c) => c,
+        Err(msg) => {
+            let _ = writeln!(io.err, "jerk: {}: {msg}", entry.id);
+            return Exit::Usage;
+        }
+    };
     let scope = flags
         .value("--scope")
-        .or(vars.get("scope").map(String::as_str));
+        .or(vars.get("scope").map(String::as_str))
+        .or(config.scope.as_deref());
     let user = vars.get("user").map(String::as_str).unwrap_or("default");
     let host = ctx.oauth;
 
@@ -941,7 +991,7 @@ fn oauth_create_cmd(
                 out: &mut std::io::sink(),
                 err: &mut std::io::sink(),
             };
-            if let Ok(tok) = fetch_oauth(entry, config, vars, ctx, &mut quiet) {
+            if let Ok(tok) = fetch_oauth(entry, base, vars, ctx, &mut quiet) {
                 let covered = match scope {
                     Some(requested) => {
                         let have = tok.scope.or(g.scope);
@@ -1014,7 +1064,7 @@ fn oauth_create_cmd(
 
     let extra: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let token = match oauth::oauth_create_with_vars(
-        config,
+        &config,
         scope,
         host,
         ctx.now,

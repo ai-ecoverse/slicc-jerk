@@ -15,6 +15,7 @@ pub enum Mode {
 #[serde(rename_all = "snake_case")]
 pub enum Flow {
     Pkce,
+    Code,
     Implicit,
 }
 
@@ -92,6 +93,8 @@ pub struct OAuthConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_url: Option<String>,
     pub client_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
     pub redirect_uri: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
@@ -243,10 +246,14 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
         });
     }
 
-    if config.flow == Flow::Pkce && config.token_url.is_none() {
+    if matches!(config.flow, Flow::Pkce | Flow::Code) && config.token_url.is_none() {
         errors.push(ValidationError {
             field: "token_url".into(),
-            message: "required for pkce flow".into(),
+            message: match config.flow {
+                Flow::Pkce => "required for pkce flow".into(),
+                Flow::Code => "required for code flow".into(),
+                Flow::Implicit => unreachable!(),
+            },
         });
     }
 

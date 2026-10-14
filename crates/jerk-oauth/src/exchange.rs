@@ -69,13 +69,29 @@ pub fn build_authorization_code_body(
     redirect_uri: &str,
     verifier: &str,
 ) -> Vec<(String, String)> {
-    vec![
+    build_code_exchange_body(code, client_id, redirect_uri, Some(verifier), None)
+}
+
+pub fn build_code_exchange_body(
+    code: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    verifier: Option<&str>,
+    client_secret: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut pairs = vec![
         ("grant_type".into(), "authorization_code".into()),
         ("code".into(), code.into()),
         ("client_id".into(), client_id.into()),
         ("redirect_uri".into(), redirect_uri.into()),
-        ("code_verifier".into(), verifier.into()),
-    ]
+    ];
+    if let Some(v) = verifier.filter(|s| !s.is_empty()) {
+        pairs.push(("code_verifier".into(), v.into()));
+    }
+    if let Some(s) = client_secret.filter(|s| !s.is_empty()) {
+        pairs.push(("client_secret".into(), s.into()));
+    }
+    pairs
 }
 
 pub fn build_refresh_body(refresh_token: &str, client_id: &str) -> Vec<(String, String)> {
