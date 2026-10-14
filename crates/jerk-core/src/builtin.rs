@@ -46,6 +46,20 @@ get = { run = ["aio", "login", "--bare", "--no-open", "--ctx", "{ctx}"], parse =
 create = { run = ["aio", "login", "--force", "--ctx", "{ctx}"], interactive = true, link = true }
 drop = { run = ["aio", "logout", "--ctx", "{ctx}"], interactive = true }
 
+[providers.aem]
+name = "AEM Admin (api.aem.live)"
+env = ["AEM_TOKEN"]
+domains = ["api.aem.live"]
+params = { org = "", site = "", login_host = "admin.hlx.page" }
+[providers.aem.oauth]
+mode = "loopback"
+flow = "implicit"
+authorize_url = "https://{login_host}/login/{org}/{site}/main?client_id={client_id}&redirect_uri={redirect_uri}&state={state}&selectAccount=true"
+client_id = "aem-cli"
+redirect_uri = "http://localhost:56122/.aem/cli/login/ack"
+capture = { at = "callback", from = "body", param = "authToken" }
+timeout = "5m"
+
 [providers.xai]
 name = "xAI Grok"
 env = ["XAI_API_KEY"]

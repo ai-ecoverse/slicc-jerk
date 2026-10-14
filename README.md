@@ -39,7 +39,7 @@ A provider is a TOML table. Layers are read from lowest to highest priority, and
 
 | layer | macOS and Linux | Windows |
 | --- | --- | --- |
-| built-in | `github` (gh), `npm`, `cloudflare` (wrangler), `adobe-aio` (aio) | same |
+| built-in | `github` (gh), `npm`, `cloudflare` (wrangler), `adobe-aio` (aio), `aem` | same |
 | system | `/etc/slicc-jerk/providers.d/*.toml`, in file-name order (`SLICC_JERK_SYSTEM_DIR` overrides) | `%ProgramData%\slicc-jerk\providers.d\*.toml` |
 | user | `$XDG_CONFIG_HOME/slicc-jerk/providers.toml`, default `~/.config/slicc-jerk/providers.toml` | `%APPDATA%\slicc-jerk\providers.toml` |
 | explicit | `--config <file>` or `SLICC_JERK_CONFIG` | same |
@@ -58,7 +58,6 @@ drop = { run = ["gh", "auth", "logout", "--hostname", "{host}", "--user", "{id}"
 
 Commands are argument lists, never shell strings. `{name}` placeholders come from `params` or from `scope`, `id`, `name`, `expires` and `user`. `jerk config check` validates every layer, `jerk config show <provider>` prints the provider that wins, and `jerk config path` shows where each layer lives.
 
-<<<<<<< HEAD
 ## OAuth providers
 
 A provider can use an `[oauth]` block instead of CLI commands. jerk handles the OAuth flow itself: PKCE loopback, device code, or auto (loopback when the port binds, otherwise exit 4).
@@ -83,6 +82,8 @@ param = "code"
 ```
 
 `jerk xai create` opens the sign-in in the system browser. The refresh token goes to the OS keyring (service `slicc-jerk`, account `xai/default`), or to a file store (mode 0600) with `store = "file"`. `jerk xai get` refreshes the token at `token_url` and prints the access token by the same rules as CLI providers. `jerk xai drop --yes` removes the grant.
+
+`jerk aem create -p org=… -p site=…` uses the aem-cli loopback login (`client_id=aem-cli`, redirect `/.aem/cli/login/ack`). After you click Send, jerk stores the admin JWT (`authToken`) for `api.aem.live` as `AEM_TOKEN` (`X-Auth-Token` / `Authorization: token …`). The login host defaults to `admin.hlx.page` (Helix 6 sites still use that login endpoint today); override with `-p login_host=…` when `api.aem.live` returns `authToken` itself.
 
 The `device` mode sends the first request to `authorize_url` as the device authorization endpoint, prints the verification URI and user code on stderr, then polls `token_url`. `intercept` and `popup` modes exit 5 until they land.
 

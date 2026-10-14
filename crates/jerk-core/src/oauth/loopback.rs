@@ -1,5 +1,6 @@
 use crate::browser::Browser;
 use crate::exit::Exit;
+use crate::extract;
 use crate::oauth::{OAuthError, Token};
 use jerk_oauth::capture;
 use jerk_oauth::config::{CaptureFrom, Flow, OAuthConfig};
@@ -24,6 +25,20 @@ if (location.hash) {
 </body></html>
 "#;
 
+const ACK_HTML: &str = r#"<!DOCTYPE html>
+<html><head><title>Signed in</title></head><body>
+<p>Signed in, you can close this tab.</p>
+<script>window.close()</script>
+</body></html>
+"#;
+
+const CORS_ORIGINS: &[&str] = &[
+    "https://admin.hlx.page",
+    "https://admin-ci.hlx.page",
+    "https://api.aem.live",
+];
+
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     config: &OAuthConfig,
     scope: Option<&str>,
@@ -32,6 +47,7 @@ pub fn run(
     random_32: &[u8; 32],
     random_16: &[u8; 16],
     http_post: &dyn Fn(&str, &str) -> Result<String, String>,
+    extra_vars: &[(&str, &str)],
 ) -> Result<Token, OAuthError> {
     let redirect_uri = &config.redirect_uri;
     let parsed = url::Url::parse(redirect_uri).map_err(|e| OAuthError {
@@ -43,6 +59,7 @@ pub fn run(
         message: "redirect_uri must include a port".into(),
     })?;
     let host = parsed.host_str().unwrap_or("127.0.0.1");
+    let redirect_path = parsed.path().to_string();
 
     let bind_addr = match host {
         "127.0.0.1" | "localhost" => format!("127.0.0.1:{port}"),
@@ -90,6 +107,24 @@ pub fn run(
 
     let actual_scope = scope.or(config.scope.as_deref()).unwrap_or("");
 
+    for name in ["org", "site", "login_host"] {
+        let needle = format!("{{{name}}}");
+        if !config.authorize_url.contains(&needle) {
+            continue;
+        }
+        let value = extra_vars
+            .iter()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| *v)
+            .unwrap_or("");
+        if value.is_empty() {
+            return Err(OAuthError {
+                exit: Exit::Usage,
+                message: format!("pass -p {name}=… (required for this provider's login URL)"),
+            });
+        }
+    }
+
     let mut vars: Vec<(&str, &str)> = vec![
         ("client_id", &config.client_id),
         ("redirect_uri", redirect_uri),
@@ -97,10 +132,19 @@ pub fn run(
         ("state", &state),
         ("nonce", &nonce),
     ];
+    vars.extend_from_slice(extra_vars);
     if let Some(c) = &challenge {
         vars.push(("code_challenge", c));
     }
     let authorize_url = template::render(&config.authorize_url, &vars);
+    if authorize_url.contains('{') {
+        return Err(OAuthError {
+            exit: Exit::Usage,
+            message: format!(
+                "authorize_url still has placeholders after substitution: {authorize_url}"
+            ),
+        });
+    }
 
     browser.open_url(&authorize_url).map_err(|e| OAuthError {
         exit: Exit::Unavailable,
@@ -110,20 +154,36 @@ pub fn run(
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
 
     let bound_port = listener.local_addr().map(|a| a.port()).unwrap_or(port);
-    let captured = wait_for_callback(&listener, &config.capture.from, deadline, bound_port, host)?;
-
-    let result = capture::parse_redirect(
-        &captured,
+    let captured = wait_for_callback(
+        &listener,
         &config.capture.from,
-        &config.capture.param,
-        Some(&state),
-        Some(redirect_uri),
-        actual_port,
-    )
-    .map_err(|e| OAuthError {
-        exit: Exit::Error,
-        message: e.to_string(),
-    })?;
+        &redirect_path,
+        deadline,
+        bound_port,
+        host,
+    )?;
+
+    let result = if config.capture.from == CaptureFrom::Body {
+        capture::parse_json_body(&captured, &config.capture.param, Some(&state)).map_err(|e| {
+            OAuthError {
+                exit: Exit::Error,
+                message: e.to_string(),
+            }
+        })?
+    } else {
+        capture::parse_redirect(
+            &captured,
+            &config.capture.from,
+            &config.capture.param,
+            Some(&state),
+            Some(redirect_uri),
+            actual_port,
+        )
+        .map_err(|e| OAuthError {
+            exit: Exit::Error,
+            message: e.to_string(),
+        })?
+    };
 
     if config.relay.is_some() {
         if let Some(received_nonce) = result.params.get("nonce") {
@@ -169,7 +229,8 @@ pub fn run(
             .params
             .get(config.expires_param.as_deref().unwrap_or("expires_in"))
             .and_then(|v| v.parse::<u64>().ok());
-        let expires_at = expiry::compute_expiry(now_secs, expires_in, None);
+        let expires_at = expiry::compute_expiry(now_secs, expires_in, None)
+            .or_else(|| extract::jwt_expiry(&result.value));
         Ok(Token {
             access_token: result.value,
             refresh_token: None,
@@ -185,10 +246,15 @@ const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 fn wait_for_callback(
     listener: &TcpListener,
     capture_from: &CaptureFrom,
+    redirect_path: &str,
     deadline: std::time::Instant,
     port: u16,
     host: &str,
 ) -> Result<String, OAuthError> {
+    if *capture_from == CaptureFrom::Body {
+        return wait_for_json_body(listener, redirect_path, deadline);
+    }
+
     loop {
         if std::time::Instant::now() >= deadline {
             return Err(OAuthError {
@@ -231,6 +297,144 @@ fn wait_for_callback(
 
         return Ok(full_url);
     }
+}
+
+fn request_path(target: &str) -> &str {
+    let without_query = target.split('?').next().unwrap_or(target);
+    if let Some(rest) = without_query.strip_prefix("http://") {
+        return rest.find('/').map(|i| &rest[i..]).unwrap_or("/");
+    }
+    if let Some(rest) = without_query.strip_prefix("https://") {
+        return rest.find('/').map(|i| &rest[i..]).unwrap_or("/");
+    }
+    without_query
+}
+
+fn wait_for_json_body(
+    listener: &TcpListener,
+    redirect_path: &str,
+    deadline: std::time::Instant,
+) -> Result<String, OAuthError> {
+    let mut captured: Option<String> = None;
+    loop {
+        if std::time::Instant::now() >= deadline {
+            if let Some(body) = captured {
+                return Ok(body);
+            }
+            return Err(OAuthError {
+                exit: Exit::Error,
+                message: "timed out waiting for callback".into(),
+            });
+        }
+
+        let stream = match listener.accept() {
+            Ok((s, _)) => s,
+            Err(_) => {
+                std::thread::sleep(POLL_INTERVAL);
+                continue;
+            }
+        };
+
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        let mut reader = BufReader::new(&stream);
+        let mut request_line = String::new();
+        let _ = reader.read_line(&mut request_line);
+
+        let parts: Vec<&str> = request_line.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let method = parts[0];
+        let path = request_path(parts[1]);
+        let path_ok = path == redirect_path;
+
+        let mut line = String::new();
+        let mut content_length: usize = 0;
+        let mut origin = String::new();
+        let mut private_network = false;
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                break;
+            }
+            let lower = line.to_ascii_lowercase();
+            if let Some(val) = lower.strip_prefix("content-length:") {
+                content_length = val.trim().parse().unwrap_or(0);
+            }
+            if let Some(val) = lower.strip_prefix("origin:") {
+                origin = val.trim().to_string();
+            }
+            if lower.starts_with("access-control-request-private-network:")
+                && lower.contains("true")
+            {
+                private_network = true;
+            }
+        }
+
+        let cors = cors_headers(&origin, private_network);
+
+        if method == "OPTIONS" && path_ok {
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n{cors}Access-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nCache-Control: no-store, private, must-revalidate\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let _ = (&stream).write_all(response.as_bytes());
+            continue;
+        }
+
+        if method == "POST" && path_ok {
+            let body = match read_body(&mut reader, content_length) {
+                Some(b) if !b.is_empty() => b,
+                _ => {
+                    let msg = "Missing body";
+                    let response = format!(
+                        "HTTP/1.1 400 Bad Request\r\n{cors}Content-Type: text/plain\r\nCache-Control: no-store, private, must-revalidate\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{msg}",
+                        msg.len()
+                    );
+                    let _ = (&stream).write_all(response.as_bytes());
+                    continue;
+                }
+            };
+            let msg = "Login successful.";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n{cors}Content-Type: text/plain\r\nCache-Control: no-store, private, must-revalidate\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{msg}",
+                msg.len()
+            );
+            let _ = (&stream).write_all(response.as_bytes());
+            captured = Some(body);
+            continue;
+        }
+
+        if method == "GET" && path_ok {
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n{cors}Content-Type: text/html\r\nCache-Control: no-store, private, must-revalidate\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                ACK_HTML.len(),
+                ACK_HTML
+            );
+            let _ = (&stream).write_all(response.as_bytes());
+            if let Some(body) = captured {
+                return Ok(body);
+            }
+            continue;
+        }
+
+        let msg = "Not Found";
+        let response = format!(
+            "HTTP/1.1 404 Not Found\r\n{cors}Content-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{msg}",
+            msg.len()
+        );
+        let _ = (&stream).write_all(response.as_bytes());
+    }
+}
+
+fn cors_headers(origin: &str, private_network: bool) -> String {
+    let mut out = String::new();
+    if CORS_ORIGINS.contains(&origin) {
+        out.push_str(&format!("Access-Control-Allow-Origin: {origin}\r\n"));
+    }
+    if private_network {
+        out.push_str("Access-Control-Allow-Private-Network: true\r\n");
+    }
+    out
 }
 
 fn wait_for_fragment(
@@ -300,7 +504,7 @@ fn read_content_length(reader: &mut BufReader<&std::net::TcpStream>) -> usize {
 }
 
 fn read_body(reader: &mut BufReader<&std::net::TcpStream>, length: usize) -> Option<String> {
-    let mut body = vec![0u8; length.min(8192)];
+    let mut body = vec![0u8; length.min(65536)];
     reader.read_exact(&mut body).ok()?;
     Some(String::from_utf8_lossy(&body).to_string())
 }
