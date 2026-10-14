@@ -107,11 +107,27 @@ fn status(entry: &Entry, message: String, extra: &[(&str, Value)]) -> Value {
     doc
 }
 
-fn refuse(entry: &Entry, verb: &str, args: &[String], io: &mut Io<'_>) -> Option<Exit> {
-    let create = entry.provider.create.as_ref();
-    let minting = create.is_some_and(|c| c.parse.is_some());
-    let terminal_only = match create {
-        Some(c) => !c.link,
+fn refuse(
+    entry: &Entry,
+    verb: &str,
+    args: &[String],
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Option<Exit> {
+    let step = match (&entry.provider.create, verb) {
+        (Some(chain), "create") => {
+            let mut quiet = Io {
+                out: &mut std::io::sink(),
+                err: &mut std::io::sink(),
+            };
+            Some(crate::dispatch::pick(entry, "create", chain, ctx, &mut quiet).ok())
+        }
+        _ => None,
+    };
+    let minting = matches!(&step, Some(Some(v)) if v.parse.is_some());
+    let terminal_only = match &step {
+        Some(Some(v)) => !v.oauth && !v.link,
+        Some(None) => false,
         None => entry.oauth_config.is_none(),
     };
     let (code, message) = match verb {
@@ -150,7 +166,7 @@ fn refuse(entry: &Entry, verb: &str, args: &[String], io: &mut Io<'_>) -> Option
 }
 
 pub fn run(entry: &Entry, verb: &str, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
-    if let Some(code) = refuse(entry, verb, args, io) {
+    if let Some(code) = refuse(entry, verb, args, ctx, io) {
         return code;
     }
     ctx.stdin_terminal = false;

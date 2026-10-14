@@ -125,7 +125,7 @@ Commands are argument lists, never shell strings, and the CLI runs without the p
 | `store` | `keyring` (default) or `file`, for grants jerk keeps itself |
 | `lease_via` | `get` (default) or `create`, to mint a fresh token per fnox lease |
 | `locked` | system files only: later layers can't replace this provider |
-| `get`, `list`, `scopes`, `user`, `create`, `drop` | one command each |
+| `get`, `list`, `scopes`, `user`, `create`, `drop` | a command, or an array of commands tried in order (see [Fallback chains](#fallback-chains)) |
 
 | command field | meaning |
 | --- | --- |
@@ -138,6 +138,8 @@ Commands are argument lists, never shell strings, and the CLI runs without the p
 | `interactive` | the command keeps the terminal (sign-ins) |
 | `link` | a `create` that may run from seven over the slicc link |
 | `id`, `lookup` | for a `create` that mints a token: where to find its id for revocation |
+| `requires` | this step's CLI, in place of the provider's |
+| `oauth` | `true` for a `get`, `create` or `drop` step that uses the provider's `[oauth]` block; such a step has no other field |
 
 ### An OAuth provider
 
@@ -171,6 +173,62 @@ capture = { at = "request", from = "query", param = "code" }
 `jerk aem create -p org=… -p site=…` uses the aem-cli loopback login (`client_id=aem-cli`, redirect `/.aem/cli/login/ack`). After you click Send, jerk stores the admin JWT (`authToken`) for `api.aem.live` as `AEM_TOKEN` (`X-Auth-Token` / `Authorization: token …`). The login host defaults to `admin.hlx.page` (Helix 6 sites still use that login endpoint today); override with `-p login_host=…` when `api.aem.live` returns `authToken` itself. Body capture CORS allow-list is the provider's `cors_origins`; any `{placeholder}` in `authorize_url` beyond the built-in OAuth vars must be supplied with `-p`.
 
 For `intercept`, the browser is the one in `--cdp`, otherwise `SLICC_CDP_URL`, otherwise a running browser from `slicc browsers --json` (the one with seven open first), otherwise exit 4.
+
+### Fallback chains
+
+Each command can be an array of steps, tried in order. This one prefers `cf`, then `wrangler`, then jerk's own OAuth sign-in:
+
+```toml
+[providers.cloudflare]
+name = "Cloudflare"
+env = ["CLOUDFLARE_API_TOKEN"]
+domains = ["api.cloudflare.com"]
+max_age = "50m"
+
+[[providers.cloudflare.get]]
+requires = "cf"
+run = ["cf", "REPLACE-WITH-CF-TOKEN-COMMAND"]
+parse = "text"
+
+[[providers.cloudflare.get]]
+requires = "wrangler"
+run = ["wrangler", "auth", "token", "--json"]
+parse = "json:/token"
+min_version = "4.57.0"
+
+[[providers.cloudflare.get]]
+oauth = true
+
+[[providers.cloudflare.create]]
+requires = "wrangler"
+run = ["wrangler", "login", "--scopes", "{scope}"]
+interactive = true
+min_version = "4.57.0"
+
+[[providers.cloudflare.create]]
+oauth = true
+
+[providers.cloudflare.oauth]
+mode = "loopback"
+flow = "pkce"
+authorize_url = "https://idp.example.invalid/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&code_challenge={code_challenge}&code_challenge_method=S256&state={state}"
+token_url = "https://idp.example.invalid/token"
+client_id = "REPLACE-WITH-YOUR-CLIENT-ID"
+redirect_uri = "http://127.0.0.1:56123/callback"
+scope = "REPLACE-WITH-SCOPES"
+capture = { at = "request", from = "query", param = "code" }
+```
+
+The `cf` command, the endpoints, the client id and the scopes above are placeholders: replace them with real values before you use this.
+
+- A step is **unavailable** when its CLI isn't on `PATH`, or its `min_version` probe fails or reports an older version. Unavailable steps are always skipped.
+- `get`, `list`, `scopes` and `user` also move on when a step fails: a non-zero exit, an empty or unparseable token, or a timeout.
+- `create` and `drop` run the first available step, and its result is final. jerk never starts a second sign-in.
+- When every `get` step fails, `get` exits 3 if some step ran, or 4 if none was available. The message lists each step and why it failed, but never a token or the CLI's output.
+- A token in the provider's first `env` variable still wins over every step. `get --login`, `lease`, `sync`, `--via-link` and the "already signed in" check in `create` use the same chains, and `link` is set on each `create` step.
+- An `[oauth]` block that no step names keeps its old meaning: `get` uses it in place of any CLI steps, and `create` and `drop` use it only when they have no command. Add `{ oauth = true }` to put it in a chain.
+
+jerk's own OAuth grant is separate from the CLIs' sign-ins. `wrangler login` doesn't give jerk a grant, and jerk's `[oauth]` sign-in doesn't sign wrangler in, so a chain can hold two different accounts. `jerk config show` prints the chain, and `jerk list` shows each step's CLI, such as `cf (missing), wrangler, oauth`.
 
 ### MCP servers
 

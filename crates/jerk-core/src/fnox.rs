@@ -1,6 +1,6 @@
 use crate::cli::{usage, Ctx, Io};
-use crate::config::{valid_env, Config, Entry};
-use crate::dispatch::{fetch, mint_token, parse_flags, run_verb, vars, Flags};
+use crate::config::{valid_env, Config, Entry, VerbChain};
+use crate::dispatch::{fetch, mint_token, parse_flags, pick, run_verb, vars, Flags};
 use crate::exit::Exit;
 use crate::run::{Opts, Outcome};
 use crate::{state, time, which};
@@ -57,14 +57,28 @@ pub fn lease(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>)
         .filter(|d| *d > 0)
         .unwrap_or(DEFAULT_DURATION);
     let minting = entry.provider.lease_via.as_deref() == Some("create");
-    let (value, upstream, expires_at) = match (&entry.provider.create, minting) {
-        (Some(verb), true) if verb.parse.is_some() => {
-            match mint_token(entry, verb, &vars, false, ctx, io) {
-                Ok((value, id)) => (value, id, None),
+    let minter = match (&entry.provider.create, minting) {
+        (Some(chain), true) => {
+            let minters = VerbChain(
+                chain
+                    .iter()
+                    .filter(|v| v.parse.is_some() && (v.id.is_some() || v.lookup.is_some()))
+                    .cloned()
+                    .collect(),
+            );
+            match pick(entry, "create", &minters, ctx, io) {
+                Ok(verb) => Some(verb),
                 Err(code) => return code,
             }
         }
-        _ => match fetch(entry, &vars, ctx, io) {
+        _ => None,
+    };
+    let (value, upstream, expires_at) = match minter {
+        Some(verb) => match mint_token(entry, &verb, &vars, false, ctx, io) {
+            Ok((value, id)) => (value, id, None),
+            Err(code) => return code,
+        },
+        None => match fetch(entry, &vars, ctx, io) {
             Ok(token) => (token.value, None, token.expires_at),
             Err(code) => return code,
         },
@@ -134,14 +148,25 @@ pub fn drop_lease(entry: &Entry, flags: &Flags, ctx: &mut Ctx<'_>, io: &mut Io<'
         );
         return Exit::Ok;
     };
-    let Some(verb) = &entry.provider.drop else {
-        let _ = writeln!(io.err, "jerk: {} has no drop command", entry.id);
-        return Exit::Unsupported;
+    let revokers = entry
+        .provider
+        .drop
+        .as_ref()
+        .map(|chain| VerbChain(chain.iter().filter(|v| !v.oauth).cloned().collect()))
+        .filter(|chain| !chain.0.is_empty());
+    let step = revokers.map(|chain| pick(entry, "drop", &chain, ctx, io));
+    let verb = match step {
+        Some(Ok(verb)) => verb,
+        Some(Err(code)) => return code,
+        None => {
+            let _ = writeln!(io.err, "jerk: {} has no drop command", entry.id);
+            return Exit::Unsupported;
+        }
     };
     let mut lease_flags = Flags::default();
     lease_flags.positionals.push(id.clone());
     let vars = vars(entry, &lease_flags).unwrap_or_default();
-    if let Err(code) = run_verb(entry, "drop", verb, &vars, false, ctx, io) {
+    if let Err(code) = run_verb(entry, "drop", &verb, &vars, false, ctx, io) {
         return code;
     }
     let _ = state::forget(ctx.env, &entry.id, &id);
@@ -173,7 +198,7 @@ pub fn config_fnox(args: &[String], config: &Config, io: &mut Io<'_>) -> Exit {
                 .provider
                 .create
                 .as_ref()
-                .is_some_and(|c| c.parse.is_some())
+                .is_some_and(|c| c.iter().any(|v| v.parse.is_some()))
     };
     let entries: Vec<&Entry> = config
         .providers
