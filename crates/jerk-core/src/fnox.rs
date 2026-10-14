@@ -1,5 +1,5 @@
 use crate::cli::{usage, Ctx, Io};
-use crate::config::{valid_env, Config, Entry};
+use crate::config::{valid_env, Config, Entry, VerbChain};
 use crate::dispatch::{fetch, mint_token, parse_flags, pick, run_verb, vars, Flags};
 use crate::exit::Exit;
 use crate::run::{Opts, Outcome};
@@ -58,10 +58,19 @@ pub fn lease(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>)
         .unwrap_or(DEFAULT_DURATION);
     let minting = entry.provider.lease_via.as_deref() == Some("create");
     let minter = match (&entry.provider.create, minting) {
-        (Some(chain), true) => match pick(entry, "create", chain, ctx, io) {
-            Ok(verb) => Some(verb).filter(|v| v.parse.is_some()),
-            Err(code) => return code,
-        },
+        (Some(chain), true) => {
+            let minters = VerbChain(
+                chain
+                    .iter()
+                    .filter(|v| v.parse.is_some())
+                    .cloned()
+                    .collect(),
+            );
+            match pick(entry, "create", &minters, ctx, io) {
+                Ok(verb) => Some(verb),
+                Err(code) => return code,
+            }
+        }
         _ => None,
     };
     let (value, upstream, expires_at) = match minter {

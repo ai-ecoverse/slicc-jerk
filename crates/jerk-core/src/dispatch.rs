@@ -817,20 +817,9 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
     if entry.provider.create.is_none() && entry.oauth_config.is_some() {
         return oauth_create_cmd(entry, &vars, &flags, ctx, io);
     }
-    let step = match &entry.provider.create {
-        Some(chain) => match pick(entry, "create", chain, ctx, io) {
-            Ok(verb) => Some(verb),
-            Err(code) => return code,
-        },
-        None => None,
-    };
-    if step.as_ref().is_some_and(|v| v.oauth) {
-        return oauth_create_cmd(entry, &vars, &flags, ctx, io);
-    }
-    if let Some(verb) = step.as_ref().filter(|v| v.parse.is_some()) {
-        return mint(entry, verb, &vars, &flags, ctx, io);
-    }
-    if !flags.has("--force") && entry.provider.get.is_some() {
+    let chain = entry.provider.create.as_ref();
+    let minting = chain.is_some_and(|c| c.iter().any(|v| v.parse.is_some()));
+    if !minting && !flags.has("--force") && entry.provider.get.is_some() {
         let mut quiet = Io {
             out: &mut std::io::sink(),
             err: &mut std::io::sink(),
@@ -853,10 +842,16 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
             }
         }
     }
-    let Some(verb) = step else {
-        let _ = writeln!(io.err, "jerk: {} has no create command", entry.id);
-        return Exit::Unsupported;
+    let verb = match create_step(entry, ctx, io) {
+        Ok(verb) => verb,
+        Err(code) => return code,
     };
+    if verb.oauth {
+        return oauth_create_cmd(entry, &vars, &flags, ctx, io);
+    }
+    if verb.parse.is_some() {
+        return mint(entry, &verb, &vars, &flags, ctx, io);
+    }
     match run_verb(entry, "create", &verb, &vars, verb.interactive, ctx, io) {
         Ok(_) => {
             let _ = writeln!(io.out, "{}: signed in", entry.id);
@@ -1050,6 +1045,7 @@ fn lookup_id(
     let lookup = verb.lookup.as_ref()?;
     let probe = Verb {
         run: Some(lookup.run.clone()),
+        requires: verb.requires.clone(),
         ..Verb::default()
     };
     let ran = run_verb(entry, "lookup", &probe, vars, false, ctx, io).ok()?;
