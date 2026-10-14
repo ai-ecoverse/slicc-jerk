@@ -433,3 +433,35 @@ test('refreshTokenRequestBytes zeroes the caller buffer', { skip }, async () => 
   );
   assert.ok(bad.every((b) => b === 0));
 });
+
+test('a bad clock is an error, not a silent missing expiry', { skip }, async () => {
+  const wasm = await loadWasm();
+  const body = JSON.stringify({ access_token: 'at', token_type: 'Bearer', expires_in: 60 });
+  for (const now of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5, 2 ** 60]) {
+    assert.throws(
+      () => wasm.parseRefreshResponse(body, now),
+      (err) => err.code === 'invalid_clock',
+      String(now)
+    );
+    assert.throws(
+      () => wasm.parseTokenResponse(pkceConfig, body, now),
+      (err) => err.code === 'invalid_clock',
+      String(now)
+    );
+    assert.throws(
+      () => wasm.beginSignIn(pkceConfig, '', now, random32, random16),
+      (err) => err.code === 'invalid_clock',
+      String(now)
+    );
+  }
+  assert.equal(wasm.parseRefreshResponse(body, 1700000000).expiresAt, 1700000060);
+  const req = wasm.refreshTokenRequest(
+    JSON.stringify({
+      token_url: 'https://as.example/t',
+      client_id: 'c',
+      refresh_token: 'rt',
+      resource: 'https://:@API.example/x',
+    })
+  );
+  assert.equal(new URLSearchParams(req.body).get('resource'), 'https://api.example/x');
+});

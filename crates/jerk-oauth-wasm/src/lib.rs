@@ -32,6 +32,15 @@ fn make_idp_error(error: &str, description: Option<&String>) -> JsValue {
     obj
 }
 
+fn clock(now_secs: f64) -> Result<u64, JsValue> {
+    expiry::clock_secs(now_secs).ok_or_else(|| {
+        make_error(
+            "invalid_clock",
+            "nowSecs must be a whole, non-negative number of seconds",
+        )
+    })
+}
+
 fn extract_query_param(url_str: &str, name: &str) -> Option<String> {
     let query = url_str.find('?').map(|i| {
         let after = &url_str[i + 1..];
@@ -231,6 +240,7 @@ pub fn begin_sign_in(
     random32: &[u8],
     random16: &[u8],
 ) -> Result<JsValue, JsValue> {
+    let now = clock(now_secs)?;
     if random32.len() != 32 {
         return Err(make_error("invalid_input", "random32 must be 32 bytes"));
     }
@@ -281,7 +291,7 @@ pub fn begin_sign_in(
         "state": state_value,
         "expected_nonce": expected_nonce,
         "flow": cfg.flow,
-        "now_secs": now_secs as u64,
+        "now_secs": now,
     });
 
     verifier_str.zeroize();
@@ -426,6 +436,7 @@ pub fn parse_refresh_response(body: &str, now_secs: f64) -> Result<JsValue, JsVa
 }
 
 fn token_response_to_js(body: &str, now_secs: f64) -> Result<JsValue, JsValue> {
+    let now = clock(now_secs)?;
     let resp = exchange::parse_token_response(body).map_err(|e| -> JsValue {
         let (code, msg) = match &e {
             exchange::ExchangeError::MissingAccessToken => {
@@ -457,7 +468,7 @@ fn token_response_to_js(body: &str, now_secs: f64) -> Result<JsValue, JsValue> {
         make_error(code, &msg)
     })?;
 
-    let expires_at = expiry::compute_expiry(now_secs as u64, resp.expires_in, None);
+    let expires_at = expiry::compute_expiry(now, resp.expires_in, None);
 
     let obj = js_sys::Object::new();
     js_sys::Reflect::set(

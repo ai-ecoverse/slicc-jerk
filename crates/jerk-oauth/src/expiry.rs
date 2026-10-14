@@ -24,3 +24,10 @@ pub fn needs_refresh(expires_at: u64, now_epoch_secs: u64, margin_secs: u64) -> 
 }
 
 pub const REFRESH_MARGIN_SECS: u64 = 300;
+
+pub const MAX_CLOCK_SECS: f64 = 9_007_199_254_740_991.0;
+
+pub fn clock_secs(now: f64) -> Option<u64> {
+    (now.is_finite() && (0.0..=MAX_CLOCK_SECS).contains(&now) && now.fract() == 0.0)
+        .then_some(now as u64)
+}
