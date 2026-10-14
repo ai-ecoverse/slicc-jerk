@@ -179,6 +179,8 @@ capture = { at = "request", from = "query", param = "code" }
 | `pkce` | authorization code + PKCE (`code_verifier` on the token request) |
 | `code` | authorization code without PKCE (optional `client_secret` for public desktop clients) |
 | `implicit` | the capture value is the access token (no token endpoint) |
+| `exchange` | POST `token_url` with `[oauth.exchange]` (`grant_type` plus a `body` map; `{value}` is the captured param) |
+
 
 `create` signs in and keeps the grant: in the OS keyring (service `slicc-jerk`), or with `store = "file"` in a 0600 file. `get` refreshes the token at `token_url` when it's close to expiring. `drop` removes the grant (and POSTs to `revoke_url` when set). On Linux the keyring is the kernel keyring, which doesn't survive a reboot.
 
@@ -186,7 +188,9 @@ Optional oauth fields: `client_secret` (sent on code exchange and refresh), `rev
 
 `jerk aem create -p org=… -p site=…` prefers `aem-ext auth key create --register --json` when that CLI is installed (long-lived admin API key). Without `aem-ext`, it uses the aem-cli loopback login (`client_id=aem-cli`, redirect `/.aem/cli/login/ack`). After you click Send, jerk stores the short-lived admin JWT (`authToken`) for `api.aem.live` as `AEM_TOKEN` (`X-Auth-Token` / `Authorization: token …`). The login host defaults to `admin.hlx.page` (Helix 6 sites still use that login endpoint today); override with `-p login_host=…` when `api.aem.live` returns `authToken` itself. Body capture CORS allow-list is the provider's `cors_origins`; any `{placeholder}` in `authorize_url` beyond the built-in OAuth vars must be supplied with `-p`.
 
-For `intercept`, the browser is the one in `--cdp`, otherwise `SLICC_CDP_URL`, otherwise a running browser from `slicc browsers --json` (the one with seven open first), otherwise exit 4.
+`jerk garmin create` opens Garmin SSO over CDP (`intercept`), captures `ticket` from the `connect.garmin.com/modern` redirect, and exchanges it at `diauth.garmin.com` with grant type `…/oauth/grant/service_ticket` (`flow = "exchange"`). The access token is `GARMIN_TOKEN` for `connectapi.garmin.com`.
+
+For `intercept`, the browser is the one in `--cdp`, otherwise `SLICC_CDP_URL`, otherwise a running browser from `slicc browsers --json` (the one with seven open first), otherwise exit 4. State is only checked when `authorize_url` contains `{state}`.
 
 ### Fallback chains
 

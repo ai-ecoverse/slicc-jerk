@@ -1,10 +1,8 @@
 use crate::browser::Browser;
 use crate::exit::Exit;
-use crate::extract;
-use crate::oauth::{OAuthError, Token};
+use crate::oauth::{self, OAuthError, Token};
 use jerk_oauth::capture;
 use jerk_oauth::config::{CaptureFrom, Flow, OAuthConfig};
-use jerk_oauth::expiry;
 use jerk_oauth::pkce;
 use jerk_oauth::relay;
 use jerk_oauth::template;
@@ -154,8 +152,13 @@ pub fn run(
         cors_origins,
     )?;
 
+    let expected_state = if jerk_oauth::config::expects_state(&config.authorize_url) {
+        Some(state.as_str())
+    } else {
+        None
+    };
     let result = if config.capture.from == CaptureFrom::Body {
-        capture::parse_json_body(&captured, &config.capture.param, Some(&state)).map_err(|e| {
+        capture::parse_json_body(&captured, &config.capture.param, expected_state).map_err(|e| {
             OAuthError {
                 exit: Exit::Error,
                 message: e.to_string(),
@@ -166,7 +169,7 @@ pub fn run(
             &captured,
             &config.capture.from,
             &config.capture.param,
-            Some(&state),
+            expected_state,
             Some(redirect_uri),
             actual_port,
         )
@@ -186,30 +189,14 @@ pub fn run(
         }
     }
 
-    if matches!(config.flow, Flow::Pkce | Flow::Code) {
-        crate::oauth::exchange_authorization_code(
-            config,
-            &result.value,
-            redirect_uri,
-            verifier.as_deref(),
-            now_secs,
-            http_post,
-        )
-    } else {
-        let expires_in = result
-            .params
-            .get(config.expires_param.as_deref().unwrap_or("expires_in"))
-            .and_then(|v| v.parse::<u64>().ok());
-        let expires_at = expiry::compute_expiry(now_secs, expires_in, None)
-            .or_else(|| extract::jwt_expiry(&result.value));
-        Ok(Token {
-            access_token: result.value,
-            refresh_token: None,
-            expires_at,
-            scope: result.params.get("scope").cloned(),
-            token_type: result.params.get("token_type").cloned(),
-        })
-    }
+    oauth::token_from_capture(
+        config,
+        &result,
+        verifier.as_deref(),
+        scope,
+        now_secs,
+        http_post,
+    )
 }
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);

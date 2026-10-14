@@ -17,6 +17,15 @@ pub enum Flow {
     Pkce,
     Code,
     Implicit,
+    Exchange,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Exchange {
+    pub grant_type: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub body: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +126,8 @@ pub struct OAuthConfig {
     pub revoke_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_env: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange: Option<Exchange>,
 }
 
 #[derive(Clone, Debug)]
@@ -276,9 +287,29 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
             message: match config.flow {
                 Flow::Pkce => "required for pkce flow".into(),
                 Flow::Code => "required for code flow".into(),
-                Flow::Implicit => unreachable!(),
+                Flow::Exchange | Flow::Implicit => unreachable!(),
             },
         });
+    }
+
+    if config.flow == Flow::Exchange {
+        if config.token_url.is_none() {
+            errors.push(ValidationError {
+                field: "token_url".into(),
+                message: "required for exchange flow".into(),
+            });
+        }
+        match &config.exchange {
+            None => errors.push(ValidationError {
+                field: "exchange".into(),
+                message: "required for exchange flow".into(),
+            }),
+            Some(ex) if ex.grant_type.is_empty() => errors.push(ValidationError {
+                field: "exchange.grant_type".into(),
+                message: "must not be empty".into(),
+            }),
+            Some(_) => {}
+        }
     }
 
     if config.capture.at == CaptureAt::Network && config.capture.url.is_none() {
@@ -417,4 +448,8 @@ pub fn safe_field_name(name: &str) -> Option<&str> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-');
     ok.then_some(name)
+}
+
+pub fn expects_state(authorize_url: &str) -> bool {
+    authorize_url.contains("{state}")
 }

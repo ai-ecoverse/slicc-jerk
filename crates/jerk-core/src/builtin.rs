@@ -272,6 +272,24 @@ scope = "https://mail.google.com/"
 capture = { at = "request", from = "query", param = "code" }
 revoke_url = "https://oauth2.googleapis.com/revoke"
 refresh_env = "GWS_REFRESH_TOKEN"
+
+[providers.garmin]
+name = "Garmin Connect"
+env = ["GARMIN_TOKEN"]
+domains = ["connectapi.garmin.com", "diauth.garmin.com", "connect.garmin.com", "sso.garmin.com"]
+[providers.garmin.oauth]
+mode = "intercept"
+flow = "exchange"
+authorize_url = "https://sso.garmin.com/sso/signin?id=gauth-widget&clientId=GarminConnect&locale=en&service=https%3A%2F%2Fconnect.garmin.com%2Fmodern&webhost=https%3A%2F%2Fconnect.garmin.com%2Fmodern&redirectAfterAccountLoginUrl=https%3A%2F%2Fconnect.garmin.com%2Fmodern&redirectAfterAccountCreationUrl=https%3A%2F%2Fconnect.garmin.com%2Fmodern"
+token_url = "https://diauth.garmin.com/di-oauth2-service/oauth/token"
+client_id = "GARMIN_CONNECT_MOBILE_ANDROID_DI_2025Q2"
+redirect_uri = "https://connect.garmin.com/modern"
+capture = { at = "request", from = "query", param = "ticket" }
+on_capture = "close"
+timeout = "5m"
+[providers.garmin.oauth.exchange]
+grant_type = "https://connectapi.garmin.com/di-oauth2-service/oauth/grant/service_ticket"
+body = { service_ticket = "{value}", service_url = "https://connect.garmin.com/modern" }
 "#;
 
 #[cfg(target_os = "wasi")]
