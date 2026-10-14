@@ -68,8 +68,15 @@ pub fn build_authorization_code_body(
     client_id: &str,
     redirect_uri: &str,
     verifier: &str,
+    client_secret: Option<&str>,
 ) -> Vec<(String, String)> {
-    build_code_exchange_body(code, client_id, redirect_uri, Some(verifier), None)
+    build_code_exchange_body(
+        code,
+        client_id,
+        redirect_uri,
+        Some(verifier),
+        client_secret,
+    )
 }
 
 pub fn build_code_exchange_body(

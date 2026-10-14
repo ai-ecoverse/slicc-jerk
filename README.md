@@ -85,6 +85,7 @@ A token already in the provider's first `env` variable (`GH_TOKEN`, …) wins ov
 | `fastly` | `fastly` | `fastly profile token` | Env `FASTLY_API_TOKEN` wins. `create` runs `fastly sso`; `list` is `profile list --json`; `drop <profile>` is `profile delete`. Optional `-p profile=…` selects a named profile for get/create. |
 | `xai` | jerk's own OAuth | PKCE through a loopback redirect | The sign-in opens in your browser. The grant is kept in the OS keyring. |
 | `printful` | `printful` (skill CLI) | `printful auth token` | Store-level private tokens for `api.printful.com`. `PRINTFUL_API_TOKEN` wins when set. `create` is `printful auth login`: pass `-p token=…` to store a Developer Portal token, or omit it to mint via a logged-in `www.printful.com` dashboard tab. `list` / `drop` are `auth status --json` / `auth logout`. |
+| `gmail` | jerk's own OAuth | refresh of a Google grant (or `$GWS_REFRESH_TOKEN`) | Loopback PKCE with `access_type=offline`. Defaults to Mozilla Thunderbird's public Google client; override with `GWS_CLIENT_ID` / `GWS_CLIENT_SECRET`. `drop` revokes at Google then clears the grant. |
 
 `jerk config show <provider>` prints the definition that's in effect.
 
@@ -179,7 +180,9 @@ capture = { at = "request", from = "query", param = "code" }
 | `code` | authorization code without PKCE (optional `client_secret` for public desktop clients) |
 | `implicit` | the capture value is the access token (no token endpoint) |
 
-`create` signs in and keeps the grant: in the OS keyring (service `slicc-jerk`), or with `store = "file"` in a 0600 file. `get` refreshes the token at `token_url` when it's close to expiring. `drop` removes the grant. On Linux the keyring is the kernel keyring, which doesn't survive a reboot.
+`create` signs in and keeps the grant: in the OS keyring (service `slicc-jerk`), or with `store = "file"` in a 0600 file. `get` refreshes the token at `token_url` when it's close to expiring. `drop` removes the grant (and POSTs to `revoke_url` when set). On Linux the keyring is the kernel keyring, which doesn't survive a reboot.
+
+Optional oauth fields: `client_secret` (sent on code exchange and refresh), `revoke_url` (best-effort revoke on `drop`), `refresh_env` (env var holding a refresh token that `get` mints from before consulting the stored grant). `client_id` and `client_secret` may use `${NAME:-default}` expansion from the process environment.
 
 `jerk aem create -p org=… -p site=…` prefers `aem-ext auth key create --register --json` when that CLI is installed (long-lived admin API key). Without `aem-ext`, it uses the aem-cli loopback login (`client_id=aem-cli`, redirect `/.aem/cli/login/ack`). After you click Send, jerk stores the short-lived admin JWT (`authToken`) for `api.aem.live` as `AEM_TOKEN` (`X-Auth-Token` / `Authorization: token …`). The login host defaults to `admin.hlx.page` (Helix 6 sites still use that login endpoint today); override with `-p login_host=…` when `api.aem.live` returns `authToken` itself. Body capture CORS allow-list is the provider's `cors_origins`; any `{placeholder}` in `authorize_url` beyond the built-in OAuth vars must be supplied with `-p`.
 

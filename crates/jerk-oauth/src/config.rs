@@ -113,6 +113,10 @@ pub struct OAuthConfig {
     pub renew: Option<Renew>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolate: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoke_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_env: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -236,6 +240,26 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
             });
         } else {
             validate_url_scheme(token_url, "token_url", &mut errors);
+        }
+    }
+
+    if let Some(ref revoke_url) = config.revoke_url {
+        if revoke_url.is_empty() {
+            errors.push(ValidationError {
+                field: "revoke_url".into(),
+                message: "must not be empty".into(),
+            });
+        } else {
+            validate_url_scheme(revoke_url, "revoke_url", &mut errors);
+        }
+    }
+
+    if let Some(ref refresh_env) = config.refresh_env {
+        if refresh_env.is_empty() {
+            errors.push(ValidationError {
+                field: "refresh_env".into(),
+                message: "must not be empty".into(),
+            });
         }
     }
 

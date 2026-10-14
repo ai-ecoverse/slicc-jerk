@@ -547,6 +547,19 @@ fn resolve_oauth_config(
     Ok(resolved)
 }
 
+fn resolve_oauth(
+    config: &jerk_oauth::config::OAuthConfig,
+    env: &crate::paths::Env,
+) -> jerk_oauth::config::OAuthConfig {
+    let mut resolved = config.clone();
+    resolved.client_id = source::expand(&resolved.client_id, env);
+    if let Some(secret) = resolved.client_secret.take() {
+        let expanded = source::expand(&secret, env);
+        resolved.client_secret = (!expanded.is_empty()).then_some(expanded);
+    }
+    resolved
+}
+
 fn fetch_oauth(
     entry: &Entry,
     config: &jerk_oauth::config::OAuthConfig,
@@ -563,63 +576,78 @@ fn fetch_oauth(
     let host = ctx.oauth;
     let grants = host.grants(entry.provider.store.as_deref());
     let grant = grants.get(&entry.id, user);
-    let Some(grant) = grant else {
-        sign_in_hint(entry, io);
-        return Err(Exit::SignIn);
-    };
-    if let Some(at) = &grant.access_token {
-        let fresh = grant
-            .expires_at
-            .map(|exp| ctx.now + 300 < exp)
-            .unwrap_or(true);
-        if fresh {
-            return Ok(Token {
-                value: at.clone(),
-                fields: BTreeMap::new(),
-                source: "oauth",
-                expires_at: grant.expires_at,
-                scope: grant.scope.clone(),
-            });
-        }
-        sign_in_hint(entry, io);
-        return Err(Exit::SignIn);
-    }
-    if grant.refresh_token.is_empty() {
-        sign_in_hint(entry, io);
-        return Err(Exit::SignIn);
-    }
     let config = match resolve_oauth_config(config, vars) {
-        Ok(c) => c,
+        Ok(c) => resolve_oauth(&c, ctx.env),
         Err(msg) => {
             let _ = writeln!(io.err, "jerk: {}: {msg}", entry.id);
             return Err(Exit::Usage);
         }
     };
-    match oauth::oauth_refresh(&config, &grant.refresh_token, host, ctx.now) {
+    let refresh_from_env = config
+        .refresh_env
+        .as_ref()
+        .and_then(|name| ctx.env.var(name))
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    if refresh_from_env.is_none() {
+        if let Some(grant) = &grant {
+            if let Some(at) = &grant.access_token {
+                let fresh = grant
+                    .expires_at
+                    .map(|exp| ctx.now + 300 < exp)
+                    .unwrap_or(true);
+                if fresh {
+                    return Ok(Token {
+                        value: at.clone(),
+                        fields: BTreeMap::new(),
+                        source: "oauth",
+                        expires_at: grant.expires_at,
+                        scope: grant.scope.clone(),
+                    });
+                }
+                sign_in_hint(entry, io);
+                return Err(Exit::SignIn);
+            }
+        }
+    }
+    let from_env = refresh_from_env.is_some();
+    let refresh_token = refresh_from_env.or_else(|| {
+        grant
+            .as_ref()
+            .map(|g| g.refresh_token.clone())
+            .filter(|s| !s.is_empty())
+    });
+    let Some(refresh_token) = refresh_token else {
+        sign_in_hint(entry, io);
+        return Err(Exit::SignIn);
+    };
+    match oauth::oauth_refresh(&config, &refresh_token, host, ctx.now) {
         Ok(token) => {
-            if let Some(new_rt) = &token.refresh_token {
-                let updated = crate::grants::Grant {
-                    provider: entry.id.clone(),
-                    user: user.to_string(),
-                    refresh_token: new_rt.clone(),
-                    access_token: None,
-                    expires_at: token.expires_at,
-                    scope: token.scope.clone(),
-                };
-                if let Err(e) = grants.store(&updated) {
-                    let _ = writeln!(
-                        io.err,
-                        "jerk: {}: cannot store rotated grant: {e}",
-                        entry.id
-                    );
+            if !from_env {
+                if let Some(new_rt) = &token.refresh_token {
+                    let updated = crate::grants::Grant {
+                        provider: entry.id.clone(),
+                        user: user.to_string(),
+                        refresh_token: new_rt.clone(),
+                        access_token: None,
+                        expires_at: token.expires_at,
+                        scope: token.scope.clone(),
+                    };
+                    if let Err(e) = grants.store(&updated) {
+                        let _ = writeln!(
+                            io.err,
+                            "jerk: {}: cannot store rotated grant: {e}",
+                            entry.id
+                        );
+                    }
                 }
             }
             Ok(Token {
                 value: token.access_token,
                 fields: BTreeMap::new(),
-                source: "oauth",
+                source: if from_env { "env" } else { "oauth" },
                 expires_at: token.expires_at,
-                scope: token.scope.or(grant.scope),
+                scope: token.scope.or_else(|| grant.and_then(|g| g.scope)),
             })
         }
         Err(e) if e.exit == Exit::SignIn => {
@@ -1062,6 +1090,7 @@ fn oauth_create_cmd(
     #[cfg(target_os = "wasi")]
     let cdp_ref: Option<&dyn oauth::CdpOpener> = None;
 
+    let config = resolve_oauth(&config, ctx.env);
     let extra: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let token = match oauth::oauth_create_with_vars(
         &config,
@@ -1323,6 +1352,25 @@ fn oauth_drop_cmd(
     }
     let host = ctx.oauth;
     let grants = host.grants(entry.provider.store.as_deref());
+    let config = resolve_oauth(entry.oauth_config.as_ref().unwrap(), ctx.env);
+    if let Some(revoke_url) = config.revoke_url.as_deref() {
+        if let Some(grant) = grants.get(&entry.id, user) {
+            let token = if !grant.refresh_token.is_empty() {
+                grant.refresh_token.as_str()
+            } else {
+                grant.access_token.as_deref().unwrap_or("")
+            };
+            if !token.is_empty() {
+                let body = format!(
+                    "token={}",
+                    url::form_urlencoded::byte_serialize(token.as_bytes()).collect::<String>()
+                );
+                if let Err(e) = host.http_post(revoke_url, &body) {
+                    let _ = writeln!(io.err, "jerk: {}: revoke failed: {e}", entry.id);
+                }
+            }
+        }
+    }
     if let Err(e) = grants.remove(&entry.id, user) {
         let _ = writeln!(io.err, "jerk: {}: cannot remove grant: {e}", entry.id);
         return Exit::Error;
