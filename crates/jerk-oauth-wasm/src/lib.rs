@@ -392,12 +392,13 @@ pub fn complete_sign_in(
                         Flow::Code => "token_url required for code",
                         Flow::Exchange => "token_url required for exchange",
                         Flow::Implicit => "token_url required",
+                        Flow::ClientCredentials => "token_url required for client_credentials",
                     },
                 )
             })?;
             let verifier = match pending.flow {
                 Flow::Pkce => Some(pending.verifier.as_str()),
-                Flow::Code | Flow::Exchange | Flow::Implicit => None,
+                Flow::Code | Flow::Exchange | Flow::Implicit | Flow::ClientCredentials => None,
             };
             let body_pairs = exchange::build_code_exchange_body(
                 &result.value,
@@ -455,6 +456,10 @@ pub fn complete_sign_in(
             js_sys::Reflect::set(&obj, &"body".into(), &body.into()).ok();
             Ok(obj.into())
         }
+        Flow::ClientCredentials => Err(make_error(
+            "unsupported_flow",
+            "client_credentials is not available in the wasm complete path",
+        )),
     }
 }
 

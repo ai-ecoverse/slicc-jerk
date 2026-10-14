@@ -170,6 +170,18 @@ get = { run = ["aio", "login", "--bare", "--no-open", "--ctx", "{ctx}"], parse =
 create = { run = ["aio", "login", "--force", "--ctx", "{ctx}"], interactive = true, link = true }
 drop = { run = ["aio", "logout", "--ctx", "{ctx}"], interactive = true }
 
+[providers.firefly]
+name = "Adobe Firefly Services"
+env = ["FIREFLY_ACCESS_TOKEN", "ADOBE_IMS_TOKEN"]
+domains = ["firefly-api.adobe.io", "ims-na1.adobelogin.com"]
+params = { client_id = "", client_secret = "", org_id = "", scope = "openid,AdobeID,session,additional_info,firefly_api,ff_apis,read_organizations,additional_info.projectedProductContext,creative_sdk,ee.express_api,indesign_services" }
+[providers.firefly.oauth]
+mode = "client_credentials"
+token_url = "https://ims-na1.adobelogin.com/ims/token/v3"
+client_id = "{client_id}"
+client_secret = "{client_secret}"
+scope = "{scope}"
+
 [providers.aem]
 name = "AEM Admin (aem-ext, api.aem.live)"
 env = ["AEM_TOKEN", "AEM_API_KEY"]

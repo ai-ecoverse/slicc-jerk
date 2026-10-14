@@ -144,6 +144,52 @@ pub fn build_refresh_body(refresh_token: &str, client_id: &str) -> Vec<(String, 
     ]
 }
 
+pub fn build_client_credentials_body(
+    client_id: &str,
+    client_secret: &str,
+    scope: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut pairs = vec![
+        ("grant_type".into(), "client_credentials".into()),
+        ("client_id".into(), client_id.into()),
+        ("client_secret".into(), client_secret.into()),
+    ];
+    if let Some(scope) = scope.filter(|s| !s.trim().is_empty()) {
+        pairs.push(("scope".into(), scope.into()));
+    }
+    pairs
+}
+
+pub struct ClientCredentialsParams<'a> {
+    pub token_url: &'a str,
+    pub client_id: &'a str,
+    pub client_secret: &'a str,
+    pub scope: Option<&'a str>,
+}
+
+pub fn client_credentials_request(
+    params: &ClientCredentialsParams<'_>,
+) -> Result<(String, String), String> {
+    crate::config::require_https_or_loopback(params.token_url)
+        .map_err(|e| format!("token_url {e}"))?;
+    if params.client_id.is_empty() {
+        return Err("client_id must not be empty".into());
+    }
+    if params.client_secret.is_empty() {
+        return Err("client_secret must not be empty".into());
+    }
+    let mut pairs =
+        build_client_credentials_body(params.client_id, params.client_secret, params.scope);
+    let body = encode_form_body(&pairs);
+    for (_, v) in pairs.iter_mut() {
+        v.zeroize();
+    }
+    let url = url::Url::parse(params.token_url)
+        .map(|u| u.to_string())
+        .map_err(|_| "token_url must be an absolute URL".to_string())?;
+    Ok((url, body))
+}
+
 pub struct RefreshParams<'a> {
     pub token_url: &'a str,
     pub client_id: &'a str,

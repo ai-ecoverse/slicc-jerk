@@ -2,6 +2,7 @@ use url::form_urlencoded;
 
 const BUILTIN_VARS: &[&str] = &[
     "client_id",
+    "client_secret",
     "redirect_uri",
     "scope",
     "state",
@@ -15,6 +16,15 @@ pub fn render(template: &str, vars: &[(&str, &str)]) -> String {
         let placeholder = format!("{{{name}}}");
         let encoded: String = form_urlencoded::byte_serialize(value.as_bytes()).collect();
         result = result.replace(&placeholder, &encoded);
+    }
+    result
+}
+
+pub fn render_plain(template: &str, vars: &[(&str, &str)]) -> String {
+    let mut result = template.to_string();
+    for &(name, value) in vars {
+        let placeholder = format!("{{{name}}}");
+        result = result.replace(&placeholder, value);
     }
     result
 }
