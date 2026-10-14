@@ -62,7 +62,7 @@ pub fn lease(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>)
             let minters = VerbChain(
                 chain
                     .iter()
-                    .filter(|v| v.parse.is_some())
+                    .filter(|v| v.parse.is_some() && (v.id.is_some() || v.lookup.is_some()))
                     .cloned()
                     .collect(),
             );

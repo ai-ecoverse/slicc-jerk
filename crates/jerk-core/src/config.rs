@@ -544,11 +544,11 @@ fn validate_verb(
                 "{label}: oauth = true only applies to get, create and drop"
             ));
         }
-        if verb.run.is_some() {
-            messages.push(format!("{label}: oauth = true cannot have run"));
-        }
-        if verb.read.is_some() {
-            messages.push(format!("{label}: oauth = true cannot have read"));
+        let fields = toml::Value::try_from(verb).unwrap_or(toml::Value::Table(toml::Table::new()));
+        for field in fields.as_table().into_iter().flat_map(|t| t.keys()) {
+            if field != "oauth" {
+                messages.push(format!("{label}: oauth = true cannot have {field}"));
+            }
         }
         if provider.oauth.is_none() {
             messages.push(format!("{label}: oauth = true but no [oauth] block"));

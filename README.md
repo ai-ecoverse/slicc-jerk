@@ -139,7 +139,7 @@ Commands are argument lists, never shell strings, and the CLI runs without the p
 | `link` | a `create` that may run from seven over the slicc link |
 | `id`, `lookup` | for a `create` that mints a token: where to find its id for revocation |
 | `requires` | this step's CLI, in place of the provider's |
-| `oauth` | `true` for a `get`, `create` or `drop` step that uses the provider's `[oauth]` block |
+| `oauth` | `true` for a `get`, `create` or `drop` step that uses the provider's `[oauth]` block; such a step has no other field |
 
 ### An OAuth provider
 
