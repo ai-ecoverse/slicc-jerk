@@ -14,7 +14,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
         Some(i) => i,
         None => return err(io, &entry.id, "missing url"),
     };
-    if let Some(value) = entry.provider.env.first().and_then(|n| ctx.env.var(n)) {
+    if let Some(value) = entry.provider.env.iter().find_map(|n| ctx.env.var(n)) {
         return emit_token(value, "env", None, None, &flags, &entry.id, io);
     }
     let host = ctx.oauth;
