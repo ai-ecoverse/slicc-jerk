@@ -77,7 +77,7 @@ A token already in the provider's first `env` variable (`GH_TOKEN`, …) wins ov
 | --- | --- | --- | --- |
 | `github` | `gh` | `gh auth token` | `--scope` understands GitHub's implied scopes (`repo` covers `public_repo`). Sign-out is `gh auth logout`. |
 | `npm` | `npm` | `//registry.npmjs.org/:_authToken` from `$NPM_CONFIG_USERCONFIG` or `~/.npmrc` | `npm config get` won't print auth keys, so jerk reads the file. `create` mints a granular token (npm 11.6.3 or newer) and records only its id, so `drop <id>` can revoke it. |
-| `cloudflare` | `wrangler` | `wrangler auth token --json` | Needs wrangler 4.57.0 or newer for `create` and `get`, and 4.65.0 for `list`. An older wrangler exits 4 before signing in, not 3 after. Tokens are treated as expiring after 50 minutes. |
+| `cloudflare` | `wrangler` | `wrangler auth token --json` | Needs wrangler 4.57.0 or newer for `create` and `get`, and 4.65.0 for `list`. An older wrangler exits 4 before signing in, not 3 after. Tokens are treated as expiring after 50 minutes. Cloudflare's newer [`cf`](https://github.com/cloudflare/cf) CLI isn't used yet: no version up to 1.0.0-beta.17 can print its token, and its sign-in is separate from wrangler's, so `cf auth login` can't sign in for `get`. |
 | `adobe-aio` | `aio` | `aio login --bare --no-open` | The expiry comes from the IMS token itself. |
 | `aem` | jerk's own OAuth | loopback body capture of `authToken` | Admin JWT for `api.aem.live`. Needs `-p org=… -p site=…`. |
 | `xai` | jerk's own OAuth | PKCE through a loopback redirect | The sign-in opens in your browser. The grant is kept in the OS keyring. |
@@ -219,7 +219,7 @@ scope = "REPLACE-WITH-SCOPES"
 capture = { at = "request", from = "query", param = "code" }
 ```
 
-The `cf` command, the endpoints, the client id and the scopes above are placeholders: replace them with real values before you use this.
+The `cf` command, the endpoints, the client id and the scopes above are placeholders: replace them with real values before you use this. `cf` has no token command yet, so its step is a placeholder for when it gets one.
 
 - A step is **unavailable** when its CLI isn't on `PATH`, or its `min_version` probe fails or reports an older version. Unavailable steps are always skipped.
 - `get`, `list`, `scopes` and `user` also move on when a step fails: a non-zero exit, an empty or unparseable token, or a timeout.
@@ -228,7 +228,7 @@ The `cf` command, the endpoints, the client id and the scopes above are placehol
 - A token in the provider's first `env` variable still wins over every step. `get --login`, `lease`, `sync`, `--via-link` and the "already signed in" check in `create` use the same chains, and `link` is set on each `create` step.
 - An `[oauth]` block that no step names keeps its old meaning: `get` uses it in place of any CLI steps, and `create` and `drop` use it only when they have no command. Add `{ oauth = true }` to put it in a chain.
 
-jerk's own OAuth grant is separate from the CLIs' sign-ins. `wrangler login` doesn't give jerk a grant, and jerk's `[oauth]` sign-in doesn't sign wrangler in, so a chain can hold two different accounts. `jerk config show` prints the chain, and `jerk list` shows each step's CLI, such as `cf (missing), wrangler, oauth`.
+jerk's own OAuth grant is separate from the CLIs' sign-ins. `wrangler login` doesn't give jerk a grant, and jerk's `[oauth]` sign-in doesn't sign wrangler in, so a chain can hold two different accounts. The same goes for `cf` and `wrangler`, which each keep their own sign-in. `jerk config show` prints the chain, and `jerk list` shows each step's CLI, such as `cf (missing), wrangler, oauth`.
 
 ### MCP servers
 
