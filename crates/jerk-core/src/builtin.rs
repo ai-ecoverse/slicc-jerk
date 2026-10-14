@@ -33,7 +33,7 @@ requires = "wrangler"
 max_age = "50m"
 get = { run = ["wrangler", "auth", "token", "--json"], parse = "json:/token", min_version = "4.57.0" }
 list = { run = ["wrangler", "whoami", "--json"], parse = "json:", min_version = "4.65.0" }
-create = { run = ["wrangler", "login", "--scopes", "{scope}"], interactive = true }
+create = { run = ["wrangler", "login", "--scopes", "{scope}"], interactive = true, min_version = "4.57.0" }
 drop = { run = ["wrangler", "logout"], interactive = true }
 
 [providers.adobe-aio]

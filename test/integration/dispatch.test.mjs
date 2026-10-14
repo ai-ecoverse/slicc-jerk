@@ -194,4 +194,14 @@ test('an old wrangler is reported as too old, not as signed out', () => {
   assert.equal(res.status, 4);
   assert.match(res.stderr, /wrangler 4\.14\.4 is too old; this needs 4\.57\.0 or newer/);
   assert.equal(sb.calls().length, 1);
+  const create = sb.jerk(['cloudflare', 'create']);
+  assert.equal(create.status, 4);
+  assert.match(create.stderr, /this needs 4\.57\.0 or newer/);
+});
+
+test('the built-in xai provider signs in at the discovered authorize endpoint', () => {
+  const sb = sandbox();
+  const res = sb.jerk(['config', 'show', 'xai']);
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /authorize_url = "https:\/\/auth\.x\.ai\/oauth2\/authorize\?/);
 });

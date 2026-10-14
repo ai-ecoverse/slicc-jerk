@@ -77,7 +77,7 @@ A token already in the provider's first `env` variable (`GH_TOKEN`, …) wins ov
 | --- | --- | --- | --- |
 | `github` | `gh` | `gh auth token` | `--scope` understands GitHub's implied scopes (`repo` covers `public_repo`). Sign-out is `gh auth logout`. |
 | `npm` | `npm` | `//registry.npmjs.org/:_authToken` from `$NPM_CONFIG_USERCONFIG` or `~/.npmrc` | `npm config get` won't print auth keys, so jerk reads the file. `create` mints a granular token (npm 11.6.3 or newer) and records only its id, so `drop <id>` can revoke it. |
-| `cloudflare` | `wrangler` | `wrangler auth token --json` | Needs wrangler 4.57.0 or newer for `get` and 4.65.0 for `list`; older versions exit 4, not 3. Tokens are treated as expiring after 50 minutes. |
+| `cloudflare` | `wrangler` | `wrangler auth token --json` | Needs wrangler 4.57.0 or newer for `create` and `get`, and 4.65.0 for `list`. An older wrangler exits 4 before signing in, not 3 after. Tokens are treated as expiring after 50 minutes. |
 | `adobe-aio` | `aio` | `aio login --bare --no-open` | The expiry comes from the IMS token itself. |
 | `xai` | jerk's own OAuth | PKCE through a loopback redirect | The sign-in opens in your browser. The grant is kept in the OS keyring. |
 
