@@ -77,7 +77,7 @@ A token already in the provider's first `env` variable (`GH_TOKEN`, …) wins ov
 | --- | --- | --- | --- |
 | `github` | `gh` | `gh auth token` | `--scope` understands GitHub's implied scopes (`repo` covers `public_repo`). Sign-out is `gh auth logout`. |
 | `npm` | `npm` | `//registry.npmjs.org/:_authToken` from `$NPM_CONFIG_USERCONFIG` or `~/.npmrc` | `npm config get` won't print auth keys, so jerk reads the file. `create` mints a granular token (npm 11.6.3 or newer) and records only its id, so `drop <id>` can revoke it. |
-| `cloudflare` | `wrangler` | `wrangler auth token --json` | Needs wrangler 4.57.0 or newer for `create` and `get`, and 4.65.0 for `list`. An older wrangler exits 4 before signing in, not 3 after. Tokens are treated as expiring after 50 minutes. |
+| `cloudflare` | `cf`, then `wrangler`, then browser OAuth | `cf accounts tokens create` (when `-p policies=…`), else `wrangler auth token --json`, else the stored OAuth grant | `create` / `drop` / `list` prefer `cf` (`auth login` / `logout` / `whoami`), then wrangler. `get` via `cf` mints an account-owned API token and needs `CLOUDFLARE_ACCOUNT_ID` plus `-p policies=…`; with the default empty `policies` that step fails and `get` moves on. Wrangler needs 4.57.0+ for `create`/`get` and 4.65.0 for `list`. Browser fallback uses Cloudflare's `cf` OAuth app on `localhost:8877`. Session tokens are treated as expiring after 50 minutes. |
 | `adobe-aio` | `aio` | `aio login --bare --no-open` | The expiry comes from the IMS token itself. |
 | `aem` | jerk's own OAuth | loopback body capture of `authToken` | Admin JWT for `api.aem.live`. Needs `-p org=… -p site=…`. |
 | `xai` | jerk's own OAuth | PKCE through a loopback redirect | The sign-in opens in your browser. The grant is kept in the OS keyring. |
@@ -176,50 +176,56 @@ For `intercept`, the browser is the one in `--cdp`, otherwise `SLICC_CDP_URL`, o
 
 ### Fallback chains
 
-Each command can be an array of steps, tried in order. This one prefers `cf`, then `wrangler`, then jerk's own OAuth sign-in:
+Each command can be an array of steps, tried in order. The built-in `cloudflare` provider prefers `cf`, then `wrangler`, then jerk's own OAuth sign-in (`jerk config show cloudflare`). A custom chain looks the same:
 
 ```toml
-[providers.cloudflare]
+[providers.flare]
 name = "Cloudflare"
 env = ["CLOUDFLARE_API_TOKEN"]
 domains = ["api.cloudflare.com"]
 max_age = "50m"
+params = { name = "jerk", policies = "" }
 
-[[providers.cloudflare.get]]
+[[providers.flare.get]]
 requires = "cf"
-run = ["cf", "REPLACE-WITH-CF-TOKEN-COMMAND"]
-parse = "text"
+run = ["cf", "accounts", "tokens", "create", "--quiet", "--name", "{name}", "--policies", "{policies}"]
+parse = "json:/value"
 
-[[providers.cloudflare.get]]
+[[providers.flare.get]]
 requires = "wrangler"
 run = ["wrangler", "auth", "token", "--json"]
 parse = "json:/token"
 min_version = "4.57.0"
 
-[[providers.cloudflare.get]]
+[[providers.flare.get]]
 oauth = true
 
-[[providers.cloudflare.create]]
+[[providers.flare.create]]
+requires = "cf"
+run = ["cf", "auth", "login", "--scopes", "{scope}"]
+interactive = true
+
+[[providers.flare.create]]
 requires = "wrangler"
 run = ["wrangler", "login", "--scopes", "{scope}"]
 interactive = true
 min_version = "4.57.0"
 
-[[providers.cloudflare.create]]
+[[providers.flare.create]]
 oauth = true
 
-[providers.cloudflare.oauth]
+[providers.flare.oauth]
 mode = "loopback"
 flow = "pkce"
-authorize_url = "https://idp.example.invalid/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&code_challenge={code_challenge}&code_challenge_method=S256&state={state}"
-token_url = "https://idp.example.invalid/token"
-client_id = "REPLACE-WITH-YOUR-CLIENT-ID"
-redirect_uri = "http://127.0.0.1:56123/callback"
-scope = "REPLACE-WITH-SCOPES"
+authorize_url = "https://dash.cloudflare.com/oauth2/auth?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&state={state}&code_challenge={code_challenge}&code_challenge_method=S256"
+token_url = "https://dash.cloudflare.com/oauth2/token"
+client_id = "cbca97e7-c331-4cdd-8fd8-e25a451b98bf"
+redirect_uri = "http://localhost:8877/oauth/callback"
+scope = "account:read user:read workers:write offline_access"
 capture = { at = "request", from = "query", param = "code" }
 ```
 
-The `cf` command, the endpoints, the client id and the scopes above are placeholders: replace them with real values before you use this.
+Set `CLOUDFLARE_ACCOUNT_ID` and `-p policies='[…]'` (account-scoped resources) when you want `get` to mint through `cf`. With the default empty `policies`, `--policies` is omitted, that step fails, and `get` moves on.
 
 - A step is **unavailable** when its CLI isn't on `PATH`, or its `min_version` probe fails or reports an older version. Unavailable steps are always skipped.
 - `get`, `list`, `scopes` and `user` also move on when a step fails: a non-zero exit, an empty or unparseable token, or a timeout.

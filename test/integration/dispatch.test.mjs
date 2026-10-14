@@ -104,8 +104,10 @@ test('a failing or missing CLI maps to exit 3 and 4', () => {
   assert.equal(failed.status, 3);
   assert.match(failed.stderr, /sign in with jerk github create/);
   const missing = sb.jerk(['cloudflare', 'get']);
-  assert.equal(missing.status, 4);
-  assert.match(missing.stderr, /wrangler is not on PATH/);
+  assert.equal(missing.status, 3);
+  assert.match(missing.stderr, /cf: not on PATH/);
+  assert.match(missing.stderr, /wrangler: not on PATH/);
+  assert.match(missing.stderr, /oauth: not signed in/);
 });
 
 test('wrangler tokens get a max_age expiry', () => {
@@ -191,12 +193,12 @@ test('an old wrangler is reported as too old, not as signed out', () => {
     `if (args[0] === '--version') process.stdout.write(' ⛅️ wrangler 4.14.4\\n'); else process.exit(1);`
   );
   const res = sb.jerk(['cloudflare', 'get']);
-  assert.equal(res.status, 4);
-  assert.match(res.stderr, /wrangler 4\.14\.4 is too old; this needs 4\.57\.0 or newer/);
-  assert.equal(sb.calls().length, 1);
-  const create = sb.jerk(['cloudflare', 'create']);
-  assert.equal(create.status, 4);
-  assert.match(create.stderr, /this needs 4\.57\.0 or newer/);
+  assert.equal(res.status, 3);
+  assert.match(res.stderr, /wrangler: 4\.14\.4 is too old; this needs 4\.57\.0 or newer/);
+  assert.match(res.stderr, /oauth: not signed in/);
+  const create = sb.jerk(['cloudflare', 'create', '--force']);
+  assert.equal(create.status, 4, create.stderr);
+  assert.match(create.stderr, /jerk: cloudflare:/);
 });
 
 test('the built-in xai provider signs in at the discovered authorize endpoint', () => {
