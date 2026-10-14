@@ -178,7 +178,10 @@ impl std::fmt::Display for ValidationError {
 }
 
 pub fn is_loopback_host(host: &str) -> bool {
-    matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1")
+    matches!(host, "localhost" | "[::1]" | "::1")
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|a| a.is_loopback())
 }
 
 pub fn require_https_or_loopback(url_str: &str) -> Result<(), String> {

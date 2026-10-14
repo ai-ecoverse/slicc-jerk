@@ -434,6 +434,7 @@ dependencies = [
  "openssl",
  "serde",
  "serde_json",
+ "sha2",
  "slicc-cdp-client",
  "toml",
  "ureq",

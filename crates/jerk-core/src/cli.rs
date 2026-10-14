@@ -21,6 +21,7 @@ Usage:
   jerk <provider> drop --lease
   jerk <provider> sync --fnox <SECRET> --provider <fnox provider> [--global]
   jerk mcp:<server> create [--scope S] [--no-browser] | get | drop | import-pi
+  jerk mcp:url:<url> create [--scope S] [--no-browser] | get | drop | import-pi
   jerk config path [--json] | check | show <provider> | fnox [--proxy] [<provider>...]
   jerk intercept --authorize-url U --redirect R [--rewrite m=k=v]... [--pkce]
                  [--exchange --token-url T --client-id C] [--cdp URL]
@@ -137,28 +138,37 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
             Some(verb) if VERBS.contains(&verb) => {
                 let config = config::load(env, explicit.as_deref());
                 let linked = rest[2..].iter().any(|a| a == "--via-link");
+                let resolved = lookup(&config, provider);
                 if linked {
+                    let shown = crate::mcp_config::shown_id(provider);
                     if let Some(problem) = config.problems.iter().find(|p| p.level == Level::Error)
                     {
-                        return crate::link::bare(provider, &problem.to_string(), io);
+                        return crate::link::bare(&shown, &problem.to_string(), io);
                     }
-                    if config.get(provider).is_none() {
-                        return crate::link::bare(
-                            provider,
-                            &format!("unknown provider {provider}"),
-                            io,
-                        );
+                    match &resolved {
+                        Err(message) => return crate::link::bare(&shown, message, io),
+                        Ok(None) => {
+                            return crate::link::bare(
+                                provider,
+                                &format!("unknown provider {provider}"),
+                                io,
+                            )
+                        }
+                        Ok(Some(_)) => {}
                     }
                 }
                 if let Some(code) = report(&config, io) {
                     return code;
                 }
+                let resolved = match resolved {
+                    Ok(resolved) => resolved,
+                    Err(message) => return usage(&message, io),
+                };
                 let args = &rest[2..];
                 if let Some(sealed) = ctx.sealed {
-                    let entry = config.get(provider).cloned();
                     return kernel_verb_or_passthrough(
                         provider,
-                        entry.as_ref(),
+                        resolved.as_ref(),
                         verb,
                         args,
                         ctx,
@@ -166,7 +176,7 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                         io,
                     );
                 }
-                let Some(entry) = config.get(provider) else {
+                let Some(entry) = resolved.as_ref() else {
                     return usage(
                         &format!(
                             "unknown provider {provider}; jerk list shows the configured ones"
@@ -185,7 +195,7 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                         "drop" => crate::mcp::drop_cmd(entry, args, ctx, io),
                         "import-pi" => crate::mcp::import_pi(entry, args, ctx, io),
                         _ => usage(
-                            &format!("{provider}: {verb} is not supported for MCP providers"),
+                            &format!("{}: {verb} is not supported for MCP providers", entry.id),
                             io,
                         ),
                     };
@@ -200,9 +210,22 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                 }
             }
             Some(verb) => usage(&format!("unknown command {verb}"), io),
-            None => usage(&format!("{provider}: missing a command"), io),
+            None => usage(
+                &format!(
+                    "{}: missing a command",
+                    crate::mcp_config::shown_id(provider)
+                ),
+                io,
+            ),
         },
     }
+}
+
+fn lookup(config: &Config, id: &str) -> Result<Option<config::Entry>, String> {
+    if crate::mcp_config::is_url_id(id) {
+        return crate::mcp_config::resolve_url_id(id, &config.providers).map(|r| Some(r.entry));
+    }
+    Ok(config.get(id).cloned())
 }
 
 fn split_config(args: &[String]) -> Result<(Option<String>, Vec<String>), String> {
@@ -479,20 +502,49 @@ fn config_show(id: &str, env: &Env, explicit: Option<&str>, io: &mut Io<'_>) -> 
     if let Some(code) = report(&config, io) {
         return code;
     }
-    let Some(entry) = config.get(id) else {
-        return usage(
-            &format!("unknown provider {id}; jerk list shows the configured ones"),
-            io,
-        );
+    let entry = if crate::mcp_config::is_url_id(id) {
+        let resolution = match crate::mcp_config::resolve_url_id(id, &config.providers) {
+            Ok(r) => r,
+            Err(message) => return usage(&message, io),
+        };
+        match resolution.matches.as_slice() {
+            [] => {
+                let _ = writeln!(
+                    io.err,
+                    "jerk: {} is URL-only: no mcp.json entry has this URL, so it has no oauth fields and no env variable",
+                    resolution.requested
+                );
+            }
+            [only] => {
+                let _ = writeln!(io.err, "jerk: {} resolves to {only}", resolution.requested);
+            }
+            [first, others @ ..] => {
+                let _ = writeln!(
+                    io.err,
+                    "jerk: {} resolves to {first}, the first by name of the entries with this URL; also {}",
+                    resolution.requested,
+                    others.join(", ")
+                );
+            }
+        }
+        resolution.entry
+    } else {
+        let Some(entry) = config.get(id) else {
+            return usage(
+                &format!("unknown provider {id}; jerk list shows the configured ones"),
+                io,
+            );
+        };
+        entry.clone()
     };
     let mut providers = toml::Table::new();
     providers.insert(
-        id.to_string(),
+        entry.id.clone(),
         toml::Value::try_from(&entry.provider).unwrap_or(toml::Value::Table(toml::Table::new())),
     );
     let mut root = toml::Table::new();
     root.insert("providers".to_string(), toml::Value::Table(providers));
-    let _ = writeln!(io.err, "jerk: {id} comes from {}", entry.source);
+    let _ = writeln!(io.err, "jerk: {} comes from {}", entry.id, entry.source);
     let _ = write!(io.out, "{root}");
     Exit::Ok
 }
