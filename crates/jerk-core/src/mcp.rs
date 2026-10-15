@@ -386,12 +386,10 @@ fn complete_auth(
         client_id,
         redirect_uri,
         verifier,
+        client_secret,
     );
     if let Some(r) = resource {
         body.push(("resource".into(), r.into()));
-    }
-    if let Some(s) = client_secret {
-        body.push(("client_secret".into(), s.into()));
     }
     let form = jerk_oauth::exchange::encode_form_body(&body);
     match host.http_post(&as_meta.token_endpoint, &form) {

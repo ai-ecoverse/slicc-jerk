@@ -54,7 +54,7 @@ test('jerk list shows the built-in providers and finds their CLIs on PATH', () =
   const json = JSON.parse(sb.jerk(['list', '--json']).stdout);
   assert.deepEqual(
     json.map((p) => p.provider),
-    ['adobe-aio', 'aem', 'aws', 'cloudflare', 'fastly', 'gcloud', 'github', 'linkedin', 'npm', 'printful', 'xai']
+    ['adobe-aio', 'aem', 'aws', 'cloudflare', 'fastly', 'gcloud', 'github', 'gmail', 'linkedin', 'npm', 'printful', 'xai']
   );
   assert.equal(json.find((p) => p.provider === 'github').cli, true);
 });
@@ -72,6 +72,21 @@ test('aem is a built-in oauth provider that needs org and site for create', () =
   assert.match(missing.stderr, /-p org=/);
 });
 
+test('gmail is a built-in oauth provider for Google refresh tokens', () => {
+  const sb = sandbox();
+  const shown = sb.jerk(['config', 'show', 'gmail']);
+  assert.equal(shown.status, 0, shown.stderr);
+  assert.match(shown.stdout, /GWS_ACCESS_TOKEN/);
+  assert.match(shown.stdout, /GWS_REFRESH_TOKEN/);
+  assert.match(shown.stdout, /access_type=offline/);
+  assert.match(shown.stdout, /oauth2\.googleapis\.com\/token/);
+  assert.match(shown.stdout, /oauth2\.googleapis\.com\/revoke/);
+  assert.match(shown.stdout, /mail\.google\.com/);
+  const missing = sb.jerk(['gmail', 'get']);
+  assert.equal(missing.status, 3);
+  assert.match(missing.stderr, /jerk gmail create/);
+});
+
 test('a user file replaces a built-in provider as a unit', () => {
   const sb = sandbox();
   sb.writeUser(
@@ -84,7 +99,7 @@ test('a user file replaces a built-in provider as a unit', () => {
   assert.equal(github.requires, null);
   const check = sb.jerk(['config', 'check']);
   assert.equal(check.status, 0);
-  assert.equal(check.stdout, 'ok: 7 providers (6 built-in, 1 user)\n');
+  assert.equal(check.stdout, 'ok: 12 providers (11 built-in, 1 user)\n');
 });
 
 test('config check reports every problem and exits 2', () => {
