@@ -1,5 +1,5 @@
 name: Toolchain
-description: Rust from rust-toolchain.toml, plus the C toolchain the vendored OpenSSL build needs on Linux
+description: Rust from rust-toolchain.toml, with rustup installed first where the runner has none
 runs:
   using: composite
   steps:
@@ -12,14 +12,3 @@ runs:
           export PATH="$HOME/.cargo/bin:$PATH"
         fi
         rustup show active-toolchain || rustup toolchain install
-
-    - name: C toolchain
-      if: runner.os == 'Linux'
-      shell: bash
-      run: |
-        missing=
-        for tool in cc make perl; do command -v "$tool" >/dev/null || missing=1; done
-        if [ -n "$missing" ]; then
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends build-essential perl
-        fi

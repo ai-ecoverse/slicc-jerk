@@ -242,17 +242,6 @@ jobs:
             FAKE_VERSION=0.99.0 sh /w/scripts/test-install.sh /w/_test_assets
           '
 
-  probe:
-    needs: runner
-    runs-on: ${{ needs.runner.outputs.runner }}
-    steps:
-      - run: |
-          uname -a; id; cat /etc/os-release; nproc; free -g; df -h "$RUNNER_TEMP" /tmp
-          for t in rustup cargo cc gcc make perl python3 docker file shellcheck sudo git curl node npm xz busybox wget; do printf '%s: %s\n' "$t" "$(command -v $t || echo MISSING)"; done
-          sudo -n true && echo SUDO_OK || echo NO_SUDO
-          docker info || true
-          ls ~/.npm 2>/dev/null | head; echo "$PATH"
-
   ci:
     if: always()
     needs: [runner, lint, test, reproducible-wasm, test-installer, test-installer-macos, test-installer-alpine]
