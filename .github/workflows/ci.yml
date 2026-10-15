@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+  merge_group:
   push:
     branches: [main]
 
@@ -36,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest","windows-latest"]') || fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') }}
+        os: ${{ github.event_name != 'push' && fromJSON('["ubuntu-latest","windows-latest"]') || fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -133,7 +134,7 @@ jobs:
         run: FAKE_VERSION=0.99.0 sh scripts/test-install.sh _test_assets
 
   test-installer-macos:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push'
     runs-on: macos-latest
     timeout-minutes: 10
     env:
@@ -181,3 +182,18 @@ jobs:
             apk del curl 2>/dev/null || true
             FAKE_VERSION=0.99.0 sh /w/scripts/test-install.sh /w/_test_assets
           '
+
+  ci:
+    if: always()
+    needs: [lint, test, reproducible-wasm, test-installer, test-installer-macos, test-installer-alpine]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every required job passed or was skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          for r in $RESULTS; do
+            case "$r" in success|skipped) ;; *) exit 1 ;; esac
+          done
