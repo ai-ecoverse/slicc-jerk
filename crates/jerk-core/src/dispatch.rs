@@ -295,11 +295,19 @@ pub fn fetch_from(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Result<Token, Exit> {
-    let from_env = entry.provider.env.first().and_then(|n| ctx.env.var(n));
-    if let Some(value) = from_env.filter(|_| use_env) {
+    let from_env = use_env
+        .then(|| {
+            entry
+                .provider
+                .env
+                .iter()
+                .find_map(|n| ctx.env.var(n).map(|v| v.to_string()))
+        })
+        .flatten();
+    if let Some(value) = from_env {
         return Ok(Token {
             expires_at: None,
-            value: value.to_string(),
+            value,
             fields: env_fields(entry, ctx),
             source: "env",
             scope: None,
