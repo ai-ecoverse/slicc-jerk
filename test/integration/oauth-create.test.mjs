@@ -53,6 +53,7 @@ test('create says already signed in when the grant has no recorded scope', async
     sb.writeUser(`[providers.noscope]
 env = ["NOSCOPE_TOKEN"]
 store = "file"
+params = { scope = "openid profile" }
 [providers.noscope.oauth]
 mode = "device"
 flow = "pkce"
@@ -76,6 +77,11 @@ capture = { at = "request", from = "query", param = "code" }
     assert.equal(wider.status, 0, wider.stderr);
     assert.equal(wider.stdout, 'noscope: signed in\n');
     assert.equal(server.posts.filter((p) => p.url === '/device').length, 2);
+
+    const param = await sb.jerkAsync(['noscope', 'create', '-p', 'scope=admin']);
+    assert.equal(param.status, 0, param.stderr);
+    assert.equal(param.stdout, 'noscope: signed in\n');
+    assert.equal(server.posts.filter((p) => p.url === '/device').length, 3);
   } finally {
     await server.close();
   }

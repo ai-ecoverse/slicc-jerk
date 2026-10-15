@@ -1135,8 +1135,10 @@ fn oauth_create_cmd(
     };
     let requested = flags
         .value("--scope")
-        .or(vars.get("scope").map(String::as_str));
-    let scope = requested.or(config.scope.as_deref());
+        .or(flags.params.get("scope").map(String::as_str));
+    let scope = requested
+        .or(vars.get("scope").map(String::as_str))
+        .or(config.scope.as_deref());
     let user = vars.get("user").map(String::as_str).unwrap_or("default");
     let host = ctx.oauth;
 
