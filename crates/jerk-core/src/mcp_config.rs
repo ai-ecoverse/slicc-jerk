@@ -95,12 +95,9 @@ pub fn canonical_url(raw: &str) -> Result<String, String> {
     if u.fragment().is_some() {
         return Err("the URL must not have a fragment".into());
     }
-    let loopback = match u.host() {
-        Some(url::Host::Domain(d)) => d == "localhost",
-        Some(url::Host::Ipv4(a)) => a.is_loopback(),
-        Some(url::Host::Ipv6(a)) => a.is_loopback(),
-        None => false,
-    };
+    let loopback = u
+        .host_str()
+        .is_some_and(jerk_oauth::config::is_loopback_host);
     match u.scheme() {
         "https" => Ok(u.to_string()),
         "http" if loopback => Ok(u.to_string()),
