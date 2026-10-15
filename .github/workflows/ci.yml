@@ -73,17 +73,9 @@ jobs:
 
       - uses: ./.github/actions/toolchain
 
-      - name: shellcheck
-        env:
-          VERSION: v0.11.0
-          SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
-        run: |
-          command -v shellcheck >/dev/null && exit 0
-          tarball="$RUNNER_TEMP/shellcheck.tar.xz"
-          curl -fsSL -o "$tarball" "https://github.com/koalaman/shellcheck/releases/download/$VERSION/shellcheck-$VERSION.linux.x86_64.tar.xz"
-          echo "$SHA256  $tarball" | sha256sum -c -
-          tar -xJf "$tarball" -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/shellcheck-$VERSION" >> "$GITHUB_PATH"
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8
+        with:
+          tool: shellcheck
 
       - run: npm ci
 
