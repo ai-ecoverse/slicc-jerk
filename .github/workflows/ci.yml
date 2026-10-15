@@ -14,8 +14,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  runner:
+    runs-on: ${{ vars.CERT_LIGHT_RUNNER || vars.CERT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+    steps:
+      - id: pick
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        env:
+          FORCED: ${{ vars.CI_RUNNER }}
+          POOL: ${{ vars.CERT_RUNNER || 'cloud-run-bench' }}
+        with:
+          script: |
+            const hosted = 'ubuntu-latest';
+            const pick = async (runner, why) => {
+              core.setOutput('runner', runner);
+              await core.summary.addRaw(`runner: ${runner} (${why})\n`).write();
+            };
+            if (process.env.FORCED) return await pick(process.env.FORCED, 'vars.CI_RUNNER');
+            const pool = process.env.POOL;
+            const { owner, repo } = context.repo;
+            if (context.eventName === 'pull_request') {
+              const head = context.payload.pull_request.head.repo;
+              const same = head && head.full_name === `${owner}/${repo}`;
+              return same ? await pick(pool, 'same-repo PR') : await pick(hosted, 'fork PR');
+            }
+            if (context.eventName === 'merge_group') {
+              const base = context.payload.merge_group.base_ref.replace('refs/heads/', '');
+              const q = await github.graphql(
+                `query($o:String!,$n:String!,$b:String!){repository(owner:$o,name:$n){mergeQueue(branch:$b){entries(first:100){nodes{pullRequest{number isCrossRepository}}}}}}`,
+                { o: owner, n: repo, b: base }
+              );
+              const entries = q.repository.mergeQueue?.entries?.nodes ?? [];
+              const forks = entries.filter((e) => e.pullRequest?.isCrossRepository !== false);
+              return forks.length === 0
+                ? await pick(pool, `merge group, ${entries.length} same-repo entries`)
+                : await pick(hosted, `merge group with a fork or unknown PR: ${forks.map((e) => e.pullRequest?.number).join(', ')}`);
+            }
+            await pick(hosted, context.eventName);
+
   lint:
-    runs-on: ubuntu-latest
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.runner }}
     timeout-minutes: 15
     env:
       LEFTHOOK: '0'
@@ -27,18 +71,31 @@ jobs:
           node-version: 24
           cache: npm
 
-      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: ./.github/actions/toolchain
+
+      - name: shellcheck
+        env:
+          VERSION: v0.11.0
+          SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          command -v shellcheck >/dev/null && exit 0
+          tarball="$RUNNER_TEMP/shellcheck.tar.xz"
+          curl -fsSL -o "$tarball" "https://github.com/koalaman/shellcheck/releases/download/$VERSION/shellcheck-$VERSION.linux.x86_64.tar.xz"
+          echo "$SHA256  $tarball" | sha256sum -c -
+          tar -xJf "$tarball" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-$VERSION" >> "$GITHUB_PATH"
 
       - run: npm ci
 
       - run: npm run lint
 
   test:
+    needs: runner
     strategy:
       fail-fast: false
       matrix:
         os: ${{ github.event_name != 'push' && fromJSON('["ubuntu-latest","windows-latest"]') || fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && needs.runner.outputs.runner || matrix.os }}
     timeout-minutes: 20
     env:
       LEFTHOOK: '0'
@@ -50,7 +107,7 @@ jobs:
           node-version: 24
           cache: npm
 
-      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: ./.github/actions/toolchain
 
       - run: cargo install wasm-bindgen-cli@0.2.129
 
@@ -63,7 +120,8 @@ jobs:
       - run: npm test
 
   reproducible-wasm:
-    runs-on: ubuntu-latest
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.runner }}
     timeout-minutes: 15
     env:
       LEFTHOOK: '0'
@@ -75,7 +133,7 @@ jobs:
           node-version: 24
           cache: npm
 
-      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: ./.github/actions/toolchain
 
       - run: cargo install wasm-bindgen-cli@0.2.129
 
@@ -112,7 +170,8 @@ jobs:
           retention-days: 7
 
   test-installer:
-    runs-on: ubuntu-latest
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.runner }}
     timeout-minutes: 10
     env:
       LEFTHOOK: '0'
@@ -183,10 +242,21 @@ jobs:
             FAKE_VERSION=0.99.0 sh /w/scripts/test-install.sh /w/_test_assets
           '
 
+  probe:
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.runner }}
+    steps:
+      - run: |
+          uname -a; id; cat /etc/os-release; nproc; free -g; df -h "$RUNNER_TEMP" /tmp
+          for t in rustup cargo cc gcc make perl python3 docker file shellcheck sudo git curl node npm xz busybox wget; do printf '%s: %s\n' "$t" "$(command -v $t || echo MISSING)"; done
+          sudo -n true && echo SUDO_OK || echo NO_SUDO
+          docker info || true
+          ls ~/.npm 2>/dev/null | head; echo "$PATH"
+
   ci:
     if: always()
-    needs: [lint, test, reproducible-wasm, test-installer, test-installer-macos, test-installer-alpine]
-    runs-on: ubuntu-latest
+    needs: [runner, lint, test, reproducible-wasm, test-installer, test-installer-macos, test-installer-alpine]
+    runs-on: ${{ needs.runner.outputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Every required job passed or was skipped
