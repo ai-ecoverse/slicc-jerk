@@ -5,6 +5,7 @@ use crate::exit::Exit;
 use crate::run::{Opts, Outcome};
 use crate::{state, time, which};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 pub const ENCRYPTING: [&str; 9] = [
@@ -73,13 +74,21 @@ pub fn lease(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>)
         }
         _ => None,
     };
-    let (value, upstream, expires_at) = match minter {
+    let (creds, upstream, expires_at) = match minter {
         Some(verb) => match mint_token(entry, &verb, &vars, false, ctx, io) {
-            Ok((value, id)) => (value, id, None),
+            Ok((value, id)) => {
+                let creds: BTreeMap<String, String> = entry
+                    .provider
+                    .env
+                    .iter()
+                    .map(|name| (name.clone(), value.clone()))
+                    .collect();
+                (creds, id, None)
+            }
             Err(code) => return code,
         },
         None => match fetch(entry, &vars, ctx, io) {
-            Ok(token) => (token.value, None, token.expires_at),
+            Ok(token) => (token.credentials(entry), None, token.expires_at),
             Err(code) => return code,
         },
     };
@@ -108,11 +117,9 @@ pub fn lease(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>)
         (None, false) => {}
     }
     let until = (ctx.now + duration).min(expires_at.unwrap_or(u64::MAX));
-    let credentials: serde_json::Map<String, serde_json::Value> = entry
-        .provider
-        .env
-        .iter()
-        .map(|name| (name.clone(), json!(value)))
+    let credentials: serde_json::Map<String, serde_json::Value> = creds
+        .into_iter()
+        .map(|(name, value)| (name, json!(value)))
         .collect();
     let doc = json!({
         "credentials": credentials,
@@ -352,6 +359,15 @@ pub fn sync(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
         Ok(token) => token,
         Err(code) => return code,
     };
+    let Some(value) = token.value_for(secret, entry) else {
+        let _ = writeln!(
+            io.err,
+            "jerk: {}: no value for {secret}; use one of {}",
+            entry.id,
+            entry.provider.env.join(", ")
+        );
+        return Exit::Error;
+    };
     let mut set = vec![
         "set".to_string(),
         secret.to_string(),
@@ -361,7 +377,7 @@ pub fn sync(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
     if flags.has("--global") {
         set.push("--global".to_string());
     }
-    if let Err(code) = run_fnox(entry, &fnox, &set, Some(&token.value), ctx, io) {
+    if let Err(code) = run_fnox(entry, &fnox, &set, Some(value), ctx, io) {
         return code;
     }
     if let Err(e) = state::touch_synced(ctx.env, ctx.now) {

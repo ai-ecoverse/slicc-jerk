@@ -31,6 +31,8 @@ pub struct Verb {
     pub read: Option<Read>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parse: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expiry: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -613,9 +615,43 @@ fn validate_verb(
             ));
         }
     }
+    if !verb.fields.is_empty() {
+        if name != "get" {
+            messages.push(format!("{label}: fields only applies to get"));
+        }
+        if verb
+            .parse
+            .as_deref()
+            .is_none_or(|p| !p.starts_with("json:"))
+        {
+            messages.push(format!("{label}: fields needs parse = \"json:<pointer>\""));
+        }
+        let primary = provider.env.first().map(String::as_str);
+        for (env_name, parse) in &verb.fields {
+            if !valid_env(env_name) {
+                messages.push(format!(
+                    "{label}: fields key {env_name:?} is not a valid environment variable name"
+                ));
+            } else if !provider.env.iter().any(|e| e == env_name) {
+                messages.push(format!("{label}: fields key {env_name} is not in env"));
+            } else if primary == Some(env_name.as_str()) {
+                messages.push(format!(
+                    "{label}: fields key {env_name} is the primary env; use parse for it"
+                ));
+            }
+            if !valid_parse(parse) || !parse.starts_with("json:") {
+                messages.push(format!(
+                    "{label}: fields.{env_name} {parse:?} must be json:<pointer>"
+                ));
+            }
+        }
+    }
     if let Some(expiry) = &verb.expiry {
-        if expiry != "jwt" {
-            messages.push(format!("{label}: expiry {expiry:?} must be jwt"));
+        let ok = expiry == "jwt" || (expiry.starts_with("json:") && valid_parse(expiry));
+        if !ok {
+            messages.push(format!(
+                "{label}: expiry {expiry:?} must be jwt or json:<pointer>"
+            ));
         }
     }
     if let Some(timeout) = &verb.timeout {
@@ -632,6 +668,14 @@ fn validate_verb(
     }
     if let Some(parse) = &verb.parse {
         texts.push(parse);
+    }
+    for parse in verb.fields.values() {
+        texts.push(parse);
+    }
+    if let Some(expiry) = &verb.expiry {
+        if expiry.starts_with("json:") {
+            texts.push(expiry);
+        }
     }
     for text in texts {
         match placeholders(text) {
