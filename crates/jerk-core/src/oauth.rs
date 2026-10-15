@@ -123,6 +123,81 @@ fn validate_config(config: &OAuthConfig) -> Result<(), OAuthError> {
     }
 }
 
+pub(crate) fn token_from_capture(
+    config: &OAuthConfig,
+    captured: &jerk_oauth::capture::CaptureResult,
+    verifier: Option<&str>,
+    scope: Option<&str>,
+    now_secs: u64,
+    http_post: &dyn Fn(&str, &str) -> Result<String, String>,
+) -> Result<Token, OAuthError> {
+    use jerk_oauth::config::Flow;
+    use jerk_oauth::exchange;
+    use jerk_oauth::expiry;
+
+    match config.flow {
+        Flow::Pkce | Flow::Code => exchange_authorization_code(
+            config,
+            &captured.value,
+            &config.redirect_uri,
+            verifier,
+            now_secs,
+            http_post,
+        ),
+        Flow::Exchange => {
+            let exchange_cfg = config.exchange.as_ref().ok_or_else(|| OAuthError {
+                exit: Exit::Usage,
+                message: "exchange required for exchange flow".into(),
+            })?;
+            let token_url = config.token_url.as_deref().ok_or_else(|| OAuthError {
+                exit: Exit::Usage,
+                message: "token_url required for exchange flow".into(),
+            })?;
+            let actual_scope = scope.or(config.scope.as_deref());
+            let body = exchange::build_configured_exchange_body(
+                exchange_cfg,
+                &captured.value,
+                &config.client_id,
+                &config.redirect_uri,
+                actual_scope,
+            );
+            let form_body = exchange::encode_form_body(&body);
+            let response = http_post(token_url, &form_body).map_err(|e| OAuthError {
+                exit: Exit::Error,
+                message: e,
+            })?;
+            let token_response =
+                exchange::parse_token_response(&response).map_err(|e| OAuthError {
+                    exit: Exit::Error,
+                    message: e.to_string(),
+                })?;
+            let expires_at = expiry::compute_expiry(now_secs, token_response.expires_in, None);
+            Ok(Token {
+                access_token: token_response.access_token.clone(),
+                refresh_token: token_response.refresh_token.clone(),
+                expires_at,
+                scope: token_response.scope.clone(),
+                token_type: Some(token_response.token_type.clone()),
+            })
+        }
+        Flow::Implicit => {
+            let expires_in = captured
+                .params
+                .get(config.expires_param.as_deref().unwrap_or("expires_in"))
+                .and_then(|v| v.parse::<u64>().ok());
+            let expires_at = expiry::compute_expiry(now_secs, expires_in, None)
+                .or_else(|| crate::extract::jwt_expiry(&captured.value));
+            Ok(Token {
+                access_token: captured.value.clone(),
+                refresh_token: None,
+                expires_at,
+                scope: captured.params.get("scope").cloned(),
+                token_type: captured.params.get("token_type").cloned(),
+            })
+        }
+    }
+}
+
 pub fn oauth_create(
     config: &OAuthConfig,
     scope: Option<&str>,
@@ -346,6 +421,7 @@ pub(crate) fn exchange_authorization_code(
         message: match config.flow {
             Flow::Pkce => "token_url required for pkce flow".into(),
             Flow::Code => "token_url required for code flow".into(),
+            Flow::Exchange => "token_url required for exchange flow".into(),
             Flow::Implicit => "token_url required".into(),
         },
     })?;

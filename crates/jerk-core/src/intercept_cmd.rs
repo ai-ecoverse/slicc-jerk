@@ -86,6 +86,7 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
             isolate: None,
             revoke_url: None,
             refresh_env: None,
+            exchange: None,
         }
     };
 

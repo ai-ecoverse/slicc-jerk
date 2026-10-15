@@ -101,6 +101,41 @@ pub fn build_code_exchange_body(
     pairs
 }
 
+pub fn build_configured_exchange_body(
+    exchange: &crate::config::Exchange,
+    value: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    scope: Option<&str>,
+) -> Vec<(String, String)> {
+    let scope = scope.unwrap_or("");
+    let vars = [
+        ("value", value),
+        ("client_id", client_id),
+        ("redirect_uri", redirect_uri),
+        ("scope", scope),
+    ];
+    let mut pairs = vec![
+        ("grant_type".into(), exchange.grant_type.clone()),
+        ("client_id".into(), client_id.into()),
+    ];
+    for (key, template) in &exchange.body {
+        if key == "grant_type" || key == "client_id" {
+            continue;
+        }
+        pairs.push((key.clone(), render_plain(template, &vars)));
+    }
+    pairs
+}
+
+fn render_plain(template: &str, vars: &[(&str, &str)]) -> String {
+    let mut result = template.to_string();
+    for &(name, value) in vars {
+        result = result.replace(&format!("{{{name}}}"), value);
+    }
+    result
+}
+
 pub fn build_refresh_body(refresh_token: &str, client_id: &str) -> Vec<(String, String)> {
     vec![
         ("grant_type".into(), "refresh_token".into()),

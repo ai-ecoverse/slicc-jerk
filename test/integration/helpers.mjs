@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -70,10 +70,36 @@ export function sandbox() {
     jerk(args, extra = {}) {
       return jerk(args, { env: { ...env, ...extra } });
     },
+    jerkAsync(args, extra = {}) {
+      return jerkAsync(args, { env: { ...env, ...extra } });
+    },
   };
 }
 
 export function jerk(args, options = {}) {
   if (!existsSync(binary)) throw new Error(`build jerk first: ${binary} is missing`);
   return spawnSync(binary, args, { encoding: 'utf8', ...options });
+}
+
+export function jerkAsync(args, options = {}) {
+  if (!existsSync(binary)) throw new Error(`build jerk first: ${binary} is missing`);
+  return new Promise((resolve) => {
+    const child = spawn(binary, args, { ...options });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('error', (err) => {
+      resolve({ status: null, signal: null, error: err, stdout, stderr });
+    });
+    child.on('close', (status, signal) => {
+      resolve({ status, signal, stdout, stderr });
+    });
+  });
 }

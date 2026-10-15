@@ -1,10 +1,9 @@
 use crate::exit::Exit;
-use crate::oauth::{OAuthError, Token};
+use crate::oauth::{self, OAuthError, Token};
 use cdp_client::cdp::Cdp;
 use cdp_client::fetch::{self, Decision, Fulfill, Interception, Overrides, Pattern};
 use jerk_oauth::capture;
 use jerk_oauth::config::{CaptureAt, CaptureFrom, Flow, OAuthConfig};
-use jerk_oauth::expiry;
 use jerk_oauth::pkce;
 use jerk_oauth::relay;
 use jerk_oauth::rewrite;
@@ -128,11 +127,16 @@ pub fn run(
         Some(r) => Some(relay::relay_redirect_target(r)),
         None => Some(config.redirect_uri.clone()),
     };
+    let expected_state = if jerk_oauth::config::expects_state(&config.authorize_url) {
+        Some(state.as_str())
+    } else {
+        None
+    };
     let result = capture::parse_redirect(
         &captured,
         &config.capture.from,
         &config.capture.param,
-        Some(&state),
+        expected_state,
         if config.capture.at == CaptureAt::Network {
             None
         } else {
@@ -155,29 +159,14 @@ pub fn run(
         }
     }
 
-    if matches!(config.flow, Flow::Pkce | Flow::Code) {
-        crate::oauth::exchange_authorization_code(
-            config,
-            &result.value,
-            &config.redirect_uri,
-            verifier.as_deref(),
-            now_secs,
-            http_post,
-        )
-    } else {
-        let expires_in = result
-            .params
-            .get(config.expires_param.as_deref().unwrap_or("expires_in"))
-            .and_then(|v| v.parse::<u64>().ok());
-        let expires_at = expiry::compute_expiry(now_secs, expires_in, None);
-        Ok(Token {
-            access_token: result.value,
-            refresh_token: None,
-            expires_at,
-            scope: result.params.get("scope").cloned(),
-            token_type: result.params.get("token_type").cloned(),
-        })
-    }
+    oauth::token_from_capture(
+        config,
+        &result,
+        verifier.as_deref(),
+        scope,
+        now_secs,
+        http_post,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

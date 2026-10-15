@@ -340,11 +340,16 @@ pub fn complete_sign_in(
         None => cfg.redirect_uri.clone(),
     };
 
+    let expected_state = if config::expects_state(&cfg.authorize_url) {
+        Some(pending.state.as_str())
+    } else {
+        None
+    };
     let result = capture::parse_redirect(
         captured_url,
         &cfg.capture.from,
         &cfg.capture.param,
-        Some(&pending.state),
+        expected_state,
         Some(&redirect_check),
         None,
     )
@@ -385,14 +390,14 @@ pub fn complete_sign_in(
                     match pending.flow {
                         Flow::Pkce => "token_url required for pkce",
                         Flow::Code => "token_url required for code",
+                        Flow::Exchange => "token_url required for exchange",
                         Flow::Implicit => "token_url required",
                     },
                 )
             })?;
             let verifier = match pending.flow {
                 Flow::Pkce => Some(pending.verifier.as_str()),
-                Flow::Code => None,
-                Flow::Implicit => None,
+                Flow::Code | Flow::Exchange | Flow::Implicit => None,
             };
             let body_pairs = exchange::build_code_exchange_body(
                 &result.value,
@@ -426,6 +431,28 @@ pub fn complete_sign_in(
             if let Some(s) = result.params.get("scope") {
                 js_sys::Reflect::set(&obj, &"scope".into(), &s.clone().into()).ok();
             }
+            Ok(obj.into())
+        }
+        Flow::Exchange => {
+            let exchange_cfg = cfg.exchange.as_ref().ok_or_else(|| {
+                make_error("config_invalid", "exchange required for exchange flow")
+            })?;
+            let token_url = cfg.token_url.as_deref().ok_or_else(|| {
+                make_error("config_invalid", "token_url required for exchange flow")
+            })?;
+            let body_pairs = exchange::build_configured_exchange_body(
+                exchange_cfg,
+                &result.value,
+                &cfg.client_id,
+                &cfg.redirect_uri,
+                cfg.scope.as_deref(),
+            );
+            let body = exchange::encode_form_body(&body_pairs);
+
+            let obj = js_sys::Object::new();
+            js_sys::Reflect::set(&obj, &"kind".into(), &"exchange".into()).ok();
+            js_sys::Reflect::set(&obj, &"url".into(), &token_url.into()).ok();
+            js_sys::Reflect::set(&obj, &"body".into(), &body.into()).ok();
             Ok(obj.into())
         }
     }
