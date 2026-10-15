@@ -329,6 +329,52 @@ fn oauth_device_create(
     })
 }
 
+pub(crate) fn exchange_authorization_code(
+    config: &OAuthConfig,
+    code: &str,
+    redirect_uri: &str,
+    verifier: Option<&str>,
+    now_secs: u64,
+    http_post: &dyn Fn(&str, &str) -> Result<String, String>,
+) -> Result<Token, OAuthError> {
+    use jerk_oauth::config::Flow;
+    use jerk_oauth::exchange;
+    use jerk_oauth::expiry;
+
+    let token_url = config.token_url.as_deref().ok_or_else(|| OAuthError {
+        exit: Exit::Usage,
+        message: match config.flow {
+            Flow::Pkce => "token_url required for pkce flow".into(),
+            Flow::Code => "token_url required for code flow".into(),
+            Flow::Implicit => "token_url required".into(),
+        },
+    })?;
+    let body = exchange::build_code_exchange_body(
+        code,
+        &config.client_id,
+        redirect_uri,
+        verifier,
+        config.client_secret.as_deref(),
+    );
+    let form_body = exchange::encode_form_body(&body);
+    let response = http_post(token_url, &form_body).map_err(|e| OAuthError {
+        exit: Exit::Error,
+        message: e,
+    })?;
+    let token_response = exchange::parse_token_response(&response).map_err(|e| OAuthError {
+        exit: Exit::Error,
+        message: e.to_string(),
+    })?;
+    let expires_at = expiry::compute_expiry(now_secs, token_response.expires_in, None);
+    Ok(Token {
+        access_token: token_response.access_token.clone(),
+        refresh_token: token_response.refresh_token.clone(),
+        expires_at,
+        scope: token_response.scope.clone(),
+        token_type: Some(token_response.token_type.clone()),
+    })
+}
+
 pub fn oauth_refresh(
     config: &OAuthConfig,
     refresh_token: &str,
@@ -341,14 +387,23 @@ pub fn oauth_refresh(
         exit: Exit::Error,
         message: "no token_url for refresh".into(),
     })?;
-    let body = jerk_oauth::exchange::build_refresh_body(refresh_token, &config.client_id);
-    let form_body = jerk_oauth::exchange::encode_form_body(&body);
-    let response = host
-        .http_post(token_url, &form_body)
+    let (url, form_body) =
+        jerk_oauth::exchange::refresh_request(&jerk_oauth::exchange::RefreshParams {
+            token_url,
+            client_id: &config.client_id,
+            refresh_token,
+            scope: None,
+            resource: None,
+            client_secret: config.client_secret.as_deref(),
+        })
         .map_err(|e| OAuthError {
             exit: Exit::Error,
             message: e,
         })?;
+    let response = host.http_post(&url, &form_body).map_err(|e| OAuthError {
+        exit: Exit::Error,
+        message: e,
+    })?;
     let parsed = jerk_oauth::exchange::parse_token_response(&response).map_err(|e| {
         let exit = match &e {
             jerk_oauth::exchange::ExchangeError::IdpError { error, .. }

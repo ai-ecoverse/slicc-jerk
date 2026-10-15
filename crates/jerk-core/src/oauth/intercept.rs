@@ -4,7 +4,6 @@ use cdp_client::cdp::Cdp;
 use cdp_client::fetch::{self, Decision, Fulfill, Interception, Overrides, Pattern};
 use jerk_oauth::capture;
 use jerk_oauth::config::{CaptureAt, CaptureFrom, Flow, OAuthConfig};
-use jerk_oauth::exchange;
 use jerk_oauth::expiry;
 use jerk_oauth::pkce;
 use jerk_oauth::relay;
@@ -156,35 +155,15 @@ pub fn run(
         }
     }
 
-    if config.flow == Flow::Pkce {
-        let verifier = verifier.as_deref().unwrap();
-        let token_url = config.token_url.as_deref().ok_or_else(|| OAuthError {
-            exit: Exit::Usage,
-            message: "token_url required for pkce flow".into(),
-        })?;
-        let body = exchange::build_authorization_code_body(
+    if matches!(config.flow, Flow::Pkce | Flow::Code) {
+        crate::oauth::exchange_authorization_code(
+            config,
             &result.value,
-            &config.client_id,
             &config.redirect_uri,
-            verifier,
-        );
-        let form_body = exchange::encode_form_body(&body);
-        let response = http_post(token_url, &form_body).map_err(|e| OAuthError {
-            exit: Exit::Error,
-            message: e,
-        })?;
-        let token_response = exchange::parse_token_response(&response).map_err(|e| OAuthError {
-            exit: Exit::Error,
-            message: e.to_string(),
-        })?;
-        let expires_at = expiry::compute_expiry(now_secs, token_response.expires_in, None);
-        Ok(Token {
-            access_token: token_response.access_token.clone(),
-            refresh_token: token_response.refresh_token.clone(),
-            expires_at,
-            scope: token_response.scope.clone(),
-            token_type: Some(token_response.token_type.clone()),
-        })
+            verifier.as_deref(),
+            now_secs,
+            http_post,
+        )
     } else {
         let expires_in = result
             .params
