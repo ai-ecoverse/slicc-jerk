@@ -41,6 +41,7 @@ jerk <provider> lease
 jerk <provider> drop --lease
 jerk <provider> sync --fnox <SECRET> --provider <fnox provider> [--global]
 jerk mcp:<server> create [--scope S] [--no-browser] | get | drop | import-pi
+jerk mcp:url:<url> create [--scope S] [--no-browser] | get | drop | import-pi
 jerk config path [--json] | check | show <provider> | fnox [--proxy] [<provider>...]
 jerk intercept --authorize-url U --redirect R [--rewrite m=k=v]... [--pkce] [--exchange --token-url T --client-id C] [--cdp URL]
 jerk intercept --from-file F.toml
@@ -129,7 +130,7 @@ Commands are argument lists, never shell strings, and the CLI runs without the p
 | `requires` | the CLI that must be on `PATH` |
 | `params` | template defaults, overridable with `-p` |
 | `max_age` | expiry to assume when the CLI doesn't report one, such as `50m` |
-| `store` | `keyring` (default) or `file`, for grants jerk keeps itself |
+| `store` | `keyring` (default) or `file`, for grants jerk keeps itself; `SLICC_JERK_STORE` sets the default |
 | `lease_via` | `get` (default) or `create`, to mint a fresh token per fnox lease |
 | `locked` | system files only: later layers can't replace this provider |
 | `get`, `list`, `scopes`, `user`, `create`, `drop` | a command, or an array of commands tried in order (see [Fallback chains](#fallback-chains)) |
@@ -262,13 +263,25 @@ jerk's own OAuth grant is separate from the CLIs' sign-ins. `wrangler login` doe
 
 ### MCP servers
 
-Every server with a `url` in pi's `~/.pi/agent/mcp.json` (or `PI_MCP_CONFIG`) is a provider named `mcp:<server>`. A server given only by URL is `mcp:url:<origin+path>`. The token's variable is `MCP_<SERVER>_TOKEN`.
+Every server with a `url` in pi's `~/.pi/agent/mcp.json` (or `PI_MCP_CONFIG`) is a provider named `mcp:<server>`, and its token's variable is `MCP_<SERVER>_TOKEN`. Server names starting with `url:` are skipped.
 
 ```sh
 jerk mcp:linear create            # discovers the authorization server, registers a client, signs in
 jerk mcp:linear get --reveal --json
 jerk mcp:linear import-pi         # copy an existing sign-in from pi's mcp-auth.json
 ```
+
+A server can also be named by its URL alone: `mcp:url:<url>`. It takes the same commands and flags, and `jerk config show` works for it too.
+
+```sh
+jerk mcp:url:https://mcp.example.com/mcp create
+jerk mcp:url:HTTPS://MCP.Example.com:443/mcp get   # the same provider
+```
+
+- **Canonical form.** The URL must be `https`, or `http` on loopback (`localhost`, `127.0.0.1`, `::1`). Userinfo, a query or a fragment exit 2, and the error never repeats the URL. The scheme and host are lower-cased, the default port is dropped and an empty path becomes `/`; the rest of the path is kept, including a trailing slash. jerk prints the canonical id, `mcp:url:https://mcp.example.com/mcp`.
+- **Same URL as an `mcp.json` entry.** When an entry's `url` has the same canonical form, `mcp:url:` is that entry: its `oauth` fields, its variable and its grant. If several entries share the URL, the first by name wins, and `config show` lists the others.
+- **URL only.** Otherwise there are no `oauth` fields: the client is mcpcat's metadata document, else dynamic registration, and the callback is the default one. There is no variable, so `get` never reads the environment, and `get --json` reports `"env": []`. The grant goes in the OS keyring under `slicc-jerk` / `mcp:url:<canonical url>/url`, which can't clash with `mcp:<server>`. `import-pi` looks the URL up in `mcp-auth.json` (pi's legacy URL key, else a single `<server>|<url>` key) and exits 5 when several pi servers use it.
+- `jerk list` doesn't show URL-only ids, because they aren't configured.
 
 `create` follows the MCP authorization spec:
 - it finds the authorization server through protected-resource metadata (RFC 9728) and its metadata (RFC 8414);

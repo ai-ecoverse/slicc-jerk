@@ -146,6 +146,7 @@ struct File {
 pub enum Layer {
     BuiltIn,
     Mcp,
+    Url,
     System,
     User,
     Explicit,
@@ -156,6 +157,7 @@ impl Layer {
         match self {
             Layer::BuiltIn => "built-in",
             Layer::Mcp => "mcp.json",
+            Layer::Url => "mcp:url",
             Layer::System => "system",
             Layer::User => "user",
             Layer::Explicit => "explicit",

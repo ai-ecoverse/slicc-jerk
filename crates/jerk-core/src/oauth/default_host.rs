@@ -10,8 +10,12 @@ impl OAuthHost for DefaultOAuthHost {
     }
 
     fn grants(&self, store: Option<&str>) -> Box<dyn Grants> {
-        if store == Some("file") {
-            let dir = crate::paths::Env::from_process().state_dir();
+        let env = crate::paths::Env::from_process();
+        let store = store
+            .map(String::from)
+            .or_else(|| env.var("SLICC_JERK_STORE").map(String::from));
+        if store.as_deref() == Some("file") {
+            let dir = env.state_dir();
             Box::new(crate::grants::file_store::FileStore::new(dir))
         } else {
             Box::new(crate::grants::keyring_store::KeyringStore::new())

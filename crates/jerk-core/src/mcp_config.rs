@@ -78,6 +78,95 @@ pub fn mcp_id(name: &str) -> String {
     format!("mcp:{name}")
 }
 
+pub const URL_PREFIX: &str = "mcp:url:";
+
+pub fn is_url_id(id: &str) -> bool {
+    id.starts_with(URL_PREFIX)
+}
+
+pub fn canonical_url(raw: &str) -> Result<String, String> {
+    let u = url::Url::parse(raw).map_err(|e| format!("not an absolute URL ({e})"))?;
+    if !u.username().is_empty() || u.password().is_some() {
+        return Err("the URL must not contain userinfo".into());
+    }
+    if u.query().is_some() {
+        return Err("the URL must not have a query".into());
+    }
+    if u.fragment().is_some() {
+        return Err("the URL must not have a fragment".into());
+    }
+    let loopback = u
+        .host_str()
+        .is_some_and(jerk_oauth::config::is_loopback_host);
+    match u.scheme() {
+        "https" => Ok(u.to_string()),
+        "http" if loopback => Ok(u.to_string()),
+        _ => Err("the URL must use https, or http on loopback".into()),
+    }
+}
+
+pub fn url_id(canonical: &str) -> String {
+    format!("{URL_PREFIX}{canonical}")
+}
+
+pub fn shown_id(id: &str) -> String {
+    match id.strip_prefix(URL_PREFIX).map(canonical_url) {
+        Some(Ok(canon)) => url_id(&canon),
+        Some(Err(_)) => "mcp:url".to_string(),
+        None => id.to_string(),
+    }
+}
+
+#[derive(Debug)]
+pub struct UrlResolution {
+    pub entry: Entry,
+    pub requested: String,
+    pub matches: Vec<String>,
+}
+
+pub fn resolve_url_id(
+    id: &str,
+    providers: &BTreeMap<String, Entry>,
+) -> Result<UrlResolution, String> {
+    let raw = id.strip_prefix(URL_PREFIX).unwrap_or(id);
+    let canon = canonical_url(raw).map_err(|e| format!("mcp:url: {e}"))?;
+    let requested = url_id(&canon);
+    let matches: Vec<&Entry> = providers
+        .values()
+        .filter(|e| e.provider.kind.as_deref() == Some("mcp"))
+        .filter(|e| {
+            e.provider
+                .url
+                .as_deref()
+                .and_then(|u| canonical_url(u).ok())
+                .as_deref()
+                == Some(canon.as_str())
+        })
+        .collect();
+    let ids = matches.iter().map(|e| e.id.clone()).collect();
+    let entry = match matches.first() {
+        Some(e) => (*e).clone(),
+        None => Entry {
+            id: requested.clone(),
+            provider: Provider {
+                kind: Some("mcp".into()),
+                url: Some(canon.clone()),
+                ..Provider::default()
+            },
+            source: Source {
+                layer: Layer::Url,
+                path: None,
+            },
+            oauth_config: None,
+        },
+    };
+    Ok(UrlResolution {
+        entry,
+        requested,
+        matches: ids,
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct McpProviderInfo {
     pub id: String,
@@ -124,6 +213,15 @@ pub fn load_mcp_providers(env: &Env) -> (Vec<Entry>, Vec<crate::config::Problem>
     };
     let servers = mcp.mcp_servers.unwrap_or_default();
     for (name, server) in servers {
+        if name.starts_with("url:") {
+            problems.push(crate::config::Problem {
+                level: crate::config::Level::Warning,
+                source: path.display().to_string(),
+                provider: None,
+                message: format!("skipping server {name:?}: names starting with url: are reserved for mcp:url: ids"),
+            });
+            continue;
+        }
         let is_http = server
             .r#type
             .as_deref()

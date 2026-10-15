@@ -15,7 +15,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
         None => return err(io, &entry.id, "missing url"),
     };
     if let Some(value) = entry.provider.env.iter().find_map(|n| ctx.env.var(n)) {
-        return emit_token(value, "env", None, None, &flags, &entry.id, io);
+        return emit_token(value, "env", None, None, &flags, entry, io);
     }
     let host = ctx.oauth;
     let grants = host.grants(entry.provider.store.as_deref());
@@ -43,7 +43,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
                 grant.expires_at.map(crate::time::rfc3339).as_deref(),
                 grant.scope.as_deref(),
                 &flags,
-                &entry.id,
+                entry,
                 io,
             );
         }
@@ -103,7 +103,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
                     expires_at.map(crate::time::rfc3339).as_deref(),
                     scope_val.as_deref(),
                     &flags,
-                    &entry.id,
+                    entry,
                     io,
                 )
             }
@@ -125,15 +125,15 @@ fn emit_token(
     expires_at: Option<&str>,
     scope: Option<&str>,
     flags: &crate::dispatch::Flags,
-    id: &str,
+    entry: &Entry,
     io: &mut Io<'_>,
 ) -> Exit {
     let masked = crate::mask::mask(token);
     let reveal = flags.has("--reveal");
     if flags.has("--json") {
         let mut doc = serde_json::json!({
-            "provider": id, "source": source, "masked": masked,
-            "expires_at": expires_at, "scopes": scope,
+            "provider": entry.id, "source": source, "masked": masked,
+            "expires_at": expires_at, "scopes": scope, "env": entry.provider.env,
         });
         if reveal {
             doc["token"] = serde_json::json!(token);
@@ -488,9 +488,19 @@ pub fn import_pi(entry: &Entry, _args: &[String], ctx: &mut Ctx<'_>, io: &mut Io
             Ok(m) => m,
             Err(e) => return err(io, &entry.id, &format!("cannot parse mcp-auth.json: {e}")),
         };
-    let ns = info.server_name.replace('-', "_");
-    let primary_key = format!("mcp__{ns}|{}", info.url);
-    let state = states.get(&primary_key).or_else(|| states.get(&info.url));
+    let state = if crate::mcp_config::is_url_id(&info.id) {
+        match pi_state_by_url(&states, &info.url) {
+            Ok(state) => state,
+            Err(message) => {
+                let _ = writeln!(io.err, "jerk: {}: {message}", entry.id);
+                return Exit::Unsupported;
+            }
+        }
+    } else {
+        let ns = info.server_name.replace('-', "_");
+        let primary_key = format!("mcp__{ns}|{}", info.url);
+        states.get(&primary_key).or_else(|| states.get(&info.url))
+    };
     let Some(state) = state else {
         return err(
             io,
@@ -537,7 +547,35 @@ pub fn import_pi(entry: &Entry, _args: &[String], ctx: &mut Ctx<'_>, io: &mut Io
 }
 
 fn grant_account(info: &McpProviderInfo) -> String {
+    if crate::mcp_config::is_url_id(&info.id) {
+        return "url".to_string();
+    }
     format!("{}|{}", info.server_name, info.url)
+}
+
+fn pi_state_by_url<'a>(
+    states: &'a std::collections::BTreeMap<String, serde_json::Value>,
+    url: &str,
+) -> Result<Option<&'a serde_json::Value>, String> {
+    let same = |u: &str| crate::mcp_config::canonical_url(u).ok().as_deref() == Some(url);
+    if let Some((_, state)) = states.iter().find(|(k, _)| same(k)) {
+        return Ok(Some(state));
+    }
+    let named: Vec<(&str, &serde_json::Value)> = states
+        .iter()
+        .filter_map(|(k, v)| {
+            let (ns, u) = k.split_once('|')?;
+            same(u).then_some((ns, v))
+        })
+        .collect();
+    match named.as_slice() {
+        [] => Ok(None),
+        [(_, state)] => Ok(Some(*state)),
+        many => Err(format!(
+            "several pi servers in mcp-auth.json use this URL ({}); add one to mcp.json and run jerk mcp:<name> import-pi",
+            many.iter().map(|(ns, _)| *ns).collect::<Vec<_>>().join(", ")
+        )),
+    }
 }
 
 fn sign_in(io: &mut Io<'_>, id: &str) -> Exit {
@@ -600,6 +638,17 @@ fn compute_redirect_port(info: &McpProviderInfo) -> u16 {
 }
 
 fn client_cache_path(id: &str, env: &crate::paths::Env) -> std::path::PathBuf {
+    if let Some(url) = id.strip_prefix(crate::mcp_config::URL_PREFIX) {
+        use sha2::{Digest, Sha256};
+        let hex: String = Sha256::digest(url.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        return env
+            .state_dir()
+            .join("mcp-clients")
+            .join(format!("url-{hex}.json"));
+    }
     let safe: String = id
         .chars()
         .map(|c| {
