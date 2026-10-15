@@ -888,7 +888,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
             Ok(token) => token,
             Err(Exit::SignIn) if login && !signed_in => {
                 signed_in = true;
-                let code = do_create(entry, &vars, ctx, io);
+                let code = do_create(entry, &vars, &flags, ctx, io);
                 if code != Exit::Ok {
                     return code;
                 }
@@ -909,7 +909,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
         }
         if login && !signed_in {
             signed_in = true;
-            let code = do_create(entry, &vars, ctx, io);
+            let code = do_create(entry, &vars, &flags, ctx, io);
             if code != Exit::Ok {
                 return code;
             }
@@ -1023,17 +1023,16 @@ fn list_step(
     Ok(serde_json::to_string_pretty(&value).unwrap_or_default())
 }
 
-fn do_create(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit {
-    let flags = Flags::default();
+fn do_create(entry: &Entry, vars: &Vars, flags: &Flags, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit {
     if entry.oauth_config.is_some() && entry.provider.create.is_none() {
-        return oauth_create_cmd(entry, vars, &flags, ctx, io);
+        return oauth_create_cmd(entry, vars, flags, ctx, io);
     }
     let verb = match create_step(entry, vars, ctx, io) {
         Ok(verb) => verb,
         Err(code) => return code,
     };
     if verb.oauth {
-        return oauth_create_cmd(entry, vars, &flags, ctx, io);
+        return oauth_create_cmd(entry, vars, flags, ctx, io);
     }
     match run_verb(entry, "create", &verb, vars, verb.interactive, ctx, io) {
         Ok(_) => Exit::Ok,
