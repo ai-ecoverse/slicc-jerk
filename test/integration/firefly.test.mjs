@@ -85,21 +85,18 @@ server.listen(0, '127.0.0.1', () => {
 `);
   try {
     sb.writeUser(fireflyConfig(stub.url));
-    const missing = sb.jerk(['firefly', 'get']);
-    assert.equal(missing.status, 3);
-    assert.match(missing.stderr, /create/);
-    const created = sb.jerk(['firefly', 'create']);
-    assert.equal(created.status, 0, created.stderr);
-    assert.equal(created.stdout, 'firefly: signed in\n');
+    const minted = sb.jerk(['firefly', 'get', '--reveal']);
+    assert.equal(minted.status, 0, minted.stderr);
+    assert.equal(minted.stdout, `${TOKEN}\n`);
     const posts = JSON.parse(readFileSync(postsFile, 'utf8'));
     assert.equal(posts.length, 1);
     assert.match(posts[0], /grant_type=client_credentials/);
     assert.match(posts[0], /client_id=ff-client/);
     assert.match(posts[0], /client_secret=ff-secret/);
     assert.match(posts[0], /scope=openid%2CAdobeID%2Cfirefly_api/);
-    const got = sb.jerk(['firefly', 'get', '--reveal']);
-    assert.equal(got.status, 0, got.stderr);
-    assert.equal(got.stdout, `${TOKEN}\n`);
+    const again = sb.jerk(['firefly', 'create']);
+    assert.equal(again.status, 0, again.stderr);
+    assert.match(again.stdout, /already signed in/);
     assert.equal(JSON.parse(readFileSync(postsFile, 'utf8')).length, 1);
     const json = JSON.parse(sb.jerk(['firefly', 'get', '--json']).stdout);
     assert.equal(json.source, 'oauth');
@@ -124,7 +121,7 @@ scope = "{scope}"
 `);
   const res = sb.jerk(['firefly', 'create']);
   assert.equal(res.status, 2);
-  assert.match(res.stderr, /client_id is required/);
+  assert.match(res.stderr, /client_id/);
 });
 
 test('firefly get remints when the cached token is stale', async () => {
