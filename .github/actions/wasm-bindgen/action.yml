@@ -1,0 +1,15 @@
+name: wasm-bindgen
+description: The prebuilt wasm-bindgen CLI at the version of the wasm-bindgen crate in Cargo.lock
+runs:
+  using: composite
+  steps:
+    - id: version
+      shell: bash
+      run: |
+        version=$(awk '$0 == "name = \"wasm-bindgen\"" { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
+        test -n "$version"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8
+      with:
+        tool: wasm-bindgen@${{ steps.version.outputs.version }}

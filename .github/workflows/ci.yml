@@ -105,7 +105,7 @@ jobs:
 
       - uses: ./.github/actions/toolchain
 
-      - run: cargo install wasm-bindgen-cli@0.2.129
+      - uses: ./.github/actions/wasm-bindgen
 
       - run: npm ci
 
@@ -131,7 +131,7 @@ jobs:
 
       - uses: ./.github/actions/toolchain
 
-      - run: cargo install wasm-bindgen-cli@0.2.129
+      - uses: ./.github/actions/wasm-bindgen
 
       - run: npm ci
 
