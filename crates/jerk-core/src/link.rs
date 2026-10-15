@@ -120,7 +120,17 @@ fn refuse(
                 out: &mut std::io::sink(),
                 err: &mut std::io::sink(),
             };
-            Some(crate::dispatch::pick(entry, "create", chain, ctx, &mut quiet).ok())
+            Some(
+                crate::dispatch::pick(
+                    entry,
+                    "create",
+                    chain,
+                    &entry.provider.params,
+                    ctx,
+                    &mut quiet,
+                )
+                .ok(),
+            )
         }
         _ => None,
     };

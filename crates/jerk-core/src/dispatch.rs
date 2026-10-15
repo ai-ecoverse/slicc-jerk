@@ -311,9 +311,16 @@ pub fn fetch_from(
         return fetch_oauth(entry, config, vars, ctx, io);
     }
     let chain = chain.expect("validated");
-    run_chain(entry, "get", chain, Exit::SignIn, ctx, io, |verb, io| {
-        fetch_step(entry, verb, vars, ctx, io)
-    })
+    run_chain(
+        entry,
+        "get",
+        chain,
+        vars,
+        Exit::SignIn,
+        ctx,
+        io,
+        |verb, io| fetch_step(entry, verb, vars, ctx, io),
+    )
 }
 
 fn step_name(entry: &Entry, verb: &Verb) -> String {
@@ -338,7 +345,27 @@ fn reason(entry: &Entry, verb: &Verb, err: &[u8]) -> String {
         .to_string()
 }
 
-fn unavailable(entry: &Entry, verb: &Verb, ctx: &Ctx<'_>) -> Option<String> {
+fn param_gate(verb: &Verb, vars: &Vars) -> Option<String> {
+    for name in &verb.needs {
+        if vars.get(name).map(String::as_str).unwrap_or("").is_empty() {
+            return Some(format!("needs {name}"));
+        }
+    }
+    for name in &verb.unless {
+        if !vars.get(name).map(String::as_str).unwrap_or("").is_empty() {
+            return Some(format!("skipped when {name} is set"));
+        }
+    }
+    None
+}
+
+fn unavailable(entry: &Entry, verb: &Verb, vars: &Vars, ctx: &Ctx<'_>) -> Option<String> {
+    if let Some(why) = param_gate(verb, vars) {
+        return Some(why);
+    }
+    if verb.oauth {
+        return None;
+    }
     verb.run.as_ref()?;
     let command = step_requires(verb, entry).unwrap_or_default();
     if which::find(command, ctx.env, ctx.exists).is_none() {
@@ -361,22 +388,28 @@ fn report(entry: &Entry, name: &str, tried: &[(String, String)], io: &mut Io<'_>
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_chain<T>(
     entry: &Entry,
     name: &str,
     chain: &VerbChain,
+    vars: &Vars,
     failed: Exit,
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
     mut step: impl FnMut(&Verb, &mut Io<'_>) -> Result<T, Exit>,
 ) -> Result<T, Exit> {
     if let [only] = chain.0.as_slice() {
+        if let Some(why) = param_gate(only, vars) {
+            report(entry, name, &[(step_name(entry, only), why)], io);
+            return Err(Exit::Unavailable);
+        }
         return step(only, io);
     }
     let mut tried = Vec::new();
     let mut ran = false;
     for verb in chain.iter() {
-        if let Some(why) = unavailable(entry, verb, ctx) {
+        if let Some(why) = unavailable(entry, verb, vars, ctx) {
             tried.push((step_name(entry, verb), why));
             continue;
         }
@@ -412,15 +445,20 @@ pub fn pick(
     entry: &Entry,
     name: &str,
     chain: &VerbChain,
+    vars: &Vars,
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Result<Verb, Exit> {
     if let [only] = chain.0.as_slice() {
+        if let Some(why) = param_gate(only, vars) {
+            report(entry, name, &[(step_name(entry, only), why)], io);
+            return Err(Exit::Unavailable);
+        }
         return Ok(only.clone());
     }
     let mut tried = Vec::new();
     for verb in chain.iter() {
-        match unavailable(entry, verb, ctx) {
+        match unavailable(entry, verb, vars, ctx) {
             None => {
                 return Ok(Verb {
                     min_version: None,
@@ -720,16 +758,25 @@ pub fn whoami(
 ) -> Option<String> {
     let chain = entry.provider.user.as_ref()?;
     let scrub = token.source != "env";
-    run_chain(entry, "user", chain, Exit::Error, ctx, io, |verb, io| {
-        let ran = run_verb_env(entry, "user", verb, vars, false, scrub, ctx, io)?;
-        let parse = verb.parse.as_deref().unwrap_or("text");
-        let value = match parse.strip_prefix("json:") {
-            Some(_) => extract::json(&ran.stdout, &crate::template::render_text(parse, vars))
-                .and_then(|v| v.as_str().map(String::from)),
-            None => Some(ran.stdout.trim().to_string()),
-        };
-        value.filter(|v| !v.is_empty()).ok_or(Exit::Error)
-    })
+    run_chain(
+        entry,
+        "user",
+        chain,
+        vars,
+        Exit::Error,
+        ctx,
+        io,
+        |verb, io| {
+            let ran = run_verb_env(entry, "user", verb, vars, false, scrub, ctx, io)?;
+            let parse = verb.parse.as_deref().unwrap_or("text");
+            let value = match parse.strip_prefix("json:") {
+                Some(_) => extract::json(&ran.stdout, &crate::template::render_text(parse, vars))
+                    .and_then(|v| v.as_str().map(String::from)),
+                None => Some(ran.stdout.trim().to_string()),
+            };
+            value.filter(|v| !v.is_empty()).ok_or(Exit::Error)
+        },
+    )
     .ok()
 }
 
@@ -780,7 +827,7 @@ pub fn granted(
 ) -> Option<String> {
     let chain = entry.provider.scopes.as_ref()?;
     let scrub = token.source != "env";
-    run_chain(entry, "scopes", chain, Exit::Error, ctx, io, |verb, io| {
+    run_chain(entry, "scopes", chain, vars, Exit::Error, ctx, io, |verb, io| {
         let ran = run_verb_env(entry, "scopes", verb, vars, false, scrub, ctx, io)?;
         let scopes = match verb.parse.as_deref() {
             Some(parse) if parse.starts_with("json:") => {
@@ -899,9 +946,16 @@ pub fn list(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
         Err(code) => return code,
     };
     let as_json = flags.has("--json");
-    let listed = run_chain(entry, "list", chain, Exit::Error, ctx, io, |verb, io| {
-        list_step(entry, verb, &vars, as_json, ctx, io)
-    });
+    let listed = run_chain(
+        entry,
+        "list",
+        chain,
+        &vars,
+        Exit::Error,
+        ctx,
+        io,
+        |verb, io| list_step(entry, verb, &vars, as_json, ctx, io),
+    );
     match listed {
         Ok(text) => {
             let _ = writeln!(io.out, "{text}");
@@ -951,7 +1005,7 @@ fn do_create(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit
     if entry.oauth_config.is_some() && entry.provider.create.is_none() {
         return oauth_create_cmd(entry, vars, &flags, ctx, io);
     }
-    let verb = match create_step(entry, ctx, io) {
+    let verb = match create_step(entry, vars, ctx, io) {
         Ok(verb) => verb,
         Err(code) => return code,
     };
@@ -964,9 +1018,9 @@ fn do_create(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit
     }
 }
 
-fn create_step(entry: &Entry, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<Verb, Exit> {
+fn create_step(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<Verb, Exit> {
     let chain = need(entry, "create", &entry.provider.create, io)?;
-    pick(entry, "create", chain, ctx, io)
+    pick(entry, "create", chain, vars, ctx, io)
 }
 
 pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
@@ -989,6 +1043,7 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
     let mut held = Vec::new();
     let step = create_step(
         entry,
+        &vars,
         ctx,
         &mut Io {
             out: &mut std::io::sink(),
@@ -1331,7 +1386,7 @@ pub fn drop(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
         Ok(chain) => chain,
         Err(code) => return code,
     };
-    let verb = match pick(entry, "drop", chain, ctx, io) {
+    let verb = match pick(entry, "drop", chain, &vars, ctx, io) {
         Ok(verb) => verb,
         Err(code) => return code,
     };

@@ -51,6 +51,10 @@ pub struct Verb {
     pub oauth: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unless: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -548,13 +552,31 @@ fn validate_verb(
         }
         let fields = toml::Value::try_from(verb).unwrap_or(toml::Value::Table(toml::Table::new()));
         for field in fields.as_table().into_iter().flat_map(|t| t.keys()) {
-            if field != "oauth" {
+            if field != "oauth" && field != "needs" && field != "unless" {
                 messages.push(format!("{label}: oauth = true cannot have {field}"));
             }
         }
         if provider.oauth.is_none() {
             messages.push(format!("{label}: oauth = true but no [oauth] block"));
         }
+    }
+    for name in verb.needs.iter().chain(verb.unless.iter()) {
+        if !provider.params.contains_key(name) {
+            messages.push(format!(
+                "{label}: {name:?} is not a provider param (needed by needs/unless)"
+            ));
+        }
+    }
+    if !verb.needs.is_empty() && !verb.unless.is_empty() {
+        let overlap = verb
+            .needs
+            .iter()
+            .any(|n| verb.unless.iter().any(|u| u == n));
+        if overlap {
+            messages.push(format!("{label}: needs and unless share a param name"));
+        }
+    }
+    if verb.oauth {
         return;
     }
     let step_requires = verb.requires.as_ref().or(provider.requires.as_ref());
