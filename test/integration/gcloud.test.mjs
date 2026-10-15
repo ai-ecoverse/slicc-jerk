@@ -62,10 +62,7 @@ test('without gcloud, get reaches oauth and list --json shows the chain', () => 
   assert.equal(res.status, 3);
   assert.match(res.stderr, /\n {2}gcloud: not on PATH\n {2}oauth: not signed in\n/);
   const entry = JSON.parse(sb.jerk(['list', '--json']).stdout).find((p) => p.provider === 'gcloud');
-  assert.deepEqual(entry.steps, [
-    { cli: 'gcloud', found: false },
-    { oauth: true },
-  ]);
+  assert.deepEqual(entry.steps, [{ cli: 'gcloud', found: false }, { oauth: true }]);
   const shown = sb.jerk(['config', 'show', 'gcloud']);
   assert.equal(shown.status, 0, shown.stderr);
   assert.match(shown.stdout, /32555940559\.apps\.googleusercontent\.com/);

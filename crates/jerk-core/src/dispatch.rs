@@ -835,19 +835,28 @@ pub fn granted(
 ) -> Option<String> {
     let chain = entry.provider.scopes.as_ref()?;
     let scrub = token.source != "env";
-    run_chain(entry, "scopes", chain, vars, Exit::Error, ctx, io, |verb, io| {
-        let ran = run_verb_env(entry, "scopes", verb, vars, false, scrub, ctx, io)?;
-        let scopes = match verb.parse.as_deref() {
-            Some(parse) if parse.starts_with("json:") => {
-                let pointer = crate::template::render_text(parse, vars);
-                extract::json(&ran.stdout, &pointer)
-                    .as_ref()
-                    .and_then(extract::scopes)
-            }
-            _ => Some(ran.stdout.trim().to_string()).filter(|s| !s.is_empty()),
-        };
-        scopes.ok_or(Exit::Error)
-    })
+    run_chain(
+        entry,
+        "scopes",
+        chain,
+        vars,
+        Exit::Error,
+        ctx,
+        io,
+        |verb, io| {
+            let ran = run_verb_env(entry, "scopes", verb, vars, false, scrub, ctx, io)?;
+            let scopes = match verb.parse.as_deref() {
+                Some(parse) if parse.starts_with("json:") => {
+                    let pointer = crate::template::render_text(parse, vars);
+                    extract::json(&ran.stdout, &pointer)
+                        .as_ref()
+                        .and_then(extract::scopes)
+                }
+                _ => Some(ran.stdout.trim().to_string()).filter(|s| !s.is_empty()),
+            };
+            scopes.ok_or(Exit::Error)
+        },
+    )
     .ok()
 }
 

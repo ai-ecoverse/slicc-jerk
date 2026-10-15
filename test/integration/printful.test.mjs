@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
-import { test } from 'node:test';
 import { join } from 'node:path';
+import { test } from 'node:test';
 import { sandbox } from './helpers.mjs';
 
 const TOKEN = 'pf_store_FAKEFAKEFAKEFAKE9012';
