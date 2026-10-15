@@ -148,7 +148,7 @@ jobs:
 
       - run: rustup show active-toolchain || rustup toolchain install
 
-      - run: cargo install wasm-bindgen-cli@0.2.129
+      - uses: ./.github/actions/wasm-bindgen
 
       - run: npm run build:oauth-wasm
 
@@ -206,7 +206,7 @@ jobs:
 
       - run: rustup show active-toolchain || rustup toolchain install
 
-      - run: cargo install wasm-bindgen-cli@0.2.129
+      - uses: ./.github/actions/wasm-bindgen
 
       - name: Rebuild from the tag in a fresh target dir
         env:

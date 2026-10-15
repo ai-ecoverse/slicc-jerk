@@ -86,7 +86,7 @@ jobs:
       - run: npm run lint
 
   test:
-    needs: runner
+    needs: [runner, reproducible-wasm]
     strategy:
       fail-fast: false
       matrix:
@@ -105,13 +105,11 @@ jobs:
 
       - uses: ./.github/actions/toolchain
 
-      - run: cargo install wasm-bindgen-cli@0.2.129
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: wasm
 
       - run: npm ci
-
-      - run: npm run build:wasm
-
-      - run: npm run build:oauth-wasm
 
       - run: npm test
 
@@ -131,7 +129,7 @@ jobs:
 
       - uses: ./.github/actions/toolchain
 
-      - run: cargo install wasm-bindgen-cli@0.2.129
+      - uses: ./.github/actions/wasm-bindgen
 
       - run: npm ci
 
@@ -158,6 +156,17 @@ jobs:
           diff /tmp/build-a/jerk_oauth_wasm.js /tmp/build-b/jerk_oauth_wasm.js
           diff /tmp/build-a/jerk_oauth_wasm.d.ts /tmp/build-b/jerk_oauth_wasm.d.ts
           echo "All jerk-oauth wasm artifacts are byte-identical across builds"
+
+      - run: npm run build:wasm
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: wasm
+          path: |
+            bin/jerk.wasm
+            dist/jerk-oauth/
+          if-no-files-found: error
+          retention-days: 1
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
