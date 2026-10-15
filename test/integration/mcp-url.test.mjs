@@ -1,17 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { test } from 'node:test';
 import { sandbox } from './helpers.mjs';
-
-const dirs = [];
-after(() => {
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-});
 
 function mcpSandbox(servers) {
   const sb = sandbox();
-  dirs.push(sb.dir);
   const agent = join(sb.env.HOME, '.pi', 'agent');
   mkdirSync(agent, { recursive: true });
   writeFileSync(join(agent, 'mcp.json'), JSON.stringify({ mcpServers: servers }));
