@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { sandbox } from './helpers.mjs';
 
@@ -111,4 +113,23 @@ test('aws get without the CLI and without env exits 4', () => {
   const res = sb.jerk(['aws', 'get']);
   assert.equal(res.status, 4);
   assert.match(res.stderr, /aws is not on PATH/);
+});
+
+test('aws sync picks the field by its fnox secret name', () => {
+  const sb = sandbox();
+  fakeAws(sb);
+  const config = join(sb.dir, 'fnox.toml');
+  writeFileSync(config, '[providers.age]\ntype = "age"\n');
+  const out = join(sb.dir, 'set-value');
+  sb.script(
+    'fnox',
+    `if (args[0] === 'config-files') process.stdout.write(${JSON.stringify(`${config}\n`)});
+else if (args[0] === 'set') require('node:fs').writeFileSync(${JSON.stringify(out)}, require('node:fs').readFileSync(0));`
+  );
+  const secret = sb.jerk(['aws', 'sync', '--fnox', 'AWS_SECRET_ACCESS_KEY', '--provider', 'age']);
+  assert.equal(secret.status, 0, secret.stderr);
+  assert.equal(readFileSync(out, 'utf8'), CREDS.SecretAccessKey);
+  const unknown = sb.jerk(['aws', 'sync', '--fnox', 'OTHER', '--provider', 'age']);
+  assert.equal(unknown.status, 1);
+  assert.match(unknown.stderr, /no value for OTHER/);
 });

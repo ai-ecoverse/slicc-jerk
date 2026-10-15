@@ -262,10 +262,16 @@ impl Token {
         if let Some(value) = self.fields.get(secret) {
             return Some(value);
         }
-        if self.fields.is_empty() && entry.provider.env.iter().any(|e| e == secret) {
-            return Some(&self.value);
+        let multi = !self.fields.is_empty()
+            || entry
+                .provider
+                .get
+                .as_ref()
+                .is_some_and(|chain| chain.iter().any(|verb| !verb.fields.is_empty()));
+        if multi {
+            return None;
         }
-        None
+        Some(&self.value)
     }
 }
 
@@ -1127,10 +1133,10 @@ fn oauth_create_cmd(
             return Exit::Usage;
         }
     };
-    let scope = flags
+    let requested = flags
         .value("--scope")
-        .or(vars.get("scope").map(String::as_str))
-        .or(config.scope.as_deref());
+        .or(vars.get("scope").map(String::as_str));
+    let scope = requested.or(config.scope.as_deref());
     let user = vars.get("user").map(String::as_str).unwrap_or("default");
     let host = ctx.oauth;
 
@@ -1142,12 +1148,12 @@ fn oauth_create_cmd(
                 err: &mut std::io::sink(),
             };
             if let Ok(tok) = fetch_oauth(entry, base, vars, ctx, &mut quiet) {
-                let covered = match scope {
-                    Some(requested) => {
-                        let have = tok.scope.or(g.scope);
-                        jerk_oauth::scopes::scopes_satisfied(have.as_deref(), requested)
-                    }
-                    None => true,
+                let have = tok.scope.or(g.scope);
+                let covered = match (requested, have.as_deref()) {
+                    (Some(want), have) => jerk_oauth::scopes::scopes_satisfied(have, want),
+                    (None, Some(have)) => scope
+                        .is_none_or(|want| jerk_oauth::scopes::scopes_satisfied(Some(have), want)),
+                    (None, None) => true,
                 };
                 if covered {
                     let _ = writeln!(
