@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { test } from 'node:test';
 import { sandbox } from './helpers.mjs';
 
@@ -115,8 +115,7 @@ function listen(handler) {
       const { port } = server.address();
       resolve({
         port,
-        close: () =>
-          new Promise((res, rej) => server.close((err) => (err ? rej(err) : res()))),
+        close: () => new Promise((res, rej) => server.close((err) => (err ? rej(err) : res()))),
       });
     });
     server.on('error', reject);

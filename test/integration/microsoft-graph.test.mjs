@@ -2,8 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { sandbox } from './helpers.mjs';
 
-const TOKEN =
-  'eyJhbGciOiJub25lIn0.eyJleHAiOjQ3MDAwMDAwMDAsInNjcCI6IlVzZXIuUmVhZCJ9.sig';
+const TOKEN = 'eyJhbGciOiJub25lIn0.eyJleHAiOjQ3MDAwMDAwMDAsInNjcCI6IlVzZXIuUmVhZCJ9.sig';
 const LEAK = 'LEAKY-AZ-OUTPUT';
 
 function az(sb, { token = TOKEN, loginExit = 0 } = {}) {
@@ -70,10 +69,7 @@ test('without az, get falls through to oauth and list --json shows the chain', (
   const sb = sandbox();
   const res = sb.jerk(['microsoft-graph', 'get']);
   assert.equal(res.status, 3);
-  assert.match(
-    res.stderr,
-    /\n {2}az: not on PATH\n {2}oauth: not signed in\n/
-  );
+  assert.match(res.stderr, /\n {2}az: not on PATH\n {2}oauth: not signed in\n/);
   const entry = JSON.parse(sb.jerk(['list', '--json']).stdout).find(
     (p) => p.provider === 'microsoft-graph'
   );

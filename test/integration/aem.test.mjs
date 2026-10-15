@@ -7,7 +7,10 @@ const KEY =
 const JTI = 'test-jti-1';
 const LEAK = 'LEAKY-AEM-OUTPUT';
 
-function aemExt(sb, { create = true, keys = [{ id: JTI, description: 'jerk', roles: ['admin'] }] } = {}) {
+function aemExt(
+  sb,
+  { create = true, keys = [{ id: JTI, description: 'jerk', roles: ['admin'] }] } = {}
+) {
   sb.script(
     'aem-ext',
     `if (args[0] === 'auth' && args[1] === 'key' && args[2] === 'create') {
@@ -54,15 +57,7 @@ test('without aem-ext, create still needs org and site for oauth', () => {
 test('with aem-ext, create mints a key, list shows it, drop revokes by id', () => {
   const sb = sandbox();
   aemExt(sb);
-  const created = sb.jerk([
-    'aem',
-    'create',
-    '--reveal',
-    '-p',
-    'org=acme',
-    '-p',
-    'site=www',
-  ]);
+  const created = sb.jerk(['aem', 'create', '--reveal', '-p', 'org=acme', '-p', 'site=www']);
   assert.equal(created.status, 0, created.stderr);
   assert.equal(created.stdout, `${KEY}\n`);
   assert.match(created.stderr, /created token test-jti-1/);
@@ -74,16 +69,7 @@ test('with aem-ext, create mints a key, list shows it, drop revokes by id', () =
     items: [{ id: JTI, description: 'jerk', roles: ['admin'] }],
   });
 
-  const dropped = sb.jerk([
-    'aem',
-    'drop',
-    JTI,
-    '--yes',
-    '-p',
-    'org=acme',
-    '-p',
-    'site=www',
-  ]);
+  const dropped = sb.jerk(['aem', 'drop', JTI, '--yes', '-p', 'org=acme', '-p', 'site=www']);
   assert.equal(dropped.status, 0, dropped.stderr);
   assert.equal(dropped.stdout, 'aem: dropped\n');
 
@@ -113,10 +99,7 @@ test('env AEM_TOKEN wins for get even when aem-ext is present', () => {
 test('list --json shows aem-ext then oauth in the chain', () => {
   const sb = sandbox();
   const entry = JSON.parse(sb.jerk(['list', '--json']).stdout).find((p) => p.provider === 'aem');
-  assert.deepEqual(entry.steps, [
-    { cli: 'aem-ext', found: false },
-    { oauth: true },
-  ]);
+  assert.deepEqual(entry.steps, [{ cli: 'aem-ext', found: false }, { oauth: true }]);
   assert.deepEqual(entry.env, ['AEM_TOKEN', 'AEM_API_KEY']);
   const listed = sb.jerk(['list']);
   assert.match(listed.stdout, /\naem\s.*\saem-ext \(missing\), oauth\n/);

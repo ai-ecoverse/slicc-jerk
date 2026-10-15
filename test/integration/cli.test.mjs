@@ -54,7 +54,23 @@ test('jerk list shows the built-in providers and finds their CLIs on PATH', () =
   const json = JSON.parse(sb.jerk(['list', '--json']).stdout);
   assert.deepEqual(
     json.map((p) => p.provider),
-    ['adobe-aio', 'aem', 'aws', 'cloudflare', 'fastly', 'firefly', 'garmin', 'gcloud', 'github', 'gmail', 'linkedin', 'microsoft-graph', 'npm', 'printful', 'xai']
+    [
+      'adobe-aio',
+      'aem',
+      'aws',
+      'cloudflare',
+      'fastly',
+      'firefly',
+      'garmin',
+      'gcloud',
+      'github',
+      'gmail',
+      'linkedin',
+      'microsoft-graph',
+      'npm',
+      'printful',
+      'xai',
+    ]
   );
   assert.equal(json.find((p) => p.provider === 'github').cli, true);
 });

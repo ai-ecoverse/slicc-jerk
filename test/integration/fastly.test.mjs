@@ -44,7 +44,6 @@ test('fastly get list create and drop dispatch to the CLI', () => {
   assert.equal(got.stdout, `${TOKEN}\n`);
   assert.deepEqual(sb.calls()[0].args, ['profile', 'token', '--quiet']);
 
-
   const listed = sb.jerk(['fastly', 'list', '--json']);
   assert.equal(listed.status, 0, listed.stderr);
   assert.deepEqual(JSON.parse(listed.stdout), {
@@ -71,7 +70,9 @@ test('fastly get prefers FASTLY_API_TOKEN and accepts -p profile', () => {
       user: PROFILES.user,
     },
   });
-  const fromEnv = sb.jerk(['fastly', 'get', '--json'], { FASTLY_API_TOKEN: 'envtokenvalue1234567' });
+  const fromEnv = sb.jerk(['fastly', 'get', '--json'], {
+    FASTLY_API_TOKEN: 'envtokenvalue1234567',
+  });
   assert.equal(fromEnv.status, 0, fromEnv.stderr);
   assert.equal(JSON.parse(fromEnv.stdout).source, 'env');
   assert.equal(sb.calls().length, 0);
