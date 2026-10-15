@@ -242,6 +242,22 @@ jobs:
             FAKE_VERSION=0.99.0 sh /w/scripts/test-install.sh /w/_test_assets
           '
 
+  probe:
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.runner }}
+    steps:
+      - run: |
+          set -x
+          curl -fsSL -o "$RUNNER_TEMP/a.tgz" https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/alpine-minirootfs-3.22.2-x86_64.tar.gz
+          mkdir "$RUNNER_TEMP/rootfs"; tar -xzf "$RUNNER_TEMP/a.tgz" -C "$RUNNER_TEMP/rootfs"
+          cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || true
+          cat /proc/sys/user/max_user_namespaces 2>/dev/null || true
+          command -v unshare bwrap proot || true
+          unshare -r id || true
+          unshare -r chroot "$RUNNER_TEMP/rootfs" /bin/sh -c 'cat /etc/alpine-release; id' || true
+          unshare -rm sh -c 'mount --bind /etc/resolv.conf '"$RUNNER_TEMP"'/rootfs/etc/resolv.conf 2>&1; cp /etc/resolv.conf '"$RUNNER_TEMP"'/rootfs/etc/resolv.conf; chroot '"$RUNNER_TEMP"'/rootfs /bin/sh -c "apk add --no-cache python3 coreutils >/dev/null && python3 --version"' || true
+          "$RUNNER_TEMP/rootfs/lib/ld-musl-x86_64.so.1" "$RUNNER_TEMP/rootfs/bin/busybox" sh -c 'echo musl-loader-ok' || true
+
   ci:
     if: always()
     needs: [runner, lint, test, reproducible-wasm, test-installer, test-installer-macos, test-installer-alpine]
