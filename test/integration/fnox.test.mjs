@@ -75,3 +75,15 @@ test('sync pipes the token into fnox set, and refuses a plaintext provider', () 
   assert.deepEqual(set.args, ['set', 'GITHUB_TOKEN', '--provider', 'age']);
   assert.ok(!set.args.includes(TOKEN));
 });
+
+test('sync takes any fnox secret name for a provider with a single value', () => {
+  const sb = sandbox();
+  fakeGh(sb);
+  fakeFnox(sb);
+  const res = sb.jerk(['github', 'sync', '--fnox', 'G', '--provider', 'age']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, 'github: synced into fnox G (age)\n');
+  assert.equal(readFileSync(join(sb.dir, 'set-value'), 'utf8'), TOKEN);
+  const set = sb.calls().find((c) => c.name === 'fnox' && c.args[0] === 'set');
+  assert.deepEqual(set.args, ['set', 'G', '--provider', 'age']);
+});

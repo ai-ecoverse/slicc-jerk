@@ -262,10 +262,16 @@ impl Token {
         if let Some(value) = self.fields.get(secret) {
             return Some(value);
         }
-        if self.fields.is_empty() && entry.provider.env.iter().any(|e| e == secret) {
-            return Some(&self.value);
+        let multi = !self.fields.is_empty()
+            || entry
+                .provider
+                .get
+                .as_ref()
+                .is_some_and(|chain| chain.iter().any(|verb| !verb.fields.is_empty()));
+        if multi {
+            return None;
         }
-        None
+        Some(&self.value)
     }
 }
 
@@ -882,7 +888,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
             Ok(token) => token,
             Err(Exit::SignIn) if login && !signed_in => {
                 signed_in = true;
-                let code = do_create(entry, &vars, ctx, io);
+                let code = do_create(entry, &vars, &flags, ctx, io);
                 if code != Exit::Ok {
                     return code;
                 }
@@ -903,7 +909,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
         }
         if login && !signed_in {
             signed_in = true;
-            let code = do_create(entry, &vars, ctx, io);
+            let code = do_create(entry, &vars, &flags, ctx, io);
             if code != Exit::Ok {
                 return code;
             }
@@ -1017,17 +1023,16 @@ fn list_step(
     Ok(serde_json::to_string_pretty(&value).unwrap_or_default())
 }
 
-fn do_create(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit {
-    let flags = Flags::default();
+fn do_create(entry: &Entry, vars: &Vars, flags: &Flags, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit {
     if entry.oauth_config.is_some() && entry.provider.create.is_none() {
-        return oauth_create_cmd(entry, vars, &flags, ctx, io);
+        return oauth_create_cmd(entry, vars, flags, ctx, io);
     }
     let verb = match create_step(entry, vars, ctx, io) {
         Ok(verb) => verb,
         Err(code) => return code,
     };
     if verb.oauth {
-        return oauth_create_cmd(entry, vars, &flags, ctx, io);
+        return oauth_create_cmd(entry, vars, flags, ctx, io);
     }
     match run_verb(entry, "create", &verb, vars, verb.interactive, ctx, io) {
         Ok(_) => Exit::Ok,
@@ -1038,6 +1043,12 @@ fn do_create(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit
 fn create_step(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<Verb, Exit> {
     let chain = need(entry, "create", &entry.provider.create, io)?;
     pick(entry, "create", chain, vars, ctx, io)
+}
+
+fn requested_scope(flags: &Flags) -> Option<&str> {
+    flags
+        .value("--scope")
+        .or(flags.params.get("scope").map(String::as_str))
 }
 
 pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
@@ -1076,7 +1087,7 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
             err: &mut std::io::sink(),
         };
         if let Ok(token) = fetch(entry, &vars, ctx, &mut quiet) {
-            let covered = match flags.value("--scope") {
+            let covered = match requested_scope(&flags) {
                 Some(requested) => jerk_oauth::scopes::scopes_satisfied(
                     granted(entry, &token, &vars, ctx, &mut quiet).as_deref(),
                     requested,
@@ -1127,8 +1138,8 @@ fn oauth_create_cmd(
             return Exit::Usage;
         }
     };
-    let scope = flags
-        .value("--scope")
+    let requested = requested_scope(flags);
+    let scope = requested
         .or(vars.get("scope").map(String::as_str))
         .or(config.scope.as_deref());
     let user = vars.get("user").map(String::as_str).unwrap_or("default");
@@ -1142,12 +1153,12 @@ fn oauth_create_cmd(
                 err: &mut std::io::sink(),
             };
             if let Ok(tok) = fetch_oauth(entry, base, vars, ctx, &mut quiet) {
-                let covered = match scope {
-                    Some(requested) => {
-                        let have = tok.scope.or(g.scope);
-                        jerk_oauth::scopes::scopes_satisfied(have.as_deref(), requested)
-                    }
-                    None => true,
+                let have = tok.scope.or(g.scope);
+                let covered = match (requested, have.as_deref()) {
+                    (Some(want), have) => jerk_oauth::scopes::scopes_satisfied(have, want),
+                    (None, Some(have)) => scope
+                        .is_none_or(|want| jerk_oauth::scopes::scopes_satisfied(Some(have), want)),
+                    (None, None) => true,
                 };
                 if covered {
                     let _ = writeln!(
