@@ -106,15 +106,39 @@ create = { run = ["aio", "login", "--force", "--ctx", "{ctx}"], interactive = tr
 drop = { run = ["aio", "logout", "--ctx", "{ctx}"], interactive = true }
 
 [providers.aem]
-name = "AEM Admin (api.aem.live)"
-env = ["AEM_TOKEN"]
+name = "AEM Admin (aem-ext, api.aem.live)"
+env = ["AEM_TOKEN", "AEM_API_KEY"]
 domains = ["api.aem.live"]
-params = { org = "", site = "", login_host = "admin.hlx.page" }
+params = { org = "", site = "", login_host = "admin.hlx.page", description = "jerk", roles = "admin" }
 cors_origins = [
   "https://admin.hlx.page",
   "https://admin-ci.hlx.page",
   "https://api.aem.live",
 ]
+
+[[providers.aem.create]]
+requires = "aem-ext"
+run = ["aem-ext", "auth", "key", "create", "--org", "{org}", "--site", "{site}", "--roles", "{roles}", "--description", "{description}", "--register", "--json"]
+parse = "json:/value"
+id = "json:/id"
+expiry = "jwt"
+interactive = true
+
+[[providers.aem.create]]
+oauth = true
+
+[[providers.aem.list]]
+requires = "aem-ext"
+run = ["aem-ext", "auth", "key", "list", "--org", "{org}", "--site", "{site}", "--json"]
+parse = "json:/keys"
+
+[[providers.aem.drop]]
+requires = "aem-ext"
+run = ["aem-ext", "auth", "key", "delete", "--org", "{org}", "--site", "{site}", "--id", "{id}", "--confirm"]
+
+[[providers.aem.drop]]
+oauth = true
+
 [providers.aem.oauth]
 mode = "loopback"
 flow = "implicit"
