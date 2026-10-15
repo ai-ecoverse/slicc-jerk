@@ -195,6 +195,10 @@ pub(crate) fn token_from_capture(
                 token_type: captured.params.get("token_type").cloned(),
             })
         }
+        Flow::ClientCredentials => Err(OAuthError {
+            exit: Exit::Usage,
+            message: "client_credentials does not use a capture".into(),
+        }),
     }
 }
 
@@ -224,7 +228,34 @@ pub fn oauth_create_with_vars(
 ) -> Result<Token, OAuthError> {
     use jerk_oauth::config::Mode;
 
+    enum InteractiveMode {
+        Loopback,
+        Auto,
+        Device,
+        Intercept,
+        Popup,
+    }
+
     validate_config(config)?;
+
+    if config.flow == jerk_oauth::config::Flow::ClientCredentials
+        && config.mode != Mode::ClientCredentials
+    {
+        let _ = (random, err, cdp, cors_origins);
+        return oauth_client_credentials(config, scope, host, now_secs, extra_vars);
+    }
+
+    let mode = match config.mode {
+        Mode::ClientCredentials => {
+            let _ = (random, err, cdp, cors_origins);
+            return oauth_client_credentials(config, scope, host, now_secs, extra_vars);
+        }
+        Mode::Loopback => InteractiveMode::Loopback,
+        Mode::Auto => InteractiveMode::Auto,
+        Mode::Device => InteractiveMode::Device,
+        Mode::Intercept => InteractiveMode::Intercept,
+        Mode::Popup => InteractiveMode::Popup,
+    };
 
     let mut r32 = [0u8; 32];
     let mut r16 = [0u8; 16];
@@ -236,8 +267,8 @@ pub fn oauth_create_with_vars(
         message: msg.into(),
     })?;
 
-    match config.mode {
-        Mode::Loopback => {
+    match mode {
+        InteractiveMode::Loopback => {
             #[cfg(not(target_os = "wasi"))]
             {
                 loopback::run(
@@ -261,7 +292,7 @@ pub fn oauth_create_with_vars(
                 })
             }
         }
-        Mode::Auto => {
+        InteractiveMode::Auto => {
             #[cfg(not(target_os = "wasi"))]
             {
                 let parsed = url::Url::parse(&config.redirect_uri).ok();
@@ -309,7 +340,7 @@ pub fn oauth_create_with_vars(
                 })
             }
         }
-        Mode::Device => {
+        InteractiveMode::Device => {
             #[cfg(not(target_os = "wasi"))]
             {
                 oauth_device_create(config, scope, host, now_secs, err)
@@ -323,7 +354,7 @@ pub fn oauth_create_with_vars(
                 })
             }
         }
-        Mode::Intercept => {
+        InteractiveMode::Intercept => {
             #[cfg(not(target_os = "wasi"))]
             {
                 let opener = cdp.ok_or(OAuthError {
@@ -355,11 +386,82 @@ pub fn oauth_create_with_vars(
                 })
             }
         }
-        Mode::Popup => Err(OAuthError {
+        InteractiveMode::Popup => Err(OAuthError {
             exit: Exit::Unsupported,
             message: "popup mode is not implemented yet".into(),
         }),
     }
+}
+
+pub fn oauth_client_credentials(
+    config: &OAuthConfig,
+    scope: Option<&str>,
+    host: &dyn OAuthHost,
+    now_secs: u64,
+    extra_vars: &[(&str, &str)],
+) -> Result<Token, OAuthError> {
+    validate_config(config)?;
+    let client_id = jerk_oauth::template::render_plain(&config.client_id, extra_vars);
+    let secret_tmpl = config.client_secret.as_deref().unwrap_or("");
+    let client_secret = jerk_oauth::template::render_plain(secret_tmpl, extra_vars);
+    let scope_tmpl = scope
+        .map(str::to_string)
+        .or_else(|| {
+            config
+                .scope
+                .as_ref()
+                .map(|s| jerk_oauth::template::render_plain(s, extra_vars))
+        })
+        .filter(|s| !s.is_empty());
+    if client_id.is_empty() || client_id.contains('{') {
+        return Err(OAuthError {
+            exit: Exit::Usage,
+            message: "client_id is required (-p client_id=… or params.client_id)".into(),
+        });
+    }
+    if client_secret.is_empty() || client_secret.contains('{') {
+        return Err(OAuthError {
+            exit: Exit::Usage,
+            message: "client_secret is required (-p client_secret=… or params.client_secret)"
+                .into(),
+        });
+    }
+    let token_url_tmpl = config.token_url.as_deref().unwrap_or("");
+    let token_url = jerk_oauth::template::render_plain(token_url_tmpl, extra_vars);
+    if token_url.is_empty() || token_url.contains('{') {
+        return Err(OAuthError {
+            exit: Exit::Usage,
+            message: "token_url required for client_credentials".into(),
+        });
+    }
+    let (url, form_body) = jerk_oauth::exchange::client_credentials_request(
+        &jerk_oauth::exchange::ClientCredentialsParams {
+            token_url: &token_url,
+            client_id: &client_id,
+            client_secret: &client_secret,
+            scope: scope_tmpl.as_deref(),
+        },
+    )
+    .map_err(|e| OAuthError {
+        exit: Exit::Usage,
+        message: e,
+    })?;
+    let response = host.http_post(&url, &form_body).map_err(|e| OAuthError {
+        exit: Exit::Error,
+        message: e,
+    })?;
+    let parsed = jerk_oauth::exchange::parse_token_response(&response).map_err(|e| OAuthError {
+        exit: Exit::Error,
+        message: e.to_string(),
+    })?;
+    let expires_at = jerk_oauth::expiry::compute_expiry(now_secs, parsed.expires_in, None);
+    Ok(Token {
+        access_token: parsed.access_token.clone(),
+        refresh_token: parsed.refresh_token.clone(),
+        expires_at,
+        scope: parsed.scope.clone().or(scope_tmpl),
+        token_type: Some(parsed.token_type.clone()),
+    })
 }
 
 #[cfg(not(target_os = "wasi"))]
@@ -423,6 +525,7 @@ pub(crate) fn exchange_authorization_code(
             Flow::Code => "token_url required for code flow".into(),
             Flow::Exchange => "token_url required for exchange flow".into(),
             Flow::Implicit => "token_url required".into(),
+            Flow::ClientCredentials => "token_url required for client_credentials".into(),
         },
     })?;
     let body = exchange::build_code_exchange_body(

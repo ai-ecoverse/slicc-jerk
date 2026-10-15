@@ -80,7 +80,8 @@ A token already in the provider's first `env` variable (`GH_TOKEN`, …) wins ov
 | `cloudflare` | `cf`, then `wrangler`, then browser OAuth | `cf accounts tokens create` (when `-p policies=…`), else `wrangler auth token --json`, else the stored OAuth grant | `create` / `drop` / `list` prefer `cf` (`auth login` / `logout` / `whoami`), then wrangler. `get` via `cf` mints an account-owned API token and needs `CLOUDFLARE_ACCOUNT_ID` plus `-p policies=…`; with the default empty `policies` that step fails and `get` moves on. Wrangler needs 4.57.0+ for `create`/`get` and 4.65.0 for `list`. Browser fallback uses Cloudflare's `cf` OAuth app on `localhost:8877`. Session tokens are treated as expiring after 50 minutes. |
 | `aws` | `aws` (CLI v2) | `aws configure export-credentials` | Prints `AccessKeyId`; `lease` maps `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` from the JSON (session token omitted when absent). Env `AWS_*` wins when `AWS_ACCESS_KEY_ID` is set, including sealed environments with no binary. `-p profile=` / `-p region=` are optional. `create` / `drop` are `aws sso login` / `logout`; `list` / `user` use `sts get-caller-identity`. |
 | `gcloud` | `gcloud`, then browser OAuth | `gcloud auth print-access-token`, else the stored OAuth grant | `create` is `gcloud auth login`, `drop` is `gcloud auth revoke`, `list` / `user` are `gcloud auth list` and `gcloud config get-value account`. When the CLI is missing, fall back to the Cloud SDK public desktop client on loopback `:8085` (`cloud-platform` scope). Access tokens are treated as expiring after 55 minutes. |
-| `adobe-aio` | `aio` | `aio login --bare --no-open` | The expiry comes from the IMS token itself. |
+| `adobe-aio` | `aio` | `aio login --bare --no-open` | Interactive user IMS token. The expiry comes from the JWT itself. |
+| `firefly` | jerk's own OAuth | IMS `client_credentials` | Server-to-server Firefly Services token. Needs `-p client_id=… -p client_secret=…` (optional `-p org_id=… -p scope=…`). Distinct from `adobe-aio`. |
 | `aem` | `aem-ext`, then browser OAuth | env `AEM_TOKEN` / `AEM_API_KEY`, else the stored OAuth grant | When `aem-ext` is on `PATH`, `create` / `list` / `drop` wrap `aem-ext auth key` create, list, and delete (365-day admin API keys, `X-Auth-Token`). `create` prints the key once (`--json` → `/value`, id `/id`) and records the jti for `drop`. Needs `-p org=… -p site=…`. Without `aem-ext`, `create` / `drop` / `get` use the aem-cli loopback OAuth (`authToken`, ~20 minutes). Cookie login (`aem-ext auth login`) stays on the CLI for curl-only use. |
 | `fastly` | `fastly` | `fastly profile token` | Env `FASTLY_API_TOKEN` wins. `create` runs `fastly sso`; `list` is `profile list --json`; `drop <profile>` is `profile delete`. Optional `-p profile=…` selects a named profile for get/create. |
 | `xai` | jerk's own OAuth | PKCE through a loopback redirect | The sign-in opens in your browser. The grant is kept in the OS keyring. |
@@ -173,6 +174,7 @@ capture = { at = "request", from = "query", param = "code" }
 | `device` | RFC 8628: jerk prints a URL and a code on stderr and polls `token_url` |
 | `intercept` | jerk drives a browser over CDP and catches the redirect, for clients whose loopback port is taken or that only redirect somewhere jerk can't listen |
 | `auto` | `loopback` when the port is free, otherwise `intercept` |
+| `client_credentials` | machine grant: POST `token_url` with `client_id` / `client_secret` / `scope` (no browser). `get` re-mints when the cached access token is near expiry |
 
 | `flow` | token grant shape |
 | --- | --- |
@@ -180,6 +182,7 @@ capture = { at = "request", from = "query", param = "code" }
 | `code` | authorization code without PKCE (optional `client_secret` for public desktop clients) |
 | `implicit` | the capture value is the access token (no token endpoint) |
 | `exchange` | POST `token_url` with `[oauth.exchange]` (`grant_type` plus a `body` map; `{value}` is the captured param) |
+| `client_credentials` | same machine grant as `mode = "client_credentials"` (no browser / capture) |
 
 
 `create` signs in and keeps the grant: in the OS keyring (service `slicc-jerk`), or with `store = "file"` in a 0600 file. `get` refreshes the token at `token_url` when it's close to expiring. `drop` removes the grant (and POSTs to `revoke_url` when set). On Linux the keyring is the kernel keyring, which doesn't survive a reboot.

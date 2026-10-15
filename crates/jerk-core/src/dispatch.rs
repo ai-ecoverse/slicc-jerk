@@ -567,11 +567,10 @@ fn fetch_oauth(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Result<Token, Exit> {
-    let user = entry
-        .provider
-        .params
+    let user = vars
         .get("user")
         .map(String::as_str)
+        .or_else(|| entry.provider.params.get("user").map(String::as_str))
         .unwrap_or("default");
     let host = ctx.oauth;
     let grants = host.grants(entry.provider.store.as_deref());
@@ -589,6 +588,8 @@ fn fetch_oauth(
         .and_then(|name| ctx.env.var(name))
         .filter(|v| !v.is_empty())
         .map(str::to_string);
+    let machine = config.mode == jerk_oauth::config::Mode::ClientCredentials
+        || config.flow == jerk_oauth::config::Flow::ClientCredentials;
     if refresh_from_env.is_none() {
         if let Some(grant) = &grant {
             if let Some(at) = &grant.access_token {
@@ -605,6 +606,9 @@ fn fetch_oauth(
                         scope: grant.scope.clone(),
                     });
                 }
+                if machine {
+                    return remint_client_credentials(entry, &config, vars, user, ctx, io);
+                }
                 sign_in_hint(entry, io);
                 return Err(Exit::SignIn);
             }
@@ -618,6 +622,9 @@ fn fetch_oauth(
             .filter(|s| !s.is_empty())
     });
     let Some(refresh_token) = refresh_token else {
+        if machine {
+            return remint_client_credentials(entry, &config, vars, user, ctx, io);
+        }
         sign_in_hint(entry, io);
         return Err(Exit::SignIn);
     };
@@ -659,6 +666,49 @@ fn fetch_oauth(
             Err(e.exit)
         }
     }
+}
+
+fn remint_client_credentials(
+    entry: &Entry,
+    config: &jerk_oauth::config::OAuthConfig,
+    vars: &Vars,
+    user: &str,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<Token, Exit> {
+    let extra: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let token = match oauth::oauth_client_credentials(config, None, ctx.oauth, ctx.now, &extra) {
+        Ok(t) => t,
+        Err(e) if e.exit == Exit::SignIn || e.exit == Exit::Usage => {
+            let _ = writeln!(io.err, "jerk: {}: {e}", entry.id);
+            sign_in_hint(entry, io);
+            return Err(Exit::SignIn);
+        }
+        Err(e) => {
+            let _ = writeln!(io.err, "jerk: {}: {e}", entry.id);
+            return Err(e.exit);
+        }
+    };
+    let grants = ctx.oauth.grants(entry.provider.store.as_deref());
+    let updated = crate::grants::Grant {
+        provider: entry.id.clone(),
+        user: user.to_string(),
+        refresh_token: String::new(),
+        access_token: Some(token.access_token.clone()),
+        expires_at: token.expires_at,
+        scope: token.scope.clone(),
+    };
+    if let Err(e) = grants.store(&updated) {
+        let _ = writeln!(io.err, "jerk: {}: cannot store grant: {e}", entry.id);
+        return Err(Exit::Error);
+    }
+    Ok(Token {
+        value: token.access_token,
+        fields: BTreeMap::new(),
+        source: "oauth",
+        expires_at: token.expires_at,
+        scope: token.scope,
+    })
 }
 
 pub fn whoami(

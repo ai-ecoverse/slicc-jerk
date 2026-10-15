@@ -9,15 +9,18 @@ pub enum Mode {
     Intercept,
     Popup,
     Auto,
+    ClientCredentials,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Flow {
+    #[default]
     Pkce,
     Code,
     Implicit,
     Exchange,
+    ClientCredentials,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +63,18 @@ pub struct Capture {
     pub header: Option<String>,
 }
 
+impl Default for Capture {
+    fn default() -> Self {
+        Self {
+            at: CaptureAt::Request,
+            from: CaptureFrom::Query,
+            param: String::new(),
+            url: None,
+            header: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rewrite {
@@ -97,16 +112,20 @@ pub enum Relay {
 #[serde(deny_unknown_fields)]
 pub struct OAuthConfig {
     pub mode: Mode,
+    #[serde(default)]
     pub flow: Flow,
+    #[serde(default)]
     pub authorize_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_url: Option<String>,
     pub client_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_secret: Option<String>,
+    #[serde(default)]
     pub redirect_uri: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    #[serde(default)]
     pub capture: Capture,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay: Option<Relay>,
@@ -216,16 +235,7 @@ fn validate_url_scheme(url_str: &str, field: &str, errors: &mut Vec<ValidationEr
 
 pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-
-    if config.authorize_url.is_empty() {
-        errors.push(ValidationError {
-            field: "authorize_url".into(),
-            message: "must not be empty".into(),
-        });
-    } else {
-        let raw = strip_placeholders(&config.authorize_url);
-        validate_url_scheme(&raw, "authorize_url", &mut errors);
-    }
+    let machine = config.mode == Mode::ClientCredentials || config.flow == Flow::ClientCredentials;
 
     if config.client_id.is_empty() {
         errors.push(ValidationError {
@@ -234,23 +244,116 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
         });
     }
 
-    if config.redirect_uri.is_empty() {
-        errors.push(ValidationError {
-            field: "redirect_uri".into(),
-            message: "must not be empty".into(),
-        });
-    } else {
-        validate_url_scheme(&config.redirect_uri, "redirect_uri", &mut errors);
-    }
-
-    if let Some(ref token_url) = config.token_url {
-        if token_url.is_empty() {
-            errors.push(ValidationError {
+    if machine {
+        match &config.token_url {
+            None => errors.push(ValidationError {
                 field: "token_url".into(),
+                message: "required for client_credentials".into(),
+            }),
+            Some(token_url) if token_url.is_empty() => errors.push(ValidationError {
+                field: "token_url".into(),
+                message: "must not be empty".into(),
+            }),
+            Some(token_url) => {
+                let raw = strip_placeholders(token_url);
+                validate_url_scheme(&raw, "token_url", &mut errors);
+            }
+        }
+        match &config.client_secret {
+            None => errors.push(ValidationError {
+                field: "client_secret".into(),
+                message: "required for client_credentials".into(),
+            }),
+            Some(secret) if secret.is_empty() => errors.push(ValidationError {
+                field: "client_secret".into(),
+                message: "must not be empty".into(),
+            }),
+            Some(_) => {}
+        }
+    } else {
+        if config.authorize_url.is_empty() {
+            errors.push(ValidationError {
+                field: "authorize_url".into(),
                 message: "must not be empty".into(),
             });
         } else {
-            validate_url_scheme(token_url, "token_url", &mut errors);
+            let raw = strip_placeholders(&config.authorize_url);
+            validate_url_scheme(&raw, "authorize_url", &mut errors);
+        }
+
+        if config.redirect_uri.is_empty() {
+            errors.push(ValidationError {
+                field: "redirect_uri".into(),
+                message: "must not be empty".into(),
+            });
+        } else {
+            validate_url_scheme(&config.redirect_uri, "redirect_uri", &mut errors);
+        }
+
+        if let Some(ref token_url) = config.token_url {
+            if token_url.is_empty() {
+                errors.push(ValidationError {
+                    field: "token_url".into(),
+                    message: "must not be empty".into(),
+                });
+            } else {
+                validate_url_scheme(token_url, "token_url", &mut errors);
+            }
+        }
+
+        if config.capture.param.is_empty() {
+            errors.push(ValidationError {
+                field: "capture.param".into(),
+                message: "must not be empty".into(),
+            });
+        }
+
+        if matches!(config.flow, Flow::Pkce | Flow::Code) && config.token_url.is_none() {
+            errors.push(ValidationError {
+                field: "token_url".into(),
+                message: match config.flow {
+                    Flow::Pkce => "required for pkce flow".into(),
+                    Flow::Code => "required for code flow".into(),
+                    Flow::Exchange | Flow::Implicit | Flow::ClientCredentials => unreachable!(),
+                },
+            });
+        }
+
+        if config.flow == Flow::Exchange {
+            if config.token_url.is_none() {
+                errors.push(ValidationError {
+                    field: "token_url".into(),
+                    message: "required for exchange flow".into(),
+                });
+            }
+            match &config.exchange {
+                None => errors.push(ValidationError {
+                    field: "exchange".into(),
+                    message: "required for exchange flow".into(),
+                }),
+                Some(ex) if ex.grant_type.is_empty() => errors.push(ValidationError {
+                    field: "exchange.grant_type".into(),
+                    message: "must not be empty".into(),
+                }),
+                Some(_) => {}
+            }
+        }
+
+        if config.capture.at == CaptureAt::Network && config.capture.url.is_none() {
+            errors.push(ValidationError {
+                field: "capture.url".into(),
+                message: "required when capture.at is network".into(),
+            });
+        }
+
+        if config.capture.at == CaptureAt::Network
+            && config.capture.from == CaptureFrom::Header
+            && config.capture.header.is_none()
+        {
+            errors.push(ValidationError {
+                field: "capture.header".into(),
+                message: "required when capture.from is header".into(),
+            });
         }
     }
 
@@ -272,61 +375,6 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
                 message: "must not be empty".into(),
             });
         }
-    }
-
-    if config.capture.param.is_empty() {
-        errors.push(ValidationError {
-            field: "capture.param".into(),
-            message: "must not be empty".into(),
-        });
-    }
-
-    if matches!(config.flow, Flow::Pkce | Flow::Code) && config.token_url.is_none() {
-        errors.push(ValidationError {
-            field: "token_url".into(),
-            message: match config.flow {
-                Flow::Pkce => "required for pkce flow".into(),
-                Flow::Code => "required for code flow".into(),
-                Flow::Exchange | Flow::Implicit => unreachable!(),
-            },
-        });
-    }
-
-    if config.flow == Flow::Exchange {
-        if config.token_url.is_none() {
-            errors.push(ValidationError {
-                field: "token_url".into(),
-                message: "required for exchange flow".into(),
-            });
-        }
-        match &config.exchange {
-            None => errors.push(ValidationError {
-                field: "exchange".into(),
-                message: "required for exchange flow".into(),
-            }),
-            Some(ex) if ex.grant_type.is_empty() => errors.push(ValidationError {
-                field: "exchange.grant_type".into(),
-                message: "must not be empty".into(),
-            }),
-            Some(_) => {}
-        }
-    }
-
-    if config.capture.at == CaptureAt::Network && config.capture.url.is_none() {
-        errors.push(ValidationError {
-            field: "capture.url".into(),
-            message: "required when capture.at is network".into(),
-        });
-    }
-
-    if config.capture.at == CaptureAt::Network
-        && config.capture.from == CaptureFrom::Header
-        && config.capture.header.is_none()
-    {
-        errors.push(ValidationError {
-            field: "capture.header".into(),
-            message: "required when capture.from is header".into(),
-        });
     }
 
     if let Some(relay) = &config.relay {
