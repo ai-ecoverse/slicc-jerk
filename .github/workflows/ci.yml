@@ -73,7 +73,11 @@ jobs:
 
       - uses: ./.github/actions/toolchain
 
+      - id: shellcheck
+        run: command -v shellcheck || echo "missing=true" >> "$GITHUB_OUTPUT"
+
       - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8
+        if: steps.shellcheck.outputs.missing
         with:
           tool: shellcheck
 
