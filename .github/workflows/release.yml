@@ -3,19 +3,17 @@ name: Release
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: release-main
+  cancel-in-progress: false
 
 jobs:
   plan:
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -47,38 +45,18 @@ jobs:
         id: matrix
         run: node scripts/build-matrix.mjs
 
-  dry-run:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      version: ${{ steps.plan.outputs.version }}
-      matrix: ${{ steps.matrix.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-
-      - name: Plan
-        id: plan
-        run: echo "version=0.0.0-dry-run.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-
-      - name: Matrix
-        id: matrix
-        run: node scripts/build-matrix.mjs --pull-request
-
   build:
-    needs: [plan, dry-run]
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (needs.plan.outputs.version || needs.dry-run.outputs.version) != '' }}
+    needs: [plan]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.version != '' }}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix || needs.dry-run.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
       contents: read
     env:
-      JERK_VERSION: ${{ needs.plan.outputs.version || needs.dry-run.outputs.version }}
+      JERK_VERSION: ${{ needs.plan.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -108,7 +86,7 @@ jobs:
           done
 
       - name: Sign and notarize the darwin binaries
-        if: matrix.name == 'darwin' && github.event_name != 'pull_request'
+        if: matrix.name == 'darwin'
         env:
           APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
@@ -141,45 +119,9 @@ jobs:
           path: out/
           retention-days: 7
 
-  package-check:
-    needs: [dry-run, build]
-    if: ${{ !cancelled() && needs.build.result == 'success' && github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      LEFTHOOK: '0'
-      VERSION: ${{ needs.dry-run.outputs.version }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24
-          cache: npm
-
-      - run: npm ci
-
-      - run: rustup show active-toolchain || rustup toolchain install
-
-      - run: cargo install wasm-bindgen-cli@0.2.129
-
-      - run: npm run build:oauth-wasm
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          path: artifacts/build
-
-      - run: node scripts/release-collect.mjs --version "$VERSION" --skip-missing
-
-      - run: node scripts/npm-stage.mjs --version "$VERSION" --only linux-arm64 --only linux-x64 --only win32-arm64 --only win32-x64
-
-      - run: node scripts/npm-publish.mjs --dry-run
-
   release:
     needs: [plan, build]
-    if: ${{ !cancelled() && needs.build.result == 'success' && github.event_name != 'pull_request' }}
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
