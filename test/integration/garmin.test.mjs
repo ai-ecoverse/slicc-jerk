@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { sandbox } from './helpers.mjs';
 
@@ -227,7 +229,7 @@ function stubCdp({ redirectUrl }) {
     });
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address();
-      const logFile = `/tmp/jerk-cdp-stub-${port}.log`;
+      const logFile = join(tmpdir(), `jerk-cdp-stub-${port}.log`);
       resolve({
         wsUrl: `ws://127.0.0.1:${port}/devtools/browser`,
         logFile,
