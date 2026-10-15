@@ -45,8 +45,15 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
 
         let has_challenge = authorize_url.contains("{code_challenge}");
         let pkce = flags.has("--pkce") || has_challenge;
+        let exchange = flags.has("--exchange");
 
-        let flow = if pkce { Flow::Pkce } else { Flow::Implicit };
+        let flow = if pkce {
+            Flow::Pkce
+        } else if exchange {
+            Flow::Code
+        } else {
+            Flow::Implicit
+        };
 
         let token_url = flags.value("--token-url").map(String::from);
         let client_id = flags
@@ -114,8 +121,11 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     let exchange = flags.has("--exchange");
 
     if exchange {
-        if config.flow == Flow::Pkce && config.token_url.is_none() {
-            return usage("intercept: --token-url is required for PKCE exchange", io);
+        if matches!(config.flow, Flow::Pkce | Flow::Code) && config.token_url.is_none() {
+            return usage(
+                "intercept: --token-url is required for pkce and code exchange",
+                io,
+            );
         }
         let token = match oauth::oauth_create(
             &config,

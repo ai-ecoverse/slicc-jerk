@@ -117,6 +117,49 @@ list = { run = ["fastly", "profile", "list", "--json", "--quiet"], parse = "json
 create = { run = ["fastly", "sso", "{profile}"], interactive = true }
 drop = { run = ["fastly", "profile", "delete", "{id}", "--auto-yes"], interactive = true }
 
+[providers.gcloud]
+name = "Google Cloud (gcloud)"
+env = ["CLOUDSDK_AUTH_ACCESS_TOKEN"]
+domains = ["www.googleapis.com", "oauth2.googleapis.com", "cloudresourcemanager.googleapis.com"]
+max_age = "55m"
+list = { run = ["gcloud", "auth", "list", "--format=json"], parse = "json:", requires = "gcloud" }
+user = { run = ["gcloud", "config", "get-value", "account"], parse = "text", requires = "gcloud" }
+
+[[providers.gcloud.get]]
+requires = "gcloud"
+run = ["gcloud", "auth", "print-access-token"]
+parse = "text"
+
+[[providers.gcloud.get]]
+oauth = true
+
+[[providers.gcloud.create]]
+requires = "gcloud"
+run = ["gcloud", "auth", "login"]
+interactive = true
+
+[[providers.gcloud.create]]
+oauth = true
+
+[[providers.gcloud.drop]]
+requires = "gcloud"
+run = ["gcloud", "auth", "revoke", "{id}"]
+interactive = true
+
+[[providers.gcloud.drop]]
+oauth = true
+
+[providers.gcloud.oauth]
+mode = "loopback"
+flow = "code"
+authorize_url = "https://accounts.google.com/o/oauth2/auth?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&state={state}&access_type=offline&prompt=consent"
+token_url = "https://oauth2.googleapis.com/token"
+client_id = "32555940559.apps.googleusercontent.com"
+client_secret = "ZmssLNjJy2998hD4CTg2ejr2"
+redirect_uri = "http://127.0.0.1:8085/"
+scope = "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform"
+capture = { at = "request", from = "query", param = "code" }
+
 [providers.adobe-aio]
 name = "Adobe IMS (aio CLI)"
 env = ["ADOBE_IMS_TOKEN"]
