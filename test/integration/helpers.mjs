@@ -5,10 +5,12 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { after } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -19,6 +21,7 @@ export const expectedVersion = process.env.JERK_VERSION || '0.0.0';
 
 export function sandbox() {
   const dir = mkdtempSync(join(tmpdir(), 'jerk-it-'));
+  after(() => rmSync(dir, { recursive: true, force: true }));
   const bin = join(dir, 'bin');
   mkdirSync(bin);
   const env = {

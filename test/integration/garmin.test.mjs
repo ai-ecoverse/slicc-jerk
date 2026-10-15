@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { test } from 'node:test';
 import { sandbox } from './helpers.mjs';
 
@@ -105,8 +102,7 @@ body = { service_ticket = "{value}", service_url = "https://connect.garmin.com/m
     assert.equal(posts.length, 2);
     assert.match(posts[1], /grant_type=refresh_token/);
   } finally {
-    await cdp.close();
-    await http.close();
+    await Promise.all([cdp.close(), http.close()]);
   }
 });
 
@@ -229,17 +225,11 @@ function stubCdp({ redirectUrl }) {
     });
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address();
-      const logFile = join(tmpdir(), `jerk-cdp-stub-${port}.log`);
       resolve({
         wsUrl: `ws://127.0.0.1:${port}/devtools/browser`,
-        logFile,
-        log: () => {
-          writeFileSync(logFile, lines.join('\n'));
-          return lines.join('\n');
-        },
+        log: () => lines.join('\n'),
         close: () =>
           new Promise((res, rej) => {
-            writeFileSync(logFile, lines.join('\n'));
             for (const s of sockets) s.destroy();
             server.close((err) => (err ? rej(err) : res()));
           }),
