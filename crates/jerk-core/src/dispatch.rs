@@ -1046,6 +1046,12 @@ fn create_step(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Re
     pick(entry, "create", chain, vars, ctx, io)
 }
 
+fn requested_scope(flags: &Flags) -> Option<&str> {
+    flags
+        .value("--scope")
+        .or(flags.params.get("scope").map(String::as_str))
+}
+
 pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     let flags = match parse_flags(
         args,
@@ -1082,7 +1088,7 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
             err: &mut std::io::sink(),
         };
         if let Ok(token) = fetch(entry, &vars, ctx, &mut quiet) {
-            let covered = match flags.value("--scope") {
+            let covered = match requested_scope(&flags) {
                 Some(requested) => jerk_oauth::scopes::scopes_satisfied(
                     granted(entry, &token, &vars, ctx, &mut quiet).as_deref(),
                     requested,
@@ -1133,9 +1139,7 @@ fn oauth_create_cmd(
             return Exit::Usage;
         }
     };
-    let requested = flags
-        .value("--scope")
-        .or(flags.params.get("scope").map(String::as_str));
+    let requested = requested_scope(flags);
     let scope = requested
         .or(vars.get("scope").map(String::as_str))
         .or(config.scope.as_deref());
