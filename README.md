@@ -81,6 +81,7 @@ A token already in the provider's first `env` variable (`GH_TOKEN`, …) wins ov
 | `adobe-aio` | `aio` | `aio login --bare --no-open` | The expiry comes from the IMS token itself. |
 | `aem` | `aem-ext`, then browser OAuth | env `AEM_TOKEN` / `AEM_API_KEY`, else the stored OAuth grant | When `aem-ext` is on `PATH`, `create` / `list` / `drop` wrap `aem-ext auth key` create, list, and delete (365-day admin API keys, `X-Auth-Token`). `create` prints the key once (`--json` → `/value`, id `/id`) and records the jti for `drop`. Needs `-p org=… -p site=…`. Without `aem-ext`, `create` / `drop` / `get` use the aem-cli loopback OAuth (`authToken`, ~20 minutes). Cookie login (`aem-ext auth login`) stays on the CLI for curl-only use. |
 | `xai` | jerk's own OAuth | PKCE through a loopback redirect | The sign-in opens in your browser. The grant is kept in the OS keyring. |
+| `printful` | `printful` (skill CLI) | `printful auth token` | Store-level private tokens for `api.printful.com`. `PRINTFUL_API_TOKEN` wins when set. `create` is `printful auth login`: pass `-p token=…` to store a Developer Portal token, or omit it to mint via a logged-in `www.printful.com` dashboard tab. `list` / `drop` are `auth status --json` / `auth logout`. |
 
 `jerk config show <provider>` prints the definition that's in effect.
 
