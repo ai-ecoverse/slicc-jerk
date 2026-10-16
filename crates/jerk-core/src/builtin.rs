@@ -377,6 +377,19 @@ capture = { at = "request", from = "query", param = "code" }
 revoke_url = "https://oauth2.googleapis.com/revoke"
 refresh_env = "GWS_REFRESH_TOKEN"
 
+[providers.rescuetime]
+name = "RescueTime"
+env = ["RESCUETIME_API_KEY"]
+domains = ["www.rescuetime.com"]
+[providers.rescuetime.oauth]
+mode = "intercept"
+flow = "implicit"
+authorize_url = "https://www.rescuetime.com/anapi/manage"
+client_id = "rescuetime"
+redirect_uri = "https://www.rescuetime.com/rtx/settings/api/key_setup_summary"
+capture = { at = "network", from = "body", url = "https://www.rescuetime.com/anapi/setup_submit", param = "candidate" }
+timeout = "10m"
+
 [providers.garmin]
 name = "Garmin Connect"
 env = ["GARMIN_TOKEN"]
