@@ -169,3 +169,37 @@ capture = { at = "network", from = "body", stage = "request", url = "https://api
   assert.equal(accepted.status, 0, accepted.stderr);
   assert.match(accepted.stdout, /ok: 18 providers/);
 });
+
+test('config check rejects capture.url builtins the flow cannot fill', () => {
+  const sb = sandbox();
+  sb.writeUser(`[providers.missingbuilt]
+env = ["MISSING_TOKEN"]
+[providers.missingbuilt.oauth]
+mode = "intercept"
+flow = "implicit"
+authorize_url = "https://app.example/login"
+client_id = "app-id"
+redirect_uri = "https://app.example/"
+capture = { at = "network", from = "body", url = "https://api.example/{code_challenge}?s={client_secret}", param = "token" }
+`);
+  const rejected = sb.jerk(['config', 'check']);
+  assert.equal(rejected.status, 2);
+  assert.match(rejected.stderr, /placeholder \{code_challenge\} is only available for pkce/);
+  assert.match(rejected.stderr, /placeholder \{client_secret\} needs client_secret/);
+
+  sb.writeUser(`[providers.pkceurl]
+env = ["PKCE_TOKEN"]
+[providers.pkceurl.oauth]
+mode = "intercept"
+flow = "pkce"
+authorize_url = "https://app.example/login"
+token_url = "https://app.example/token"
+client_id = "app-id"
+client_secret = "sekret"
+redirect_uri = "https://app.example/cb"
+capture = { at = "network", from = "body", url = "https://{client_id}.example/api/*?c={code_challenge}&s={client_secret}", param = "token" }
+`);
+  const accepted = sb.jerk(['config', 'check']);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.match(accepted.stdout, /ok: 18 providers/);
+});

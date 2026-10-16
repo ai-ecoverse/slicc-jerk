@@ -426,6 +426,7 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
     }
 
     validate_capture_extra(config, &mut errors);
+    reject_unavailable_capture_builtins(config, &mut errors);
 
     for (i, rule) in config.rewrite.iter().enumerate() {
         if rule.match_pattern.is_empty() {
@@ -451,6 +452,38 @@ pub fn validated(config: OAuthConfig) -> Result<ValidConfig, Vec<ValidationError
         Ok(ValidConfig(config))
     } else {
         Err(errors)
+    }
+}
+
+fn reject_unavailable_capture_builtins(config: &OAuthConfig, errors: &mut Vec<ValidationError>) {
+    let Some(url) = config.capture.url.as_deref() else {
+        return;
+    };
+    let mut challenge = false;
+    let mut secret = false;
+    let mut rest = url;
+    while let Some(start) = rest.find('{') {
+        rest = &rest[start + 1..];
+        let Some(end) = rest.find('}') else {
+            break;
+        };
+        let name = &rest[..end];
+        rest = &rest[end + 1..];
+        if name == "code_challenge" && config.flow != Flow::Pkce && !challenge {
+            challenge = true;
+            errors.push(ValidationError {
+                field: "capture.url".into(),
+                message: "placeholder {code_challenge} is only available for pkce".into(),
+            });
+        }
+        let missing_secret = config.client_secret.as_deref().is_none_or(str::is_empty);
+        if name == "client_secret" && missing_secret && !secret {
+            secret = true;
+            errors.push(ValidationError {
+                field: "capture.url".into(),
+                message: "placeholder {client_secret} needs client_secret".into(),
+            });
+        }
     }
 }
 
