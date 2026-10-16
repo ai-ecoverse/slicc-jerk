@@ -23,7 +23,6 @@ pub mod run;
 pub mod sealed;
 pub mod source;
 pub mod state;
-#[cfg(not(target_os = "wasi"))]
 pub mod tab;
 pub mod template;
 pub mod time;
@@ -50,7 +49,7 @@ mod mcp_unit {
     include!("../../../test/unit/mcp_tests.rs");
 }
 
-#[cfg(all(test, jerk_unit, not(target_os = "wasi")))]
+#[cfg(all(test, jerk_unit))]
 mod tab_unit {
     include!("../../../test/unit/tab_tests.rs");
 }

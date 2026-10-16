@@ -175,7 +175,7 @@ function readWsFrame(buf) {
     const mask = buf.subarray(offset, offset + 4);
     payload = Buffer.from(payload.map((b, i) => b ^ mask[i % 4]));
   }
-  return { payload, rest: buf.subarray(offset + maskLen + len) };
+  return { opcode: buf[0] & 0x0f, payload, rest: buf.subarray(offset + maskLen + len) };
 }
 
 export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
@@ -308,6 +308,11 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
           const parsed = readWsFrame(buf);
           if (!parsed) break;
           buf = parsed.rest;
+          if (parsed.opcode === 8) {
+            socket.end();
+            return;
+          }
+          if (parsed.opcode !== 1) continue;
           handle(JSON.parse(parsed.payload.toString()));
         }
       });

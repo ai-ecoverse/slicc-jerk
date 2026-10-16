@@ -575,19 +575,12 @@ fn intercept_command(_args: &[String], _ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> E
     Exit::Unsupported
 }
 
-#[cfg(not(target_os = "wasi"))]
 fn tab_command(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     if ctx.via_link {
         let _ = writeln!(io.err, "jerk tab: not available over the link");
         return Exit::Unsupported;
     }
     crate::tab::run(args, ctx, io)
-}
-
-#[cfg(target_os = "wasi")]
-fn tab_command(_args: &[String], _ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
-    let _ = writeln!(io.err, "jerk tab: not available in this environment");
-    Exit::Unsupported
 }
 
 #[allow(dead_code)]
