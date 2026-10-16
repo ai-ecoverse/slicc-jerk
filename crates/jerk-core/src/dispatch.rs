@@ -239,7 +239,11 @@ pub struct Token {
 
 impl Token {
     pub fn credentials(&self, entry: &Entry) -> BTreeMap<String, String> {
-        if self.fields.is_empty() {
+        let capture_fields = entry
+            .oauth_config
+            .as_ref()
+            .is_some_and(|config| !config.capture.fields.is_empty());
+        if self.fields.is_empty() && !capture_fields {
             return entry
                 .provider
                 .env
@@ -267,7 +271,11 @@ impl Token {
                 .provider
                 .get
                 .as_ref()
-                .is_some_and(|chain| chain.iter().any(|verb| !verb.fields.is_empty()));
+                .is_some_and(|chain| chain.iter().any(|verb| !verb.fields.is_empty()))
+            || entry
+                .oauth_config
+                .as_ref()
+                .is_some_and(|config| !config.capture.fields.is_empty());
         if multi {
             return None;
         }
@@ -1002,7 +1010,10 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
             let credentials: serde_json::Map<String, serde_json::Value> = token
                 .credentials(entry)
                 .into_iter()
-                .map(|(name, value)| (name, json!(secret(&value))))
+                .map(|(name, value)| {
+                    let shown = if reveal { value } else { mask::mask(&value) };
+                    (name, json!(shown))
+                })
                 .collect();
             doc["credentials"] = serde_json::Value::Object(credentials);
         }
