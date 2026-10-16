@@ -434,7 +434,58 @@ fn parse_oauth(
         }
         return None;
     }
+    let mut field_errors = false;
+    for name in config.capture.fields.keys() {
+        if provider.env.first().map(String::as_str) == Some(name.as_str()) {
+            field_errors = true;
+            problems.push(Problem {
+                level: Level::Error,
+                source: source.to_string(),
+                provider: Some(id.to_string()),
+                message: format!("oauth: capture field {name} is the primary env name"),
+            });
+        } else if !provider.env.iter().any(|item| item == name) {
+            field_errors = true;
+            problems.push(Problem {
+                level: Level::Error,
+                source: source.to_string(),
+                provider: Some(id.to_string()),
+                message: format!("oauth: capture field {name} is not listed in env"),
+            });
+        }
+    }
+    let mut placeholder_errors = false;
+    for message in undeclared_oauth_placeholders(provider, &config) {
+        placeholder_errors = true;
+        problems.push(Problem {
+            level: Level::Error,
+            source: source.to_string(),
+            provider: Some(id.to_string()),
+            message,
+        });
+    }
+    if field_errors || placeholder_errors {
+        return None;
+    }
     Some(config)
+}
+
+fn undeclared_oauth_placeholders(provider: &Provider, config: &OAuthConfig) -> Vec<String> {
+    let mut messages = Vec::new();
+    let mut check = |label: &str, template: &str| {
+        for name in jerk_oauth::template::extra_placeholders(template) {
+            if !provider.params.contains_key(&name) {
+                messages.push(format!(
+                    "oauth: {label} placeholder {{{name}}} is not a provider param"
+                ));
+            }
+        }
+    };
+    check("authorize_url", &config.authorize_url);
+    if let Some(url) = &config.capture.url {
+        check("capture.url", url);
+    }
+    messages
 }
 
 pub fn validate(id: &str, provider: &Provider, source: &Source) -> Vec<Problem> {

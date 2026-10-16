@@ -407,6 +407,20 @@ timeout = "5m"
 [providers.garmin.oauth.exchange]
 grant_type = "https://connectapi.garmin.com/di-oauth2-service/oauth/grant/service_ticket"
 body = { service_ticket = "{value}", service_url = "https://connect.garmin.com/modern" }
+
+[providers.slack]
+name = "Slack"
+env = ["SLACK_TOKEN", "SLACK_D_COOKIE"]
+domains = ["app.slack.com", "edgeapi.slack.com", "files.slack.com"]
+params = { workspace = "" }
+[providers.slack.oauth]
+mode = "intercept"
+flow = "implicit"
+authorize_url = "https://app.slack.com/client/{workspace}"
+client_id = "slack"
+redirect_uri = "https://app.slack.com/"
+capture = { at = "network", from = "body", stage = "request", url = "https://*.slack.com/api/*", param = "token", fields = { SLACK_D_COOKIE = "cookie:d" } }
+timeout = "2m"
 "#;
 
 #[cfg(target_os = "wasi")]

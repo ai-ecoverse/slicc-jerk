@@ -9,8 +9,14 @@ use jerk_oauth::relay;
 use jerk_oauth::rewrite;
 use jerk_oauth::template;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::time::{Duration, Instant};
+
+struct Captured {
+    value: String,
+    fields: BTreeMap<String, String>,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -60,6 +66,11 @@ pub fn run(
         vars.push(("code_challenge", c));
     }
     let authorize_url = template::render(&config.authorize_url, &vars);
+    let mut config = config.clone();
+    if let Some(url) = config.capture.url.clone() {
+        let secret = config.client_secret.clone();
+        config.capture.url = Some(rendered_capture_url(&url, &vars, secret.as_deref())?);
+    }
 
     let browser_context = if config.isolate == Some(true) {
         let result = cdp
@@ -88,7 +99,7 @@ pub fn run(
     let outcome = run_in_target(
         cdp,
         &target_id,
-        config,
+        &config,
         &authorize_url,
         &state,
         random_16,
@@ -110,14 +121,15 @@ pub fn run(
     if config.capture.at == CaptureAt::Network {
         if matches!(config.capture.from, CaptureFrom::Header | CaptureFrom::Body) {
             return Ok(Token {
-                access_token: captured,
+                access_token: captured.value,
                 refresh_token: None,
                 expires_at: None,
                 scope: None,
                 token_type: None,
+                fields: captured.fields,
             });
         }
-        jerk_oauth::config::require_https_or_loopback(&captured).map_err(|e| OAuthError {
+        jerk_oauth::config::require_https_or_loopback(&captured.value).map_err(|e| OAuthError {
             exit: Exit::Error,
             message: format!("captured network URL: {e}"),
         })?;
@@ -133,7 +145,7 @@ pub fn run(
         None
     };
     let result = capture::parse_redirect(
-        &captured,
+        &captured.value,
         &config.capture.from,
         &config.capture.param,
         expected_state,
@@ -160,7 +172,7 @@ pub fn run(
     }
 
     oauth::token_from_capture(
-        config,
+        &config,
         &result,
         verifier.as_deref(),
         scope,
@@ -179,7 +191,7 @@ fn run_in_target(
     nonce_bytes: &[u8; 16],
     timeout_ms: u64,
     err: &mut dyn Write,
-) -> Result<String, OAuthError> {
+) -> Result<Captured, OAuthError> {
     let mut patterns = build_patterns(config);
 
     if patterns.is_empty() && config.capture.at != CaptureAt::Navigation {
@@ -254,7 +266,7 @@ fn capture_navigation(
     redirect_base: &str,
     config: &OAuthConfig,
     deadline: Instant,
-) -> Result<String, OAuthError> {
+) -> Result<Captured, OAuthError> {
     let redirect_check = redirect_base.to_string();
     loop {
         let remaining = remaining_timeout(deadline)?;
@@ -275,7 +287,10 @@ fn capture_navigation(
                 .is_some_and(|nav| nav.url.starts_with(&check) || nav.url.contains(&check))
         }) {
             if let Some(nav) = fetch::navigation(&guard, &event) {
-                return Ok(nav.url);
+                return Ok(Captured {
+                    value: nav.url,
+                    fields: BTreeMap::new(),
+                });
             }
         }
 
@@ -293,7 +308,7 @@ fn capture_fetch(
     _nonce_bytes: &[u8; 16],
     deadline: Instant,
     is_network: bool,
-) -> Result<String, OAuthError> {
+) -> Result<Captured, OAuthError> {
     loop {
         let remaining = remaining_timeout(deadline)?;
 
@@ -304,9 +319,11 @@ fn capture_fetch(
         };
 
         if is_network {
-            if let Some(captured) = try_capture_network(&paused, config) {
-                let _ = interception.decide(&paused, &Decision::default());
-                return Ok(captured);
+            if let Some(value) = try_capture_network(&paused, config) {
+                if let Some(fields) = capture_fields(interception, &paused, config) {
+                    let _ = interception.decide(&paused, &Decision::default());
+                    return Ok(Captured { value, fields });
+                }
             }
         } else if let Some(captured) = try_capture(&paused, config, redirect_base) {
             let fulfill = match config.on_capture.as_ref() {
@@ -317,7 +334,10 @@ fn capture_fetch(
                 _ => Decision::Fulfill(Fulfill::signed_in()),
             };
             let _ = interception.decide(&paused, &fulfill);
-            return Ok(captured);
+            return Ok(Captured {
+                value: captured,
+                fields: BTreeMap::new(),
+            });
         }
 
         let decision = rewrite_decision(&paused, config);
@@ -366,6 +386,12 @@ fn try_capture_network(paused: &cdp_client::fetch::Paused, config: &OAuthConfig)
             Some(value.to_string())
         }
         CaptureFrom::Body => {
+            if config.capture.stage == Some(jerk_oauth::config::CaptureStage::Request) {
+                if paused.is_response() {
+                    return None;
+                }
+                return body_param(paused.post_data.as_deref()?, &config.capture.param);
+            }
             if paused.error_reason.is_some() || !matches!(paused.status, Some(s) if s < 400) {
                 return None;
             }
@@ -375,6 +401,78 @@ fn try_capture_network(paused: &cdp_client::fetch::Paused, config: &OAuthConfig)
         CaptureFrom::Url => Some(paused.full_url()),
         _ => None,
     }
+}
+
+fn capture_fields(
+    interception: &mut Interception<'_>,
+    paused: &cdp_client::fetch::Paused,
+    config: &OAuthConfig,
+) -> Option<BTreeMap<String, String>> {
+    if config.capture.fields.is_empty() {
+        return Some(BTreeMap::new());
+    }
+    let mut fields = BTreeMap::new();
+    for (name, spec) in &config.capture.fields {
+        fields.insert(name.clone(), field_value(interception, paused, spec)?);
+    }
+    Some(fields)
+}
+
+fn field_value(
+    interception: &mut Interception<'_>,
+    paused: &cdp_client::fetch::Paused,
+    spec: &str,
+) -> Option<String> {
+    let (kind, rest) = spec.split_once(':')?;
+    let value = match kind {
+        "cookie" => cookie_from_header(paused.header("cookie").unwrap_or(""), rest)
+            .or_else(|| cookie_from_network(interception, paused, rest)),
+        "header" => paused
+            .header(rest)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        "body" => body_param(paused.post_data.as_deref()?, rest),
+        "query" => query_param(&paused.full_url(), rest),
+        _ => None,
+    };
+    value.filter(|item| !item.is_empty())
+}
+
+pub(crate) fn cookie_from_header(header: &str, name: &str) -> Option<String> {
+    header.split(';').find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        (key.trim() == name && !value.trim().is_empty()).then(|| value.trim().to_string())
+    })
+}
+
+fn cookie_from_network(
+    interception: &mut Interception<'_>,
+    paused: &cdp_client::fetch::Paused,
+    name: &str,
+) -> Option<String> {
+    let session = interception.session_id().to_string();
+    let result = interception
+        .call(
+            "Network.getCookies",
+            json!({ "urls": [paused.url] }),
+            Some(&session),
+        )
+        .ok()?;
+    let cookies = result.get("cookies")?.as_array()?;
+    cookies.iter().find_map(|cookie| {
+        let key = cookie.get("name").and_then(|value| value.as_str())?;
+        let value = cookie.get("value").and_then(|item| item.as_str())?;
+        (key == name && !value.is_empty()).then(|| value.to_string())
+    })
+}
+
+fn query_param(url: &str, name: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    parsed
+        .query_pairs()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.into_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn body_param(body: &[u8], param: &str) -> Option<String> {
@@ -403,6 +501,39 @@ fn rewrite_decision(paused: &cdp_client::fetch::Paused, config: &OAuthConfig) ->
     }
 }
 
+pub(crate) fn rendered_capture_url(
+    url: &str,
+    vars: &[(&str, &str)],
+    client_secret: Option<&str>,
+) -> Result<String, OAuthError> {
+    let mut pairs = vars.to_vec();
+    if let Some(secret) = client_secret {
+        pairs.push(("client_secret", secret));
+    }
+    let rendered = template::render(url, &pairs);
+    if let Some(name) = leftover_placeholder(&rendered) {
+        let message = if name.is_empty() {
+            "capture.url has an unclosed placeholder".to_string()
+        } else {
+            format!("capture.url still has placeholder {{{name}}}")
+        };
+        return Err(OAuthError {
+            exit: Exit::Usage,
+            message,
+        });
+    }
+    Ok(rendered)
+}
+
+fn leftover_placeholder(template: &str) -> Option<String> {
+    let start = template.find('{')?;
+    let rest = &template[start + 1..];
+    match rest.find('}') {
+        None => Some(String::new()),
+        Some(end) => Some(rest[..end].to_string()),
+    }
+}
+
 fn build_patterns(config: &OAuthConfig) -> Vec<Pattern> {
     let mut patterns = Vec::new();
 
@@ -425,10 +556,12 @@ fn build_patterns(config: &OAuthConfig) -> Vec<Pattern> {
         }
         CaptureAt::Network => {
             if let Some(url) = &config.capture.url {
-                patterns.push(if config.capture.from == CaptureFrom::Body {
-                    Pattern::response(url.clone())
-                } else {
+                let on_request = config.capture.from != CaptureFrom::Body
+                    || config.capture.stage == Some(jerk_oauth::config::CaptureStage::Request);
+                patterns.push(if on_request {
                     Pattern::request(url.clone())
+                } else {
+                    Pattern::response(url.clone())
                 });
             }
         }

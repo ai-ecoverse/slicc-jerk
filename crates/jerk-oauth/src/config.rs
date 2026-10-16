@@ -52,6 +52,13 @@ pub enum CaptureFrom {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureStage {
+    Request,
+    Response,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Capture {
     pub at: CaptureAt,
@@ -61,6 +68,10 @@ pub struct Capture {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<CaptureStage>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
 }
 
 impl Default for Capture {
@@ -71,6 +82,8 @@ impl Default for Capture {
             param: String::new(),
             url: None,
             header: None,
+            stage: None,
+            fields: BTreeMap::new(),
         }
     }
 }
@@ -412,6 +425,9 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
         }
     }
 
+    validate_capture_extra(config, &mut errors);
+    reject_unavailable_capture_builtins(config, &mut errors);
+
     for (i, rule) in config.rewrite.iter().enumerate() {
         if rule.match_pattern.is_empty() {
             errors.push(ValidationError {
@@ -437,6 +453,96 @@ pub fn validated(config: OAuthConfig) -> Result<ValidConfig, Vec<ValidationError
     } else {
         Err(errors)
     }
+}
+
+fn reject_unavailable_capture_builtins(config: &OAuthConfig, errors: &mut Vec<ValidationError>) {
+    let Some(url) = config.capture.url.as_deref() else {
+        return;
+    };
+    let mut challenge = false;
+    let mut secret = false;
+    let mut rest = url;
+    while let Some(start) = rest.find('{') {
+        rest = &rest[start + 1..];
+        let Some(end) = rest.find('}') else {
+            break;
+        };
+        let name = &rest[..end];
+        rest = &rest[end + 1..];
+        if name == "code_challenge" && config.flow != Flow::Pkce && !challenge {
+            challenge = true;
+            errors.push(ValidationError {
+                field: "capture.url".into(),
+                message: "placeholder {code_challenge} is only available for pkce".into(),
+            });
+        }
+        let missing_secret = config.client_secret.as_deref().is_none_or(str::is_empty);
+        if name == "client_secret" && missing_secret && !secret {
+            secret = true;
+            errors.push(ValidationError {
+                field: "capture.url".into(),
+                message: "placeholder {client_secret} needs client_secret".into(),
+            });
+        }
+    }
+}
+
+fn validate_capture_extra(config: &OAuthConfig, errors: &mut Vec<ValidationError>) {
+    if config.capture.stage.is_some() && config.capture.at != CaptureAt::Network {
+        errors.push(ValidationError {
+            field: "capture.stage".into(),
+            message: "only applies when capture.at is network".into(),
+        });
+    } else if config.capture.stage.is_some() && config.capture.from != CaptureFrom::Body {
+        errors.push(ValidationError {
+            field: "capture.stage".into(),
+            message: "only applies to a network body capture".into(),
+        });
+    }
+    if config.capture.fields.is_empty() {
+        return;
+    }
+    let network_value = config.capture.at == CaptureAt::Network
+        && matches!(config.capture.from, CaptureFrom::Header | CaptureFrom::Body);
+    if !network_value {
+        errors.push(ValidationError {
+            field: "capture.fields".into(),
+            message: "only applies to a network header or body capture".into(),
+        });
+        return;
+    }
+    for (name, spec) in &config.capture.fields {
+        if !valid_env_name(name) {
+            errors.push(ValidationError {
+                field: format!("capture.fields.{name}"),
+                message: "is not a valid environment variable name".into(),
+            });
+        }
+        if !valid_field_spec(spec) {
+            errors.push(ValidationError {
+                field: format!("capture.fields.{name}"),
+                message: "must be cookie:<name>, header:<name>, body:<name> or query:<name>".into(),
+            });
+        }
+    }
+}
+
+fn valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+pub fn valid_field_spec(spec: &str) -> bool {
+    let Some((kind, rest)) = spec.split_once(':') else {
+        return false;
+    };
+    matches!(kind, "cookie" | "header" | "body" | "query")
+        && !rest.is_empty()
+        && !rest.contains(':')
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 fn strip_placeholders(url: &str) -> String {

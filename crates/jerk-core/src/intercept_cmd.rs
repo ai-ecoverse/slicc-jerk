@@ -76,6 +76,8 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                 param: "code".to_string(),
                 url: None,
                 header: None,
+                stage: None,
+                fields: std::collections::BTreeMap::new(),
             },
             relay: None,
             rewrite: rewrites,

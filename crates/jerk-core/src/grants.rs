@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Grant {
@@ -9,6 +10,8 @@ pub struct Grant {
     pub access_token: Option<String>,
     pub expires_at: Option<u64>,
     pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
 }
 
 pub trait Grants: Send + Sync {

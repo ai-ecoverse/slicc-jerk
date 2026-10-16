@@ -239,7 +239,11 @@ pub struct Token {
 
 impl Token {
     pub fn credentials(&self, entry: &Entry) -> BTreeMap<String, String> {
-        if self.fields.is_empty() {
+        let capture_fields = entry
+            .oauth_config
+            .as_ref()
+            .is_some_and(|config| !config.capture.fields.is_empty());
+        if self.fields.is_empty() && !capture_fields {
             return entry
                 .provider
                 .env
@@ -267,7 +271,11 @@ impl Token {
                 .provider
                 .get
                 .as_ref()
-                .is_some_and(|chain| chain.iter().any(|verb| !verb.fields.is_empty()));
+                .is_some_and(|chain| chain.iter().any(|verb| !verb.fields.is_empty()))
+            || entry
+                .oauth_config
+                .as_ref()
+                .is_some_and(|config| !config.capture.fields.is_empty());
         if multi {
             return None;
         }
@@ -277,17 +285,55 @@ impl Token {
 
 fn env_fields(entry: &Entry, ctx: &Ctx<'_>) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
-    let Some(chain) = &entry.provider.get else {
-        return fields;
-    };
-    for verb in chain.iter() {
-        for name in verb.fields.keys() {
+    if let Some(chain) = &entry.provider.get {
+        for verb in chain.iter() {
+            for name in verb.fields.keys() {
+                if let Some(value) = ctx.env.var(name) {
+                    fields.insert(name.clone(), value.to_string());
+                }
+            }
+        }
+    }
+    if let Some(config) = &entry.oauth_config {
+        for name in config.capture.fields.keys() {
             if let Some(value) = ctx.env.var(name) {
-                fields.insert(name.clone(), value.to_string());
+                if !value.is_empty() {
+                    fields.insert(name.clone(), value.to_string());
+                }
             }
         }
     }
     fields
+}
+
+fn grant_user(vars: &Vars) -> &str {
+    if let Some(user) = vars.get("user").map(String::as_str) {
+        if !user.is_empty() {
+            return user;
+        }
+    }
+    if let Some(workspace) = vars.get("workspace").map(String::as_str) {
+        if !workspace.is_empty() {
+            return workspace;
+        }
+    }
+    "default"
+}
+
+fn named_fields(entry: &Entry, token: &Token) -> bool {
+    !token.fields.is_empty()
+        && !entry
+            .provider
+            .get
+            .as_ref()
+            .is_some_and(|chain| chain.iter().any(|verb| !verb.fields.is_empty()))
+}
+
+fn shown_secret(value: &str, terminal: bool, reveal: bool) -> String {
+    match choose(false, terminal, reveal) {
+        Shown::Masked => mask::mask(value),
+        _ => value.to_string(),
+    }
 }
 
 pub fn fetch(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<Token, Exit> {
@@ -301,13 +347,27 @@ pub fn fetch_from(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Result<Token, Exit> {
+    let named = entry
+        .oauth_config
+        .as_ref()
+        .is_some_and(|config| !config.capture.fields.is_empty());
     let from_env = use_env
         .then(|| {
-            entry
-                .provider
-                .env
-                .iter()
-                .find_map(|n| ctx.env.var(n).map(|v| v.to_string()))
+            if named {
+                entry
+                    .provider
+                    .env
+                    .first()
+                    .and_then(|name| ctx.env.var(name))
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string())
+            } else {
+                entry
+                    .provider
+                    .env
+                    .iter()
+                    .find_map(|n| ctx.env.var(n).map(|v| v.to_string()))
+            }
         })
         .flatten();
     if let Some(value) = from_env {
@@ -619,11 +679,7 @@ fn fetch_oauth(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Result<Token, Exit> {
-    let user = vars
-        .get("user")
-        .map(String::as_str)
-        .or_else(|| entry.provider.params.get("user").map(String::as_str))
-        .unwrap_or("default");
+    let user = grant_user(vars);
     let host = ctx.oauth;
     let grants = host.grants(entry.provider.store.as_deref());
     let grant = grants.get(&entry.id, user);
@@ -652,7 +708,7 @@ fn fetch_oauth(
                 if fresh {
                     return Ok(Token {
                         value: at.clone(),
-                        fields: BTreeMap::new(),
+                        fields: grant.fields.clone(),
                         source: "oauth",
                         expires_at: grant.expires_at,
                         scope: grant.scope.clone(),
@@ -691,6 +747,10 @@ fn fetch_oauth(
                         access_token: None,
                         expires_at: token.expires_at,
                         scope: token.scope.clone(),
+                        fields: grant
+                            .as_ref()
+                            .map(|item| item.fields.clone())
+                            .unwrap_or_default(),
                     };
                     if let Err(e) = grants.store(&updated) {
                         let _ = writeln!(
@@ -749,6 +809,7 @@ fn remint_client_credentials(
         access_token: Some(token.access_token.clone()),
         expires_at: token.expires_at,
         scope: token.scope.clone(),
+        fields: token.fields.clone(),
     };
     if let Err(e) = grants.store(&updated) {
         let _ = writeln!(io.err, "jerk: {}: cannot store grant: {e}", entry.id);
@@ -933,6 +994,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
         return Exit::Ok;
     }
     let reveal = flags.has("--reveal");
+    let secret = |value: &str| shown_secret(value, ctx.stdout_terminal, reveal);
     if flags.has("--json") {
         let mut doc = json!({
             "provider": entry.id,
@@ -944,7 +1006,24 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
         if reveal {
             doc["token"] = json!(token.value);
         }
+        if named_fields(entry, &token) {
+            let credentials: serde_json::Map<String, serde_json::Value> = token
+                .credentials(entry)
+                .into_iter()
+                .map(|(name, value)| {
+                    let shown = if reveal { value } else { mask::mask(&value) };
+                    (name, json!(shown))
+                })
+                .collect();
+            doc["credentials"] = serde_json::Value::Object(credentials);
+        }
         let _ = writeln!(io.out, "{doc}");
+        return Exit::Ok;
+    }
+    if named_fields(entry, &token) {
+        for (name, value) in token.credentials(entry) {
+            let _ = writeln!(io.out, "{name}={}", secret(&value));
+        }
         return Exit::Ok;
     }
     let shown = match choose(false, ctx.stdout_terminal, reveal) {
@@ -1142,7 +1221,7 @@ fn oauth_create_cmd(
     let scope = requested
         .or(vars.get("scope").map(String::as_str))
         .or(config.scope.as_deref());
-    let user = vars.get("user").map(String::as_str).unwrap_or("default");
+    let user = grant_user(vars);
     let host = ctx.oauth;
 
     if !flags.has("--force") {
@@ -1252,6 +1331,7 @@ fn oauth_create_cmd(
             access_token: None,
             expires_at: token.expires_at,
             scope: token.scope.clone(),
+            fields: token.fields.clone(),
         }
     } else {
         crate::grants::Grant {
@@ -1261,6 +1341,7 @@ fn oauth_create_cmd(
             access_token: Some(token.access_token.clone()),
             expires_at: token.expires_at,
             scope: token.scope.clone(),
+            fields: token.fields.clone(),
         }
     };
     if let Err(e) = grants.store(&grant) {
@@ -1456,17 +1537,12 @@ pub fn drop(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
 
 fn oauth_drop_cmd(
     entry: &Entry,
-    _vars: &Vars,
+    vars: &Vars,
     flags: &Flags,
     ctx: &mut Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Exit {
-    let user = entry
-        .provider
-        .params
-        .get("user")
-        .map(String::as_str)
-        .unwrap_or("default");
+    let user = grant_user(vars);
     if !flags.has("--yes") {
         if !ctx.stdin_terminal {
             return usage(
