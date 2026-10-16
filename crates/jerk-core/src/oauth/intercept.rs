@@ -66,6 +66,11 @@ pub fn run(
         vars.push(("code_challenge", c));
     }
     let authorize_url = template::render(&config.authorize_url, &vars);
+    let mut config = config.clone();
+    if let Some(url) = config.capture.url.clone() {
+        let secret = config.client_secret.clone();
+        config.capture.url = Some(rendered_capture_url(&url, &vars, secret.as_deref())?);
+    }
 
     let browser_context = if config.isolate == Some(true) {
         let result = cdp
@@ -94,7 +99,7 @@ pub fn run(
     let outcome = run_in_target(
         cdp,
         &target_id,
-        config,
+        &config,
         &authorize_url,
         &state,
         random_16,
@@ -167,7 +172,7 @@ pub fn run(
     }
 
     oauth::token_from_capture(
-        config,
+        &config,
         &result,
         verifier.as_deref(),
         scope,
@@ -493,6 +498,39 @@ fn rewrite_decision(paused: &cdp_client::fetch::Paused, config: &OAuthConfig) ->
         })
     } else {
         Decision::default()
+    }
+}
+
+pub(crate) fn rendered_capture_url(
+    url: &str,
+    vars: &[(&str, &str)],
+    client_secret: Option<&str>,
+) -> Result<String, OAuthError> {
+    let mut pairs = vars.to_vec();
+    if let Some(secret) = client_secret {
+        pairs.push(("client_secret", secret));
+    }
+    let rendered = template::render(url, &pairs);
+    if let Some(name) = leftover_placeholder(&rendered) {
+        let message = if name.is_empty() {
+            "capture.url has an unclosed placeholder".to_string()
+        } else {
+            format!("capture.url still has placeholder {{{name}}}")
+        };
+        return Err(OAuthError {
+            exit: Exit::Usage,
+            message,
+        });
+    }
+    Ok(rendered)
+}
+
+fn leftover_placeholder(template: &str) -> Option<String> {
+    let start = template.find('{')?;
+    let rest = &template[start + 1..];
+    match rest.find('}') {
+        None => Some(String::new()),
+        Some(end) => Some(rest[..end].to_string()),
     }
 }
 

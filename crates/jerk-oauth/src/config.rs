@@ -460,6 +460,11 @@ fn validate_capture_extra(config: &OAuthConfig, errors: &mut Vec<ValidationError
             field: "capture.stage".into(),
             message: "only applies when capture.at is network".into(),
         });
+    } else if config.capture.stage.is_some() && config.capture.from != CaptureFrom::Body {
+        errors.push(ValidationError {
+            field: "capture.stage".into(),
+            message: "only applies to a network body capture".into(),
+        });
     }
     if config.capture.fields.is_empty() {
         return;
