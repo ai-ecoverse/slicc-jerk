@@ -25,6 +25,17 @@ list = { run = ["npm", "token", "list", "--json"], parse = "json:" }
 create = { run = ["npm", "token", "create", "--name", "{name}", "--expires", "{expires}", "--json"], parse = "json:/token", interactive = true, min_version = "11.6.3", lookup = { run = ["npm", "token", "list", "--json"], prefix = "/token", id = "/key" } }
 drop = { run = ["npm", "token", "revoke", "{id}"] }
 
+[providers.claude]
+name = "Anthropic (Claude Code)"
+env = ["ANTHROPIC_API_KEY"]
+domains = ["api.anthropic.com"]
+requires = "claude"
+max_age = "365d"
+get = { keep = true }
+list = { run = ["claude", "auth", "status", "--json"], parse = "json:", min_version = "2.1.41" }
+create = { run = ["claude", "setup-token"], parse = "scan:sk-ant-oat", interactive = true, echo = true, keep = true }
+drop = { keep = true }
+
 [providers.cloudflare]
 name = "Cloudflare"
 env = ["CLOUDFLARE_API_TOKEN"]

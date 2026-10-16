@@ -162,7 +162,15 @@ pub fn drop_lease(entry: &Entry, flags: &Flags, ctx: &mut Ctx<'_>, io: &mut Io<'
         .provider
         .drop
         .as_ref()
-        .map(|chain| VerbChain(chain.iter().filter(|v| !v.oauth).cloned().collect()))
+        .map(|chain| {
+            VerbChain(
+                chain
+                    .iter()
+                    .filter(|v| !v.oauth && !v.keep)
+                    .cloned()
+                    .collect(),
+            )
+        })
         .filter(|chain| !chain.0.is_empty());
     let step = revokers.map(|chain| pick(entry, "drop", &chain, &vars, ctx, io));
     let verb = match step {
@@ -284,6 +292,7 @@ fn run_fnox(
     let opts = Opts {
         interactive: false,
         capture: true,
+        echo: false,
         timeout: Some(std::time::Duration::from_secs(60)),
         remove_env: &entry.provider.env,
         input,

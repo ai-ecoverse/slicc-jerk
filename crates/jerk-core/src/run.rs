@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 pub struct Opts<'a> {
     pub interactive: bool,
     pub capture: bool,
+    pub echo: bool,
     pub timeout: Option<Duration>,
     pub remove_env: &'a [String],
     pub input: Option<&'a str>,
@@ -54,6 +55,23 @@ fn drain(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<String
     })
 }
 
+fn drain_echo(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let mut screen = std::io::stderr();
+        while let Ok(n) = pipe.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            let _ = screen.write_all(&chunk[..n]);
+            let _ = screen.flush();
+            bytes.extend_from_slice(&chunk[..n]);
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    })
+}
+
 impl Runner for Process {
     fn run(&self, program: &Path, args: &[String], opts: &Opts<'_>) -> Outcome {
         let mut command = Command::new(program);
@@ -89,7 +107,10 @@ impl Runner for Process {
         if let (Some(text), Some(mut stdin)) = (opts.input, child.stdin.take()) {
             let _ = stdin.write_all(text.as_bytes());
         }
-        let out = child.stdout.take().map(drain);
+        let out = child.stdout.take().map(|pipe| match opts.echo {
+            true => drain_echo(pipe),
+            false => drain(pipe),
+        });
         let (lines, received) = std::sync::mpsc::channel();
         let err = child.stderr.take().map(|pipe| drain_lines(pipe, lines));
         let forward = || {

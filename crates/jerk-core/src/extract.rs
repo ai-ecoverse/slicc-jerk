@@ -7,12 +7,59 @@ use std::collections::BTreeMap;
 pub fn token(stdout: &str, parse: Option<&str>) -> Option<String> {
     let value = match parse.unwrap_or("text") {
         "text" | "jwt" => stdout.trim().to_string(),
+        other if other.starts_with("scan:") => scan(stdout, &other[5..])?,
         other => match json(stdout, other)? {
             Value::String(s) => s.trim().to_string(),
             _ => return None,
         },
     };
     (!value.is_empty() && !value.contains(char::is_whitespace)).then_some(value)
+}
+
+fn token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "._-~+/=".contains(c)
+}
+
+fn plain(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => match chars.next() {
+                Some('[') => while chars.next().is_some_and(|c| !('@'..='~').contains(&c)) {},
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            '\r' if chars.peek() == Some(&'\n') => {}
+            '\r' => out.push('\n'),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn scan(stdout: &str, prefix: &str) -> Option<String> {
+    let text = plain(stdout);
+    let at = text.rfind(prefix)?;
+    let mut lines = text[at..].lines();
+    let first = lines.next().unwrap_or_default();
+    let mut value: String = first.chars().take_while(|c| token_char(*c)).collect();
+    if first[value.len()..].trim().is_empty() {
+        for line in lines {
+            let piece = line.trim();
+            if piece.is_empty() || !piece.chars().all(token_char) {
+                break;
+            }
+            value.push_str(piece);
+        }
+    }
+    Some(value)
 }
 
 pub fn json(stdout: &str, parse: &str) -> Option<Value> {

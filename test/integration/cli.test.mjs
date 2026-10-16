@@ -58,6 +58,7 @@ test('jerk list shows the built-in providers and finds their CLIs on PATH', () =
       'adobe-aio',
       'aem',
       'aws',
+      'claude',
       'cloudflare',
       'fastly',
       'firefly',
@@ -117,7 +118,7 @@ test('a user file replaces a built-in provider as a unit', () => {
   assert.equal(github.requires, null);
   const check = sb.jerk(['config', 'check']);
   assert.equal(check.status, 0);
-  assert.equal(check.stdout, 'ok: 17 providers (16 built-in, 1 user)\n');
+  assert.equal(check.stdout, 'ok: 18 providers (17 built-in, 1 user)\n');
 });
 
 test('config check reports every problem and exits 2', () => {

@@ -49,6 +49,10 @@ pub struct Verb {
     pub link: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub oauth: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub keep: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub echo: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -632,6 +636,10 @@ fn validate_verb(
     if verb.oauth {
         return;
     }
+    if verb.keep && name != "create" {
+        validate_kept(&label, name, verb, provider, messages);
+        return;
+    }
     let step_requires = verb.requires.as_ref().or(provider.requires.as_ref());
     match (&verb.run, &verb.read) {
         (Some(_), Some(_)) => messages.push(format!("{label}: use either run or read, not both")),
@@ -644,6 +652,14 @@ fn validate_verb(
     }
     if verb.read.is_some() && name != "get" {
         messages.push(format!("{label}: read only applies to get"));
+    }
+    if verb.keep && verb.parse.is_none() {
+        messages.push(format!("{label}: keep needs parse"));
+    }
+    if verb.echo && (name != "create" || !verb.interactive) {
+        messages.push(format!(
+            "{label}: echo only applies to an interactive create"
+        ));
     }
     if let Some(lookup) = &verb.lookup {
         if name != "create" || verb.parse.is_none() {
@@ -686,7 +702,7 @@ fn validate_verb(
     if let Some(parse) = &verb.parse {
         if !valid_parse(parse) {
             messages.push(format!(
-                "{label}: parse {parse:?} must be text, jwt or json:<pointer>"
+                "{label}: parse {parse:?} must be text, jwt, json:<pointer> or scan:<prefix>"
             ));
         }
     }
@@ -767,6 +783,35 @@ fn validate_verb(
     }
 }
 
+fn validate_kept(
+    label: &str,
+    name: &str,
+    verb: &Verb,
+    provider: &Provider,
+    messages: &mut Vec<String>,
+) {
+    if !["get", "drop"].contains(&name) {
+        messages.push(format!(
+            "{label}: keep = true only applies to get, create and drop"
+        ));
+    }
+    let fields = toml::Value::try_from(verb).unwrap_or(toml::Value::Table(toml::Table::new()));
+    for field in fields.as_table().into_iter().flat_map(|t| t.keys()) {
+        if !["keep", "needs", "unless"].contains(&field.as_str()) {
+            messages.push(format!("{label}: keep = true cannot have {field}"));
+        }
+    }
+    let minted = provider
+        .create
+        .as_ref()
+        .is_some_and(|chain| chain.iter().any(|v| v.keep));
+    if !minted {
+        messages.push(format!(
+            "{label}: keep = true needs a create with keep = true"
+        ));
+    }
+}
+
 pub fn placeholders(text: &str) -> Result<Vec<String>, String> {
     let mut names = Vec::new();
     let bytes = text.as_bytes();
@@ -835,9 +880,12 @@ pub fn valid_domain(domain: &str) -> bool {
 pub fn valid_parse(parse: &str) -> bool {
     match parse {
         "text" | "jwt" => true,
-        other => other
-            .strip_prefix("json:")
-            .is_some_and(|pointer| pointer.is_empty() || pointer.starts_with('/')),
+        other => match other.strip_prefix("scan:") {
+            Some(prefix) => !prefix.is_empty(),
+            None => other
+                .strip_prefix("json:")
+                .is_some_and(|pointer| pointer.is_empty() || pointer.starts_with('/')),
+        },
     }
 }
 
