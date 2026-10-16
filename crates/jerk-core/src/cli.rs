@@ -26,6 +26,9 @@ Usage:
   jerk intercept --authorize-url U --redirect R [--rewrite m=k=v]... [--pkce]
                  [--exchange --token-url T --client-id C] [--cdp URL]
   jerk intercept --from-file F.toml
+  jerk tab list [--cdp P] [--json]
+  jerk tab export (--tab ID | --url PATTERN) [--cdp P] > bundle
+  jerk tab import [--tab ID | --url PATTERN] [--cdp P] < bundle
 
 Options:
   --config <file>  read this providers file after the others (or SLICC_JERK_CONFIG)
@@ -133,6 +136,7 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
         }
         "config" => config_command(&rest[1..], env, explicit.as_deref(), io),
         "intercept" => intercept_command(&rest[1..], ctx, io),
+        "tab" => tab_command(&rest[1..], ctx, io),
         flag if flag.starts_with('-') => usage(&format!("unknown option {flag}"), io),
         provider => match rest.get(1).map(String::as_str) {
             Some(verb) if VERBS.contains(&verb) => {
@@ -568,6 +572,21 @@ fn intercept_command(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exi
 #[cfg(target_os = "wasi")]
 fn intercept_command(_args: &[String], _ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     let _ = writeln!(io.err, "jerk intercept: not available in this environment");
+    Exit::Unsupported
+}
+
+#[cfg(not(target_os = "wasi"))]
+fn tab_command(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
+    if ctx.via_link {
+        let _ = writeln!(io.err, "jerk tab: not available over the link");
+        return Exit::Unsupported;
+    }
+    crate::tab::run(args, ctx, io)
+}
+
+#[cfg(target_os = "wasi")]
+fn tab_command(_args: &[String], _ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
+    let _ = writeln!(io.err, "jerk tab: not available in this environment");
     Exit::Unsupported
 }
 

@@ -45,6 +45,9 @@ jerk mcp:url:<url> create [--scope S] [--no-browser] | get | drop | import-pi
 jerk config path [--json] | check | show <provider> | fnox [--proxy] [<provider>...]
 jerk intercept --authorize-url U --redirect R [--rewrite m=k=v]... [--pkce] [--exchange --token-url T --client-id C] [--cdp URL]
 jerk intercept --from-file F.toml
+jerk tab list [--cdp P] [--json]
+jerk tab export (--tab ID | --url PATTERN) [--cdp P] > bundle
+jerk tab import [--tab ID | --url PATTERN] [--cdp P] < bundle
 ```
 
 `--config <file>` (or `SLICC_JERK_CONFIG`) adds a providers file on top of the others. `-p k=v` sets a provider parameter, for example `-p host=github.example.com`.
@@ -299,6 +302,24 @@ jerk mcp:url:HTTPS://MCP.Example.com:443/mcp get   # the same provider
 
 `--no-browser` prints the URL and reads the redirected URL from stdin. pi's `oauth` fields in `mcp.json` are honoured. mcpcat uses these providers whenever jerk is installed.
 
+## Moving a tab's session
+
+`jerk tab` copies one tab's signed-in state (its cookies, `localStorage` and `sessionStorage`) into another tab, in the same browser or in a different one. It works like slicc's `playwright teleport`, but you choose the tab, it doesn't wait for a URL pattern, and the state goes through a file or a pipe.
+
+```sh
+jerk tab list --cdp 9222                                        # tab ids, URLs and titles
+jerk tab export --url mail.example.com --cdp 9222 > tab.bundle
+jerk tab import --cdp 9333 < tab.bundle                         # a new tab in another browser
+jerk tab export --tab 3F2A --cdp 9222 | jerk tab import --tab 9C1B --cdp 9222
+```
+
+- **Picking the tab:** `--tab` takes a target id or a unique prefix of one. `--url` matches part of the URL, or the whole URL when the pattern contains `*`. If more than one tab matches, jerk lists them and exits 2.
+- **The browser:** `--cdp` takes a port (`9222` becomes `http://127.0.0.1:9222`), an `http(s)` DevTools URL or a `ws(s)` URL. Without it, jerk uses `SLICC_CDP_URL`, then `slicc browsers`. It works with Chromium browsers (Chrome, Edge, Brave, Chromium).
+- **`export`** writes the state as one base64 line: the cookies Chrome sends to the page and its frames (HttpOnly included), plus the top frame's storage. Base64 isn't encryption, so the bundle is as sensitive as a password. jerk won't print it to a terminal.
+- **`import`** opens a new tab, or uses the one `--tab` or `--url` picks, and sets the cookies. Host-only and `__Host-` cookies stay host-only. It writes the storage before the page's own scripts run, opens the exported URL and prints the tab id. If the page redirects to another origin (a sign-in page, say), the storage can't be written there, so jerk exits 1.
+- **Not carried:** IndexedDB, Cache Storage, service workers, cookies of other sites (an identity provider's, for example), and anything tied to the device, such as client certificates or device-bound session credentials. Some sites also tie a session to its IP address or user agent.
+- jerk never opens or exports a seven tab, and it refuses seven's cookies.
+
 ## fnox
 
 jerk feeds [fnox](https://fnox.jdx.dev) as a `command` lease backend. `jerk config fnox` prints the stanzas for `~/.config/fnox/config.toml`:
@@ -325,7 +346,7 @@ The npm package also carries `bin/jerk.wasm`, a `wasm32-wasip1` build that seven
 - **`jerk <provider> get`** prints the placeholder.
 - **`create`** asks the linked machine's jerk to sign in, or bios to run an `[oauth]` sign-in, and the result is sealed.
 - **`drop`** removes the sealed record.
-- **`<provider> list`, `lease`, `sync` and `intercept`** exit 5.
+- **`<provider> list`, `lease`, `sync`, `intercept` and `tab`** exit 5.
 
 All of this goes through `/dev/sealed`.
 
