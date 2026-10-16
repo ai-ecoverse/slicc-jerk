@@ -73,8 +73,8 @@ export function sandbox() {
     jerk(args, extra = {}) {
       return jerk(args, { env: { ...env, ...extra } });
     },
-    jerkAsync(args, extra = {}) {
-      return jerkAsync(args, { env: { ...env, ...extra } });
+    jerkAsync(args, extra = {}, input = undefined) {
+      return jerkAsync(args, { env: { ...env, ...extra }, input });
     },
   };
 }
@@ -84,10 +84,11 @@ export function jerk(args, options = {}) {
   return spawnSync(binary, args, { encoding: 'utf8', ...options });
 }
 
-export function jerkAsync(args, options = {}) {
+export function jerkAsync(args, { input, ...options } = {}) {
   if (!existsSync(binary)) throw new Error(`build jerk first: ${binary} is missing`);
   return new Promise((resolve) => {
     const child = spawn(binary, args, { ...options });
+    if (input !== undefined) child.stdin.end(input);
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8');

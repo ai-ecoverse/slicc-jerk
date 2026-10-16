@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
+import { runInNewContext } from 'node:vm';
 
 export function listen(handler) {
   return new Promise((resolve, reject) => {
@@ -175,4 +176,157 @@ function readWsFrame(buf) {
     payload = Buffer.from(payload.map((b, i) => b ^ mask[i % 4]));
   }
   return { payload, rest: buf.subarray(offset + maskLen + len) };
+}
+
+export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
+  return new Promise((resolve, reject) => {
+    const sockets = new Set();
+    const state = {
+      pages: pages.map((p) => ({ type: 'page', title: '', ...p })),
+      cookies: [...cookies],
+      setCookies: [],
+      storage: structuredClone(storage),
+      scripts: new Map(),
+    };
+    let nextTarget = 1;
+    const server = createServer((req, res) => {
+      if (req.url === '/json/version') {
+        const { port } = server.address();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/stub` })
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    const origin = (url) => {
+      try {
+        return new URL(url).origin;
+      } catch {
+        return 'null';
+      }
+    };
+    const store = (url, kind) => {
+      const key = origin(url);
+      state.storage[key] ??= { localStorage: {}, sessionStorage: {} };
+      const values = state.storage[key][kind];
+      return {
+        setItem: (k, v) => {
+          values[k] = String(v);
+        },
+      };
+    };
+    server.on('upgrade', (req, socket, head) => {
+      if (!acceptWebSocket(req, socket, head)) {
+        socket.destroy();
+        return;
+      }
+      sockets.add(socket);
+      const sessions = new Map();
+      let nextSession = 1;
+      let buf = Buffer.alloc(0);
+      const send = (obj) => socket.write(wsFrame(JSON.stringify(obj)));
+      const page = (id) => state.pages.find((p) => p.targetId === id);
+      const handle = (msg) => {
+        const { id, method, params = {}, sessionId } = msg;
+        const reply = (result) => send({ id, result, ...(sessionId ? { sessionId } : {}) });
+        const target = sessionId ? page(sessions.get(sessionId)) : null;
+        switch (method) {
+          case 'Target.getTargets':
+            return reply({ targetInfos: state.pages });
+          case 'Target.getTargetInfo':
+            return reply({ targetInfo: page(params.targetId) ?? { targetId: params.targetId } });
+          case 'Target.createTarget': {
+            const created = { targetId: `NEW${nextTarget++}`, type: 'page', url: 'about:blank' };
+            state.pages.push(created);
+            return reply({ targetId: created.targetId });
+          }
+          case 'Target.attachToTarget': {
+            const sid = `S${nextSession++}`;
+            sessions.set(sid, params.targetId);
+            return reply({ sessionId: sid });
+          }
+          case 'Runtime.evaluate': {
+            if (params.expression === 'location.href')
+              return reply({ result: { value: target.url } });
+            if (params.expression.includes('sessionStorage: session')) {
+              const kept = state.storage[origin(target.url)] ?? {};
+              return reply({
+                result: {
+                  value: {
+                    url: target.url,
+                    origin: origin(target.url),
+                    title: target.title,
+                    localStorage: kept.localStorage ?? {},
+                    sessionStorage: kept.sessionStorage ?? {},
+                  },
+                },
+              });
+            }
+            return reply({ result: { value: 'complete' } });
+          }
+          case 'Network.getCookies':
+            return reply({ cookies: state.cookies });
+          case 'Network.setCookies':
+            state.setCookies.push(...params.cookies);
+            return reply({});
+          case 'Page.addScriptToEvaluateOnNewDocument': {
+            const identifier = String(state.scripts.size + 1);
+            state.scripts.set(identifier, params.source);
+            return reply({ identifier });
+          }
+          case 'Page.removeScriptToEvaluateOnNewDocument':
+            state.scripts.delete(params.identifier);
+            return reply({});
+          case 'Page.navigate': {
+            target.url = state.redirect ?? params.url;
+            for (const source of state.scripts.values()) {
+              runInNewContext(source, {
+                location: { origin: origin(target.url) },
+                localStorage: store(target.url, 'localStorage'),
+                sessionStorage: store(target.url, 'sessionStorage'),
+              });
+            }
+            reply({ frameId: 'F1' });
+            send({
+              method: 'Page.frameNavigated',
+              sessionId,
+              params: { frame: { id: 'F1', url: target.url } },
+            });
+            send({ method: 'Page.loadEventFired', sessionId, params: {} });
+            return;
+          }
+          default:
+            if (id != null) reply({});
+        }
+      };
+      socket.on('data', (chunk) => {
+        buf = Buffer.concat([buf, chunk]);
+        while (true) {
+          const parsed = readWsFrame(buf);
+          if (!parsed) break;
+          buf = parsed.rest;
+          handle(JSON.parse(parsed.payload.toString()));
+        }
+      });
+      socket.on('close', () => sockets.delete(socket));
+      socket.on('error', () => {});
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      resolve({
+        port,
+        wsUrl: `ws://127.0.0.1:${port}/devtools/browser/stub`,
+        state,
+        close: () =>
+          new Promise((res, rej) => {
+            for (const s of sockets) s.destroy();
+            server.close((err) => (err ? rej(err) : res()));
+          }),
+      });
+    });
+    server.on('error', reject);
+  });
 }
