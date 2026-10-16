@@ -89,6 +89,7 @@ A token already in any of the provider's configured `env` variables (`GH_TOKEN`,
 | `xai` | jerk's own OAuth | PKCE through a loopback redirect | The sign-in opens in your browser. The grant is kept in the OS keyring. |
 | `printful` | `printful` (skill CLI) | `printful auth token` | Store-level private tokens for `api.printful.com`. `PRINTFUL_API_TOKEN` wins when set. `create` is `printful auth login`: pass `-p token=…` to store a Developer Portal token, or omit it to mint via a logged-in `www.printful.com` dashboard tab. `list` / `drop` are `auth status --json` / `auth logout`. |
 | `gmail` | jerk's own OAuth | refresh of a Google grant (or `$GWS_REFRESH_TOKEN`) | Loopback PKCE with `access_type=offline`. Defaults to Mozilla Thunderbird's public Google client; override with `GWS_CLIENT_ID` / `GWS_CLIENT_SECRET`. `drop` revokes at Google then clears the grant. |
+| `rescuetime` | jerk's own browser capture | the stored API key | `create` opens RescueTime's API key page over CDP; create a key there and jerk keeps it from the form post once RescueTime accepts it. Env `RESCUETIME_API_KEY` wins. Send it as `Authorization: Bearer …` to `/anapi/*`. `drop` forgets the key; delete it on the key page to revoke it. RescueTime's own OAuth needs an app registered with them, so jerk doesn't use it. |
 
 `jerk config show <provider>` prints the definition that's in effect.
 
@@ -196,6 +197,8 @@ Optional oauth fields: `client_secret` (sent on code exchange and refresh), `rev
 `jerk aem create -p org=… -p site=…` prefers `aem-ext auth key create --register --json` when that CLI is installed (long-lived admin API key). Without `aem-ext`, it uses the aem-cli loopback login (`client_id=aem-cli`, redirect `/.aem/cli/login/ack`). After you click Send, jerk stores the short-lived admin JWT (`authToken`) for `api.aem.live` as `AEM_TOKEN` (`X-Auth-Token` / `Authorization: token …`). The login host defaults to `admin.hlx.page` (Helix 6 sites still use that login endpoint today); override with `-p login_host=…` when `api.aem.live` returns `authToken` itself. Body capture CORS allow-list is the provider's `cors_origins`; any `{placeholder}` in `authorize_url` beyond the built-in OAuth vars must be supplied with `-p`.
 
 `jerk garmin create` opens Garmin SSO over CDP (`intercept`), captures `ticket` from the `connect.garmin.com/modern` redirect, and exchanges it at `diauth.garmin.com` with grant type `…/oauth/grant/service_ticket` (`flow = "exchange"`). The access token is `GARMIN_TOKEN` for `connectapi.garmin.com`.
+
+`jerk rescuetime create` uses `capture = { at = "network", from = "body", url = "https://www.rescuetime.com/anapi/setup_submit", param = "candidate" }`. With `from = "body"`, jerk waits for the response to a request matching `url`, and only when the status is below 400 takes `param` from its form or JSON body as the token.
 
 For `intercept`, the browser is the one in `--cdp`, otherwise `SLICC_CDP_URL`, otherwise a running browser from `slicc browsers --json` (the one with seven open first), otherwise exit 4. State is only checked when `authorize_url` contains `{state}`.
 

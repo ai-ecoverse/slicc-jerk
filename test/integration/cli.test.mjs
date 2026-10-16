@@ -69,6 +69,7 @@ test('jerk list shows the built-in providers and finds their CLIs on PATH', () =
       'microsoft-graph',
       'npm',
       'printful',
+      'rescuetime',
       'xai',
     ]
   );
@@ -115,7 +116,7 @@ test('a user file replaces a built-in provider as a unit', () => {
   assert.equal(github.requires, null);
   const check = sb.jerk(['config', 'check']);
   assert.equal(check.status, 0);
-  assert.equal(check.stdout, 'ok: 15 providers (14 built-in, 1 user)\n');
+  assert.equal(check.stdout, 'ok: 16 providers (15 built-in, 1 user)\n');
 });
 
 test('config check reports every problem and exits 2', () => {

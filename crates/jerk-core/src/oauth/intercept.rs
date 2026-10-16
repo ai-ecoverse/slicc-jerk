@@ -108,7 +108,7 @@ pub fn run(
     let captured = outcome?;
 
     if config.capture.at == CaptureAt::Network {
-        if config.capture.from == CaptureFrom::Header {
+        if matches!(config.capture.from, CaptureFrom::Header | CaptureFrom::Body) {
             return Ok(Token {
                 access_token: captured,
                 refresh_token: None,
@@ -365,10 +365,27 @@ fn try_capture_network(paused: &cdp_client::fetch::Paused, config: &OAuthConfig)
             let value = paused.header(header_name)?;
             Some(value.to_string())
         }
+        CaptureFrom::Body => {
+            if paused.error_reason.is_some() || !matches!(paused.status, Some(s) if s < 400) {
+                return None;
+            }
+            body_param(paused.post_data.as_deref()?, &config.capture.param)
+        }
         CaptureFrom::Query => Some(paused.full_url()),
         CaptureFrom::Url => Some(paused.full_url()),
         _ => None,
     }
+}
+
+fn body_param(body: &[u8], param: &str) -> Option<String> {
+    let value = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(json) => json.get(param)?.as_str()?.to_string(),
+        Err(_) => url::form_urlencoded::parse(body)
+            .find(|(name, _)| name == param)?
+            .1
+            .into_owned(),
+    };
+    (!value.is_empty()).then_some(value)
 }
 
 fn rewrite_decision(paused: &cdp_client::fetch::Paused, config: &OAuthConfig) -> Decision {
@@ -408,7 +425,11 @@ fn build_patterns(config: &OAuthConfig) -> Vec<Pattern> {
         }
         CaptureAt::Network => {
             if let Some(url) = &config.capture.url {
-                patterns.push(Pattern::request(url.clone()));
+                patterns.push(if config.capture.from == CaptureFrom::Body {
+                    Pattern::response(url.clone())
+                } else {
+                    Pattern::request(url.clone())
+                });
             }
         }
         CaptureAt::Navigation | CaptureAt::Callback => {}
