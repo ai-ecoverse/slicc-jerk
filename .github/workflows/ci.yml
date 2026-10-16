@@ -253,7 +253,7 @@ jobs:
   ci:
     if: always()
     needs: [runner, lint, test, reproducible-wasm, test-installer, test-installer-macos]
-    runs-on: ${{ needs.runner.outputs.runner || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CERT_LIGHT_RUNNER || vars.CERT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Every required job passed or was skipped
