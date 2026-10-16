@@ -143,6 +143,7 @@ pub fn poll_token(params: &PollParams<'_>) -> Result<Token, OAuthError> {
             expires_at,
             scope: token_response.scope.clone(),
             token_type: Some(token_response.token_type.clone()),
+            fields: std::collections::BTreeMap::new(),
         });
     }
 }

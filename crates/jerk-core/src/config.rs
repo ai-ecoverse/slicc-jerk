@@ -434,6 +434,29 @@ fn parse_oauth(
         }
         return None;
     }
+    let mut field_errors = false;
+    for name in config.capture.fields.keys() {
+        if provider.env.first().map(String::as_str) == Some(name.as_str()) {
+            field_errors = true;
+            problems.push(Problem {
+                level: Level::Error,
+                source: source.to_string(),
+                provider: Some(id.to_string()),
+                message: format!("oauth: capture field {name} is the primary env name"),
+            });
+        } else if !provider.env.iter().any(|item| item == name) {
+            field_errors = true;
+            problems.push(Problem {
+                level: Level::Error,
+                source: source.to_string(),
+                provider: Some(id.to_string()),
+                message: format!("oauth: capture field {name} is not listed in env"),
+            });
+        }
+    }
+    if field_errors {
+        return None;
+    }
     Some(config)
 }
 

@@ -83,6 +83,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
                     access_token: Some(tr.access_token.clone()),
                     expires_at,
                     scope: scope_val.clone(),
+                    fields: std::collections::BTreeMap::new(),
                 };
                 if let Err(e) = grants.store(&updated) {
                     let _ = writeln!(
@@ -404,6 +405,7 @@ fn complete_auth(
                     access_token: Some(tr.access_token.clone()),
                     expires_at,
                     scope: tr.scope.clone().or_else(|| scope.map(String::from)),
+                    fields: std::collections::BTreeMap::new(),
                 };
                 let grants = host.grants(entry.provider.store.as_deref());
                 if let Err(e) = grants.store(&grant) {
@@ -536,6 +538,7 @@ pub fn import_pi(entry: &Entry, _args: &[String], ctx: &mut Ctx<'_>, io: &mut Io
         access_token,
         expires_at,
         scope,
+        fields: std::collections::BTreeMap::new(),
     };
     let host = ctx.oauth;
     let grants = host.grants(entry.provider.store.as_deref());
@@ -923,6 +926,7 @@ fn resolve_client(
                             access_token: Some(secret.clone()),
                             expires_at: None,
                             scope: None,
+                            fields: std::collections::BTreeMap::new(),
                         };
                         let _ = grants.store(&cg);
                     }

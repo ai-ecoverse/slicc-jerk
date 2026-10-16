@@ -14,6 +14,7 @@ use crate::browser::Browser;
 use crate::exit::Exit;
 use crate::grants::Grants;
 use jerk_oauth::config::OAuthConfig;
+use std::collections::BTreeMap;
 #[allow(unused_imports)]
 use std::io::Write;
 
@@ -44,6 +45,7 @@ pub struct Token {
     pub expires_at: Option<u64>,
     pub scope: Option<String>,
     pub token_type: Option<String>,
+    pub fields: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -178,6 +180,7 @@ pub(crate) fn token_from_capture(
                 expires_at,
                 scope: token_response.scope.clone(),
                 token_type: Some(token_response.token_type.clone()),
+                fields: BTreeMap::new(),
             })
         }
         Flow::Implicit => {
@@ -193,6 +196,7 @@ pub(crate) fn token_from_capture(
                 expires_at,
                 scope: captured.params.get("scope").cloned(),
                 token_type: captured.params.get("token_type").cloned(),
+                fields: BTreeMap::new(),
             })
         }
         Flow::ClientCredentials => Err(OAuthError {
@@ -312,6 +316,7 @@ pub fn oauth_create_with_vars(
                         );
                     }
                 }
+                let config = with_extra_placeholders(config, extra_vars)?;
                 let opener = cdp.ok_or(OAuthError {
                     exit: Exit::Unavailable,
                     message: "cannot bind the loopback port and no CDP browser available; pass --cdp or run slicc launch".into(),
@@ -322,7 +327,7 @@ pub fn oauth_create_with_vars(
                 })?;
                 intercept::run(
                     &mut cdp_conn,
-                    config,
+                    &config,
                     scope,
                     now_secs,
                     &r32,
@@ -357,6 +362,7 @@ pub fn oauth_create_with_vars(
         InteractiveMode::Intercept => {
             #[cfg(not(target_os = "wasi"))]
             {
+                let config = with_extra_placeholders(config, extra_vars)?;
                 let opener = cdp.ok_or(OAuthError {
                     exit: Exit::Unavailable,
                     message: "intercept mode needs a CDP browser; pass --cdp or run slicc launch"
@@ -368,7 +374,7 @@ pub fn oauth_create_with_vars(
                 })?;
                 intercept::run(
                     &mut cdp_conn,
-                    config,
+                    &config,
                     scope,
                     now_secs,
                     &r32,
@@ -391,6 +397,38 @@ pub fn oauth_create_with_vars(
             message: "popup mode is not implemented yet".into(),
         }),
     }
+}
+
+pub(crate) fn with_extra_placeholders(
+    config: &OAuthConfig,
+    extra_vars: &[(&str, &str)],
+) -> Result<OAuthConfig, OAuthError> {
+    let mut next = config.clone();
+    next.authorize_url = subst_extra(&config.authorize_url, extra_vars)?;
+    if let Some(url) = &config.capture.url {
+        next.capture.url = Some(subst_extra(url, extra_vars)?);
+    }
+    Ok(next)
+}
+
+fn subst_extra(template: &str, extra_vars: &[(&str, &str)]) -> Result<String, OAuthError> {
+    let names = jerk_oauth::template::extra_placeholders(template);
+    let mut pairs = Vec::new();
+    for name in &names {
+        let value = extra_vars
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| *value)
+            .unwrap_or("");
+        if value.is_empty() {
+            return Err(OAuthError {
+                exit: Exit::Usage,
+                message: format!("pass -p {name}=… (required for this provider's login URL)"),
+            });
+        }
+        pairs.push((name.as_str(), value));
+    }
+    Ok(jerk_oauth::template::render(template, &pairs))
 }
 
 pub fn oauth_client_credentials(
@@ -461,6 +499,7 @@ pub fn oauth_client_credentials(
         expires_at,
         scope: parsed.scope.clone().or(scope_tmpl),
         token_type: Some(parsed.token_type.clone()),
+        fields: BTreeMap::new(),
     })
 }
 
@@ -551,6 +590,7 @@ pub(crate) fn exchange_authorization_code(
         expires_at,
         scope: token_response.scope.clone(),
         token_type: Some(token_response.token_type.clone()),
+        fields: BTreeMap::new(),
     })
 }
 
@@ -604,5 +644,6 @@ pub fn oauth_refresh(
         expires_at,
         scope: parsed.scope.clone(),
         token_type: Some(parsed.token_type.clone()),
+        fields: BTreeMap::new(),
     })
 }
