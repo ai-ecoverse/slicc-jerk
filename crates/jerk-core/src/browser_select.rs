@@ -29,6 +29,7 @@ pub fn resolve_cdp_url(
             &Opts {
                 interactive: false,
                 capture: true,
+                echo: false,
                 timeout: Some(std::time::Duration::from_secs(5)),
                 remove_env: &[],
                 input: None,

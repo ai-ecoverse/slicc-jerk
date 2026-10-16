@@ -179,6 +179,7 @@ pub fn run_verb_env(
         let opts = Opts {
             interactive,
             capture: verb.parse.is_some(),
+            echo: verb.echo && interactive && ctx.stdin_terminal,
             timeout,
             remove_env: if scrub { &entry.provider.env } else { &[] },
             input: None,
@@ -560,6 +561,9 @@ fn fetch_step(
     if let Some(read) = &verb.read {
         return read_token(entry, read, vars, ctx, io);
     }
+    if verb.keep {
+        return kept_token(entry, vars, ctx, io);
+    }
     let ran = match run_verb(entry, "get", verb, vars, false, ctx, io) {
         Ok(ran) => ran,
         Err(Exit::Error) => {
@@ -594,6 +598,72 @@ fn fetch_step(
         expires_at,
         scope: None,
     })
+}
+
+fn kept(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>) -> Option<(String, Option<u64>)> {
+    let grant = ctx
+        .oauth
+        .grants(entry.provider.store.as_deref())
+        .get(&entry.id, grant_user(vars))?;
+    let value = grant.access_token.filter(|v| !v.is_empty())?;
+    grant
+        .expires_at
+        .is_none_or(|at| ctx.now < at)
+        .then_some((value, grant.expires_at))
+}
+
+fn kept_token(entry: &Entry, vars: &Vars, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Result<Token, Exit> {
+    let Some((value, expires_at)) = kept(entry, vars, ctx) else {
+        let _ = writeln!(io.err, "jerk: {}: no kept token", entry.id);
+        sign_in_hint(entry, io);
+        return Err(Exit::SignIn);
+    };
+    Ok(Token {
+        value,
+        fields: BTreeMap::new(),
+        source: "kept",
+        expires_at,
+        scope: None,
+    })
+}
+
+fn keep_minted(
+    entry: &Entry,
+    verb: &Verb,
+    vars: &Vars,
+    token: &str,
+    stdout: &str,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) {
+    let expires_at = extract::expiry(stdout, token, verb.expiry.as_deref()).or_else(|| {
+        entry
+            .provider
+            .max_age
+            .as_deref()
+            .and_then(parse_duration)
+            .map(|d| ctx.now + d.as_secs())
+    });
+    let grant = crate::grants::Grant {
+        provider: entry.id.clone(),
+        user: grant_user(vars).to_string(),
+        refresh_token: String::new(),
+        access_token: Some(token.to_string()),
+        expires_at,
+        scope: None,
+        fields: BTreeMap::new(),
+    };
+    if let Err(e) = ctx
+        .oauth
+        .grants(entry.provider.store.as_deref())
+        .store(&grant)
+    {
+        let _ = writeln!(
+            io.err,
+            "jerk: {}: cannot keep the token, so save it now: {e}",
+            entry.id
+        );
+    }
 }
 
 fn read_token(
@@ -1113,6 +1183,12 @@ fn do_create(entry: &Entry, vars: &Vars, flags: &Flags, ctx: &Ctx<'_>, io: &mut 
     if verb.oauth {
         return oauth_create_cmd(entry, vars, flags, ctx, io);
     }
+    if verb.keep {
+        return match mint_token(entry, &verb, vars, verb.interactive, ctx, io) {
+            Ok(_) => Exit::Ok,
+            Err(code) => code,
+        };
+    }
     match run_verb(entry, "create", &verb, vars, verb.interactive, ctx, io) {
         Ok(_) => Exit::Ok,
         Err(code) => code,
@@ -1158,6 +1234,14 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         },
     );
     if let Some(verb) = step.as_ref().ok().filter(|v| v.parse.is_some()) {
+        if verb.keep && !flags.has("--force") && kept(entry, &vars, ctx).is_some() {
+            let _ = writeln!(
+                io.out,
+                "{}: already signed in; use --force to sign in again",
+                entry.id
+            );
+            return Exit::Ok;
+        }
         return mint(entry, verb, &vars, &flags, ctx, io);
     }
     if !flags.has("--force") && entry.provider.get.is_some() {
@@ -1432,6 +1516,9 @@ pub fn mint_token(
         .and_then(|p| extract::json(&ran.stdout, p))
         .and_then(|v| v.as_str().map(String::from))
         .or_else(|| lookup_id(entry, verb, &token, vars, ctx, io));
+    if verb.keep {
+        keep_minted(entry, verb, vars, &token, &ran.stdout, ctx, io);
+    }
     if let Some(id) = &id {
         if let Err(e) = state::record(ctx.env, &entry.id, id) {
             let _ = writeln!(
@@ -1467,7 +1554,8 @@ fn mint(
         return Exit::Ok;
     }
     let label = id.as_deref().unwrap_or("(no id)");
-    let _ = writeln!(io.err, "jerk: {}: created token {label}", entry.id);
+    let note = if verb.keep { ", kept for get" } else { "" };
+    let _ = writeln!(io.err, "jerk: {}: created token {label}{note}", entry.id);
     let shown = match choose(false, ctx.stdout_terminal, reveal) {
         Shown::Masked => masked,
         _ => token,
@@ -1522,6 +1610,19 @@ pub fn drop(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) 
             let _ = writeln!(io.err, "jerk: cancelled");
             return Exit::Error;
         }
+    }
+    if verb.keep {
+        let grants = ctx.oauth.grants(entry.provider.store.as_deref());
+        if let Err(e) = grants.remove(&entry.id, grant_user(&vars)) {
+            let _ = writeln!(
+                io.err,
+                "jerk: {}: cannot forget the kept token: {e}",
+                entry.id
+            );
+            return Exit::Error;
+        }
+        let _ = writeln!(io.out, "{}: dropped", entry.id);
+        return Exit::Ok;
     }
     match run_verb(entry, "drop", &verb, &vars, verb.interactive, ctx, io) {
         Ok(_) => {

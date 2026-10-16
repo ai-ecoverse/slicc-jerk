@@ -78,6 +78,7 @@ A token already in any of the provider's configured `env` variables (`GH_TOKEN`,
 | --- | --- | --- | --- |
 | `github` | `gh` | `gh auth token` | `--scope` understands GitHub's implied scopes (`repo` covers `public_repo`). Sign-out is `gh auth logout`. |
 | `npm` | `npm` | `//registry.npmjs.org/:_authToken` from `$NPM_CONFIG_USERCONFIG` or `~/.npmrc` | `npm config get` won't print auth keys, so jerk reads the file. `create` mints a granular token (npm 11.6.3 or newer) and records only its id, so `drop <id>` can revoke it. |
+| `claude` | `claude` (Claude Code) | env `ANTHROPIC_API_KEY`, else the token jerk kept from `create` | `create` runs `claude setup-token`, which signs in through the browser and prints a one-year subscription token once; jerk picks it out of the screen output, keeps it in its grant store and returns it from `get`. Run it again with `--force` for a new token. `list` is `claude auth status --json` (Claude Code 2.1.41 or newer). `drop` forgets the kept token and leaves the Claude Code sign-in alone; `claude auth logout` doesn't revoke a `setup-token` token. |
 | `cloudflare` | `cf`, then `wrangler`, then browser OAuth | `cf accounts tokens create` (when `-p policies=…`), else `wrangler auth token --json`, else the stored OAuth grant | `create` / `drop` / `list` prefer `cf` (`auth login` / `logout` / `whoami`), then wrangler. `get` via `cf` mints an account-owned API token and needs `CLOUDFLARE_ACCOUNT_ID` plus `-p policies=…`; with the default empty `policies` that step fails and `get` moves on. Wrangler needs 4.57.0+ for `create`/`get` and 4.65.0 for `list`. Browser fallback uses Cloudflare's `cf` OAuth app on `localhost:8877`. Session tokens are treated as expiring after 50 minutes. |
 | `aws` | `aws` (CLI v2) | `aws configure export-credentials` | Prints `AccessKeyId`; `lease` maps `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` from the JSON (session token omitted when absent). Env `AWS_*` wins when `AWS_ACCESS_KEY_ID` is set, including sealed environments with no binary. `-p profile=` / `-p region=` are optional. `create` / `drop` are `aws sso login` / `logout`; `list` / `user` use `sts get-caller-identity`. |
 | `gcloud` | `gcloud`, then browser OAuth | `gcloud auth print-access-token`, else the stored OAuth grant | `create` is `gcloud auth login`, `drop` is `gcloud auth revoke`, `list` / `user` are `gcloud auth list` and `gcloud config get-value account`. When the CLI is missing, fall back to the Cloud SDK public desktop client on loopback `:8085` (`cloud-platform` scope). Access tokens are treated as expiring after 55 minutes. |
@@ -141,12 +142,14 @@ Commands are argument lists, never shell strings, and the CLI runs without the p
 | --- | --- |
 | `run` | the argument list |
 | `read` | `get` only: `{ ini = path, key = k }` reads a value from an ini file instead |
-| `parse` | `text`, `jwt` or `json:<pointer>` |
+| `parse` | `text`, `jwt`, `json:<pointer>`, or `scan:<prefix>` for the last token starting with `<prefix>` in screen output, ignoring ANSI codes and joining a token wrapped over lines |
 | `fields` | `get` only: map extra `env` names to `json:<pointer>` values from the same CLI stdout (for multi-value credentials such as AWS) |
 | `expiry` | `jwt` to read the expiry from the token, or `json:<pointer>` for an RFC3339 / unix timestamp in the CLI JSON |
 | `timeout` | such as `10s` |
 | `min_version` | the oldest CLI version that supports this command (exit 4 below it) |
 | `interactive` | the command keeps the terminal (sign-ins) |
+| `echo` | an `interactive` `create` with `parse`: also show the CLI's screen output while jerk reads it, when stdin is a terminal |
+| `keep` | `true` on a `create` with `parse` keeps the token it prints in jerk's grant store, expiring after `max_age`; a `get` or `drop` step with `keep = true` and no other field except `needs` / `unless` returns or forgets it |
 | `link` | a `create` that may run from seven over the slicc link |
 | `id`, `lookup` | for a `create` that mints a token: where to find its id for revocation |
 | `requires` | this step's CLI, in place of the provider's |
@@ -334,7 +337,7 @@ On the machine side, the slicc CLI runs jerk with `--via-link`:
 ## Security
 
 - **Printing tokens:** jerk prints a token only to a terminal or with `--reveal`, and never logs one. Errors never repeat tokens, codes, verifiers, `state`, config values or response bodies.
-- **Tokens at rest:** jerk stores no access tokens of CLI providers; they stay in the CLI's own store. Its own OAuth grants live in the OS keyring, or a 0600 file only when the config says so.
+- **Tokens at rest:** jerk stores no access tokens of CLI providers; they stay in the CLI's own store, except a token a `create` with `keep = true` prints once. Its own OAuth grants live in the OS keyring, or a 0600 file only when the config says so.
 - **URLs:** OAuth and discovery URLs must be https, except http on loopback, with no userinfo. A captured redirect must match `redirect_uri` exactly.
 - **Child processes:** provider CLIs run from argument lists, never a shell, and without the provider's token variables.
 
