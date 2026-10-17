@@ -4,6 +4,7 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Os {
     Unix,
+    MacOs,
     Windows,
     Wasi,
 }
@@ -19,7 +20,12 @@ impl Os {
         Os::Windows
     }
 
-    #[cfg(not(any(windows, target_os = "wasi")))]
+    #[cfg(target_os = "macos")]
+    pub fn current() -> Os {
+        Os::MacOs
+    }
+
+    #[cfg(not(any(windows, target_os = "wasi", target_os = "macos")))]
     pub fn current() -> Os {
         Os::Unix
     }
@@ -81,6 +87,7 @@ impl Env {
             Os::Windows => PathBuf::from(self.var("ProgramData").unwrap_or("C:\\ProgramData"))
                 .join("slicc-jerk")
                 .join("providers.d"),
+            Os::MacOs => PathBuf::from("/Library/Application Support/slicc-jerk/providers.d"),
             _ => PathBuf::from("/etc/slicc-jerk/providers.d"),
         }
     }
@@ -100,10 +107,22 @@ impl Env {
         flag.or(self.var("SLICC_JERK_CONFIG")).map(PathBuf::from)
     }
 
+    pub fn legacy_system_dir(&self) -> Option<PathBuf> {
+        (self.os == Os::MacOs).then(|| PathBuf::from("/etc/slicc-jerk/providers.d"))
+    }
+
     pub fn state_dir(&self) -> PathBuf {
+        if let Some(dir) = self.var("SLICC_JERK_STATE_DIR") {
+            return PathBuf::from(dir);
+        }
         match self.os {
             Os::Windows => self
                 .windows_dir("LOCALAPPDATA", &["AppData", "Local"])
+                .join("slicc-jerk"),
+            Os::MacOs => self
+                .home()
+                .join("Library")
+                .join("Application Support")
                 .join("slicc-jerk"),
             _ => self
                 .var("XDG_STATE_HOME")

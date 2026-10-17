@@ -142,6 +142,29 @@ test('--config adds an explicit layer, and a missing one is an error', () => {
   assert.equal(JSON.parse(path.stdout).explicit.exists, false);
 });
 
+test('config path puts state and the system layer where the OS expects them', () => {
+  const sb = sandbox();
+  const res = sb.jerk(['config', 'path', '--json'], { SLICC_JERK_SYSTEM_DIR: '' });
+  assert.equal(res.status, 0, res.stderr);
+  const paths = JSON.parse(res.stdout);
+  assert.equal(paths.state.path, sb.stateDir);
+  const system =
+    {
+      darwin: '/Library/Application Support/slicc-jerk/providers.d',
+      win32: 'C:\\ProgramData\\slicc-jerk\\providers.d',
+    }[process.platform] ?? '/etc/slicc-jerk/providers.d';
+  assert.equal(paths.system.path, system);
+  assert.equal(paths.user.path, sb.userFile);
+});
+
+test('SLICC_JERK_STATE_DIR moves the state directory on every OS', () => {
+  const sb = sandbox();
+  const dir = `${sb.dir}/elsewhere`;
+  const res = sb.jerk(['config', 'path', '--json'], { SLICC_JERK_STATE_DIR: dir });
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(JSON.parse(res.stdout).state.path, dir);
+});
+
 test('config show prints the effective provider as TOML', () => {
   const sb = sandbox();
   const res = sb.jerk(['config', 'show', 'github']);

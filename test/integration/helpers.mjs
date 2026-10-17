@@ -39,6 +39,10 @@ export function sandbox() {
     dir,
     env,
     userFile: join(dir, 'config', 'slicc-jerk', 'providers.toml'),
+    stateDir:
+      process.platform === 'darwin'
+        ? join(dir, 'home', 'Library', 'Application Support', 'slicc-jerk')
+        : join(dir, 'state', 'slicc-jerk'),
     fakeCli(name) {
       const file = join(bin, process.platform === 'win32' ? `${name}.exe` : name);
       writeFileSync(file, '');

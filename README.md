@@ -100,12 +100,14 @@ Built in: `github`, `npm`, `claude`, `cloudflare`, `aws`, `gcloud`, `microsoft-g
 
 Providers are TOML tables in layers, from lowest to highest priority. A provider in a later layer replaces the earlier one as a whole, except a system provider with `locked = true`. `jerk config check` validates every layer, and `jerk config path` shows where each one lives.
 
-| layer | macOS and Linux | Windows |
-| --- | --- | --- |
-| built-in | compiled into jerk | same |
-| system | `/etc/slicc-jerk/providers.d/*.toml` (`SLICC_JERK_SYSTEM_DIR` overrides) | `%ProgramData%\slicc-jerk\providers.d\*.toml` |
-| user | `$XDG_CONFIG_HOME/slicc-jerk/providers.toml`, default `~/.config/slicc-jerk/providers.toml` | `%APPDATA%\slicc-jerk\providers.toml` |
-| explicit | `--config <file>` or `SLICC_JERK_CONFIG` | same |
+| layer | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| built-in | compiled into jerk | same | same |
+| system | `/Library/Application Support/slicc-jerk/providers.d/*.toml` | `/etc/slicc-jerk/providers.d/*.toml` | `%ProgramData%\slicc-jerk\providers.d\*.toml` |
+| user | `$XDG_CONFIG_HOME/slicc-jerk/providers.toml`, default `~/.config/slicc-jerk/providers.toml` | same | `%APPDATA%\slicc-jerk\providers.toml` |
+| explicit | `--config <file>` or `SLICC_JERK_CONFIG` | same | same |
+
+`SLICC_JERK_SYSTEM_DIR` overrides the system directory everywhere. jerk keeps its state (leases, minted token ids, file-stored grants) in `~/Library/Application Support/slicc-jerk` on macOS, `$XDG_STATE_HOME/slicc-jerk` (default `~/.local/state/slicc-jerk`) on Linux and `%LOCALAPPDATA%\slicc-jerk` on Windows; `SLICC_JERK_STATE_DIR` overrides it. On macOS, `jerk config check` warns while `/etc/slicc-jerk/providers.d`, the old system directory, still exists.
 
 ### A CLI provider
 
