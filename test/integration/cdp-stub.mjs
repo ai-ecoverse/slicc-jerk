@@ -265,6 +265,16 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
                 },
               });
             }
+            if (params.expression === 'location.origin')
+              return reply({ result: { value: origin(target.url) } });
+            if (params.expression.includes('const b =')) {
+              runInNewContext(params.expression, {
+                location: { origin: origin(target.url) },
+                localStorage: store(target.url, 'localStorage'),
+                sessionStorage: store(target.url, 'sessionStorage'),
+              });
+              return reply({ result: { type: 'undefined' } });
+            }
             return reply({ result: { value: 'complete' } });
           }
           case 'Network.getCookies':
@@ -273,6 +283,13 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
             state.setCookies.push(...params.cookies);
             return reply({});
           case 'Page.addScriptToEvaluateOnNewDocument': {
+            if (state.refuseScripts) {
+              return send({
+                id,
+                sessionId,
+                error: { code: -32000, message: 'slicc: refused: scripts for later documents' },
+              });
+            }
             const identifier = String(state.scripts.size + 1);
             state.scripts.set(identifier, params.source);
             return reply({ identifier });
@@ -281,6 +298,7 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
             state.scripts.delete(params.identifier);
             return reply({});
           case 'Page.navigate': {
+            state.navigations = (state.navigations ?? 0) + 1;
             target.url = state.redirect ?? params.url;
             for (const source of state.scripts.values()) {
               runInNewContext(source, {

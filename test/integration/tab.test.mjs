@@ -169,3 +169,27 @@ test('tab export refuses ambiguous or missing tabs, and import refuses a non-bun
     await from.close();
   }
 });
+
+test('tab import writes storage after the load when the browser takes no scripts for new pages', async () => {
+  const sb = sandbox();
+  const from = await stubBrowser(signedIn());
+  const to = await stubBrowser({});
+  to.state.refuseScripts = true;
+  try {
+    const exported = await sb.jerkAsync(['tab', 'export', '--url', 'inbox', '--cdp', from.wsUrl]);
+    const imported = await sb.jerkAsync(['tab', 'import', '--cdp', to.wsUrl], {}, exported.stdout);
+    assert.equal(imported.status, 0, imported.stderr);
+    assert.match(
+      imported.stderr,
+      /wrote the storage after the first load and loaded the page again/
+    );
+    assert.equal(to.state.navigations, 2);
+    assert.deepEqual(to.state.storage[appOrigin], {
+      localStorage: { auth: 'fake-local-token' },
+      sessionStorage: { step: '2' },
+    });
+  } finally {
+    await from.close();
+    await to.close();
+  }
+});

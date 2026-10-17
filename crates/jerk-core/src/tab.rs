@@ -474,6 +474,7 @@ pub(crate) struct Restored {
     pub target_id: String,
     pub cookies_set: usize,
     pub landed: String,
+    pub reloaded: bool,
 }
 
 pub(crate) fn restore(
@@ -497,15 +498,26 @@ pub(crate) fn restore(
     let session = cdp::attach(cdp, &target_id).map_err(cdp_error)?;
     let outcome = restore_in(cdp, &session, bundle);
     cdp::detach(cdp, &session);
-    let (cookies_set, landed) = outcome?;
+    let (cookies_set, landed, reloaded) = outcome?;
     Ok(Restored {
         target_id,
         cookies_set,
         landed,
+        reloaded,
     })
 }
 
-fn restore_in(cdp: &mut Cdp, session: &str, bundle: &Bundle) -> Result<(usize, String), Failure> {
+enum Storage {
+    Empty,
+    Early(Option<String>),
+    Late,
+}
+
+fn restore_in(
+    cdp: &mut Cdp,
+    session: &str,
+    bundle: &Bundle,
+) -> Result<(usize, String, bool), Failure> {
     cdp.call("Page.enable", json!({}), Some(session))
         .map_err(cdp_error)?;
     let params: Vec<Value> = bundle
@@ -515,27 +527,25 @@ fn restore_in(cdp: &mut Cdp, session: &str, bundle: &Bundle) -> Result<(usize, S
         .filter(|param| !cdp_client::shield::cookie_refused(cdp.guard(), param))
         .collect();
     let cookies_set = set_cookies(cdp, session, &params);
-    let script = if bundle.local_storage.is_empty() && bundle.session_storage.is_empty() {
-        None
+    let storage = if bundle.local_storage.is_empty() && bundle.session_storage.is_empty() {
+        Storage::Empty
     } else {
-        let added = cdp
-            .call(
-                "Page.addScriptToEvaluateOnNewDocument",
-                json!({ "source": storage_script(bundle) }),
-                Some(session),
-            )
-            .map_err(cdp_error)?;
-        added
-            .get("identifier")
-            .and_then(Value::as_str)
-            .map(str::to_string)
+        match cdp.call(
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({ "source": storage_script(bundle) }),
+            Some(session),
+        ) {
+            Ok(added) => Storage::Early(
+                added
+                    .get("identifier")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            ),
+            Err(_) => Storage::Late,
+        }
     };
-    let from = cdp.events().len();
-    let navigated = cdp
-        .call("Page.navigate", json!({ "url": bundle.url }), Some(session))
-        .map_err(cdp_error)
-        .and_then(|_| cdp.wait_load_since(session, from).map_err(cdp_error));
-    if let Some(identifier) = script {
+    let navigated = open_url(cdp, session, &bundle.url);
+    if let Storage::Early(Some(identifier)) = &storage {
         let _ = cdp.call(
             "Page.removeScriptToEvaluateOnNewDocument",
             json!({ "identifier": identifier }),
@@ -543,11 +553,26 @@ fn restore_in(cdp: &mut Cdp, session: &str, bundle: &Bundle) -> Result<(usize, S
         );
     }
     navigated?;
+    let mut reloaded = false;
+    if matches!(storage, Storage::Late)
+        && evaluate(cdp, session, "location.origin")?.as_str() == Some(bundle.origin.as_str())
+    {
+        evaluate(cdp, session, &storage_script(bundle))?;
+        open_url(cdp, session, &bundle.url)?;
+        reloaded = true;
+    }
     let landed = evaluate(cdp, session, "location.href")?
         .as_str()
         .unwrap_or("")
         .to_string();
-    Ok((cookies_set, landed))
+    Ok((cookies_set, landed, reloaded))
+}
+
+fn open_url(cdp: &mut Cdp, session: &str, url: &str) -> Result<(), Failure> {
+    let from = cdp.events().len();
+    cdp.call("Page.navigate", json!({ "url": url }), Some(session))
+        .map_err(cdp_error)?;
+    cdp.wait_load_since(session, from).map_err(cdp_error)
 }
 
 fn set_cookies(cdp: &mut Cdp, session: &str, params: &[Value]) -> usize {
@@ -603,6 +628,12 @@ fn import(flags: &Flags, ctx: &mut Ctx<'_>, open: Opener, io: &mut Io<'_>) -> Re
         let _ = writeln!(
             io.err,
             "jerk tab: {skipped} of the cookies could not be set"
+        );
+    }
+    if restored.reloaded {
+        let _ = writeln!(
+            io.err,
+            "jerk tab: the browser takes no scripts for new pages, so jerk wrote the storage after the first load and loaded the page again"
         );
     }
     let landed_origin = url::Url::parse(&restored.landed)
