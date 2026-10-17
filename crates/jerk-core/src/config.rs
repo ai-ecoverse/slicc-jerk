@@ -3,7 +3,7 @@ use jerk_oauth::config::OAuthConfig;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -262,6 +262,9 @@ pub fn layer_files(env: &Env, explicit: Option<&str>) -> (Vec<Source>, Vec<Probl
             message: format!("cannot read the system directory: {e}"),
         }),
     }
+    if let Some(old) = env.legacy_system_dir() {
+        problems.extend(legacy_system_problem(&old, &system));
+    }
     sources.push(Source {
         layer: Layer::User,
         path: Some(env.user_file()),
@@ -273,6 +276,18 @@ pub fn layer_files(env: &Env, explicit: Option<&str>) -> (Vec<Source>, Vec<Probl
         });
     }
     (sources, problems)
+}
+
+pub fn legacy_system_problem(old: &Path, system: &Path) -> Option<Problem> {
+    (old != system && old.is_dir()).then(|| Problem {
+        level: Level::Warning,
+        source: old.display().to_string(),
+        provider: None,
+        message: format!(
+            "is no longer read; move its providers to {}",
+            system.display()
+        ),
+    })
 }
 
 #[cfg(target_os = "wasi")]

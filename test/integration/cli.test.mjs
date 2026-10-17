@@ -156,6 +156,14 @@ test('config path puts state and the system layer where the OS expects them', ()
   assert.equal(paths.user.path, sb.userFile);
 });
 
+test('SLICC_JERK_STATE_DIR moves the state directory on every OS', () => {
+  const sb = sandbox();
+  const dir = `${sb.dir}/elsewhere`;
+  const res = sb.jerk(['config', 'path', '--json'], { SLICC_JERK_STATE_DIR: dir });
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(JSON.parse(res.stdout).state.path, dir);
+});
+
 test('config show prints the effective provider as TOML', () => {
   const sb = sandbox();
   const res = sb.jerk(['config', 'show', 'github']);

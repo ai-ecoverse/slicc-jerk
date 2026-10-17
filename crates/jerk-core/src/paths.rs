@@ -107,7 +107,14 @@ impl Env {
         flag.or(self.var("SLICC_JERK_CONFIG")).map(PathBuf::from)
     }
 
+    pub fn legacy_system_dir(&self) -> Option<PathBuf> {
+        (self.os == Os::MacOs).then(|| PathBuf::from("/etc/slicc-jerk/providers.d"))
+    }
+
     pub fn state_dir(&self) -> PathBuf {
+        if let Some(dir) = self.var("SLICC_JERK_STATE_DIR") {
+            return PathBuf::from(dir);
+        }
         match self.os {
             Os::Windows => self
                 .windows_dir("LOCALAPPDATA", &["AppData", "Local"])

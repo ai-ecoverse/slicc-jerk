@@ -109,7 +109,7 @@ Providers are TOML tables. Layers load from lowest to highest priority, and a pr
 | user | `$XDG_CONFIG_HOME/slicc-jerk/providers.toml`, default `~/.config/slicc-jerk/providers.toml` | same | `%APPDATA%\slicc-jerk\providers.toml` |
 | explicit | `--config <file>` or `SLICC_JERK_CONFIG` | same | same |
 
-`SLICC_JERK_SYSTEM_DIR` overrides the system directory everywhere. jerk keeps its state (leases, minted token ids, file-stored grants) in `~/Library/Application Support/slicc-jerk` on macOS, `$XDG_STATE_HOME/slicc-jerk` (default `~/.local/state/slicc-jerk`) on Linux and `%LOCALAPPDATA%\slicc-jerk` on Windows.
+`SLICC_JERK_SYSTEM_DIR` overrides the system directory everywhere. jerk keeps its state (leases, minted token ids, file-stored grants) in `~/Library/Application Support/slicc-jerk` on macOS, `$XDG_STATE_HOME/slicc-jerk` (default `~/.local/state/slicc-jerk`) on Linux and `%LOCALAPPDATA%\slicc-jerk` on Windows; `SLICC_JERK_STATE_DIR` overrides it. On macOS, `jerk config check` warns while `/etc/slicc-jerk/providers.d`, the old system directory, still exists.
 
 `jerk config check` validates every layer, and `jerk config path` shows where each one lives.
 
