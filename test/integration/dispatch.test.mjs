@@ -168,10 +168,7 @@ else if (args[0] === 'token' && args[1] === 'list') process.stdout.write(JSON.st
   assert.ok(!minted.includes('npm_MINTED'));
   assert.equal(sb.jerk(['npm', 'drop', 'abcdef123', '--yes']).status, 0);
   assert.deepEqual(sb.calls().at(-1).args, ['token', 'revoke', 'abcdef123']);
-  assert.deepEqual(
-    JSON.parse(readFileSync(join(sb.stateDir, 'minted.json'), 'utf8')),
-    { npm: [] }
-  );
+  assert.deepEqual(JSON.parse(readFileSync(join(sb.stateDir, 'minted.json'), 'utf8')), { npm: [] });
 });
 
 test('npm create refuses an npm that cannot make granular tokens', () => {

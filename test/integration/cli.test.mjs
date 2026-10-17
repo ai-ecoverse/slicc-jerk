@@ -148,10 +148,11 @@ test('config path puts state and the system layer where the OS expects them', ()
   assert.equal(res.status, 0, res.stderr);
   const paths = JSON.parse(res.stdout);
   assert.equal(paths.state.path, sb.stateDir);
-  const system = {
-    darwin: '/Library/Application Support/slicc-jerk/providers.d',
-    win32: 'C:\\ProgramData\\slicc-jerk\\providers.d',
-  }[process.platform] ?? '/etc/slicc-jerk/providers.d';
+  const system =
+    {
+      darwin: '/Library/Application Support/slicc-jerk/providers.d',
+      win32: 'C:\\ProgramData\\slicc-jerk\\providers.d',
+    }[process.platform] ?? '/etc/slicc-jerk/providers.d';
   assert.equal(paths.system.path, system);
   assert.equal(paths.user.path, sb.userFile);
 });
