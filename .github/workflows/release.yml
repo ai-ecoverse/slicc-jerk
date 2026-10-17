@@ -216,7 +216,11 @@ jobs:
       - name: Compare with the published package
         run: |
           mkdir -p "$RUNNER_TEMP/published"
-          npm pack "@ai-ecoverse/jerk-oauth@$VERSION" --pack-destination "$RUNNER_TEMP/published"
+          for _ in $(seq 1 30); do
+            npm view --prefer-online "@ai-ecoverse/jerk-oauth@$VERSION" version >/dev/null 2>&1 && break
+            sleep 20
+          done
+          npm pack --prefer-online "@ai-ecoverse/jerk-oauth@$VERSION" --pack-destination "$RUNNER_TEMP/published"
           tar -xzf "$RUNNER_TEMP"/published/*.tgz -C "$RUNNER_TEMP/published"
           for f in jerk_oauth_wasm_bg.wasm jerk_oauth_wasm.js jerk_oauth_wasm.d.ts; do
             cmp "dist/jerk-oauth/$f" "$RUNNER_TEMP/published/package/$f"
