@@ -1,8 +1,11 @@
 # slicc-jerk
 
-`jerk` gets, lists, creates and drops OAuth tokens on macOS, Linux and Windows, and inside SLICC. It asks each provider's own CLI (`gh`, `npm`, `wrangler`, `aio`, …) for its token, or runs the OAuth flow itself when there is no CLI. Adding a provider is configuration, not code.
+`jerk` gets, lists, creates and drops OAuth tokens on macOS, Linux and Windows, and inside [SLICC](https://github.com/ai-ecoverse/slicc). It asks each provider's own CLI (`gh`, `npm`, `wrangler`, `aio`, …) for its token, or runs the OAuth flow itself when there is no CLI. Adding a provider is configuration, not code.
 
 The name is the ice-cream kind: a soda jerk serves you what you asked for.
+
+- [Install](#install) · [Quick start](#quick-start) · [Commands](#commands) · [Providers](#providers) · [Configuring providers](#configuring-providers)
+- [MCP servers](#mcp-servers) · [Moving a tab's session](#moving-a-tabs-session) · [fnox](#fnox) · [In SLICC](#in-slicc) · [Security](#security) · [`@ai-ecoverse/jerk-oauth`](#ai-ecoversejerk-oauth) · [Related projects](#related-projects)
 
 ## Install
 
@@ -10,13 +13,11 @@ The name is the ice-cream kind: a soda jerk serves you what you asked for.
 curl -fsSL https://get.sliccy.ai/jerk | sh
 ```
 
-The installer puts `jerk` in `~/.local/bin` (`INSTALL_DIR` or `--dir` to change it, `VERSION` or `--version` to pin one), checks it against the release's `SHA256SUMS`, and never uses `sudo`. Options pass through: `curl -fsSL https://get.sliccy.ai/jerk | sh -s -- --help`. If get.sliccy.ai is unreachable, use the release asset: `curl -fsSL https://github.com/ai-ecoverse/slicc-jerk/releases/latest/download/install.sh | sh`.
-
-Other ways:
+The installer puts `jerk` in `~/.local/bin` (`INSTALL_DIR` or `--dir` to change it, `VERSION` or `--version` to pin one), checks it against the release's `SHA256SUMS`, and never uses `sudo`. Pass options with `sh -s -- --help`. The same script is a [release asset](https://github.com/ai-ecoverse/slicc-jerk/releases/latest/download/install.sh) if get.sliccy.ai is unreachable.
 
 - **npm:** `npm install -g @ai-ecoverse/slicc-jerk`. A small Node launcher picks the platform package `@ai-ecoverse/slicc-jerk-<os>-<arch>`.
-- **slicc:** the slicc CLI installs jerk with it, or with `slicc install jerk`.
-- **GitHub releases:** plain binaries `jerk-<os>-<arch>` with `SHA256SUMS` and build provenance. Linux binaries are static (musl). macOS binaries are signed with a Developer ID (`ai.sliccy.jerk`) and notarized. Windows binaries are unsigned; SmartScreen may warn on first run.
+- **slicc:** the [slicc CLI](https://github.com/ai-ecoverse/slicc-cli) installs jerk with it, or with `slicc install jerk`.
+- **Binaries:** [GitHub releases](https://github.com/ai-ecoverse/slicc-jerk/releases) carry `jerk-<os>-<arch>` with `SHA256SUMS` and build provenance. Linux builds are static (musl). macOS builds are signed with a Developer ID (`ai.sliccy.jerk`) and notarized. Windows builds are unsigned, so SmartScreen may warn on first run.
 
 ## Quick start
 
@@ -52,21 +53,11 @@ jerk tab import [--tab ID | --url PATTERN] [--cdp P] < bundle
 
 `--config <file>` (or `SLICC_JERK_CONFIG`) adds a providers file on top of the others. `-p k=v` sets a provider parameter, for example `-p host=github.example.com`.
 
-### What `get` prints
+`get` prints the token to a terminal, or with `--reveal`. In a pipe it prints a masked form such as `gho_…1234`, so it doubles as a status check. `--json` prints `provider`, `source`, `masked`, `expires_at` and `scopes`, plus `token` only with `--reveal`; `--refresh` prints a status line, never the token.
 
-| caller | output |
-| --- | --- |
-| stdout is a terminal | the token |
-| a pipe, with `--reveal` | the token |
-| a pipe, without `--reveal` | a masked form such as `gho_…1234`, so `get` is a safe status check |
-| `--json` | `{provider, source, masked, expires_at, scopes}`, plus `token` only with `--reveal` |
-| `--refresh` | a status line, never the token |
+A token already in one of the provider's `env` variables (`GH_TOKEN`, `GITHUB_TOKEN`, …) wins over the CLI, the way gh itself behaves. jerk never signs in on its own: without a token, `get` exits 3 and names the `create` to run, and `get --login` on a terminal runs it first.
 
-A token already in any of the provider's configured `env` variables (`GH_TOKEN`, `GITHUB_TOKEN`, …) wins over the CLI, the way gh itself behaves. jerk never signs in on its own: when there's no token, `get` exits 3 and names the `create` to run. `get --login` on a terminal runs `create` first.
-
-### Exit codes
-
-| code | meaning |
+| exit | meaning |
 | --- | --- |
 | 0 | ok |
 | 1 | error |
@@ -75,32 +66,39 @@ A token already in any of the provider's configured `env` variables (`GH_TOKEN`,
 | 4 | not available here: the CLI is missing or too old, no browser, no linked slicc CLI |
 | 5 | unsupported for this provider or runtime |
 
-## Built-in providers
+## Providers
+
+Built in: `github`, `npm`, `claude`, `cloudflare`, `aws`, `gcloud`, `microsoft-graph`, `adobe-aio`, `firefly`, `aem`, `fastly`, `xai`, `linkedin`, `printful`, `gmail`, `garmin`, `rescuetime` and `slack`. Every [MCP server](#mcp-servers) is one too. `jerk config show <provider>` prints the definition in effect.
+
+<details>
+<summary>What each built-in provider runs</summary>
 
 | id | backed by | `get` | notes |
 | --- | --- | --- | --- |
 | `github` | `gh` | `gh auth token` | `--scope` understands GitHub's implied scopes (`repo` covers `public_repo`). Sign-out is `gh auth logout`. |
 | `npm` | `npm` | `//registry.npmjs.org/:_authToken` from `$NPM_CONFIG_USERCONFIG` or `~/.npmrc` | `npm config get` won't print auth keys, so jerk reads the file. `create` mints a granular token (npm 11.6.3 or newer) and records only its id, so `drop <id>` can revoke it. |
-| `claude` | `claude` (Claude Code) | env `ANTHROPIC_API_KEY`, else the token jerk kept from `create` | `create` runs `claude setup-token`, which signs in through the browser and prints a one-year subscription token once; jerk picks it out of the screen output, keeps it in its grant store and returns it from `get`. Run it again with `--force` for a new token. `list` is `claude auth status --json` (Claude Code 2.1.41 or newer). `drop` forgets the kept token and leaves the Claude Code sign-in alone; `claude auth logout` doesn't revoke a `setup-token` token. |
-| `cloudflare` | `cf`, then `wrangler`, then browser OAuth | `cf accounts tokens create` (when `-p policies=…`), else `wrangler auth token --json`, else the stored OAuth grant | `create` / `drop` / `list` prefer `cf` (`auth login` / `logout` / `whoami`), then wrangler. `get` via `cf` mints an account-owned API token and needs `CLOUDFLARE_ACCOUNT_ID` plus `-p policies=…`; with the default empty `policies` that step fails and `get` moves on. Wrangler needs 4.57.0+ for `create`/`get` and 4.65.0 for `list`. Browser fallback uses Cloudflare's `cf` OAuth app on `localhost:8877`. Session tokens are treated as expiring after 50 minutes. |
-| `aws` | `aws` (CLI v2) | `aws configure export-credentials` | Prints `AccessKeyId`; `lease` maps `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` from the JSON (session token omitted when absent). Env `AWS_*` wins when `AWS_ACCESS_KEY_ID` is set, including sealed environments with no binary. `-p profile=` / `-p region=` are optional. `create` / `drop` are `aws sso login` / `logout`; `list` / `user` use `sts get-caller-identity`. |
-| `gcloud` | `gcloud`, then browser OAuth | `gcloud auth print-access-token`, else the stored OAuth grant | `create` is `gcloud auth login`, `drop` is `gcloud auth revoke`, `list` / `user` are `gcloud auth list` and `gcloud config get-value account`. When the CLI is missing, fall back to the Cloud SDK public desktop client on loopback `:8085` (`cloud-platform` scope). Access tokens are treated as expiring after 55 minutes. |
-| `microsoft-graph` | `az`, then Entra OAuth | `az account get-access-token --resource-type ms-graph`, else the stored OAuth grant | Prefer Azure CLI for Graph access tokens. When `az` is missing, fall back to Microsoft identity PKCE (Graph PowerShell public client) so Outlook/SharePoint/Excel skills can share one delegated grant. Env `MICROSOFT_GRAPH_TOKEN` or `EXCEL_GRAPH_TOKEN` wins. `create` / `drop` are `az login` / `logout` (or the OAuth grant). Expiry from the JWT. |
-| `adobe-aio` | `aio`, then IMS `client_credentials` | `aio login --bare --no-open`, else a stored/minted S2S grant | Interactive IMS via `aio` (default `-p ctx=cli`). For Adobe Developer Console OAuth Server-to-Server (e.g. `aem.cdn` / edge-functions), pass `-p client_id=… -p client_secret=…` (optional `-p scope=…`; default includes `aem.cdn`). That skips `aio` and POSTs to IMS `token/v3`. Env: `ADOBE_IMS_TOKEN`, then `AEM_EDGE_FUNCTIONS_TOKEN`. Distinct from `firefly`. |
-| `firefly` | jerk's own OAuth | IMS `client_credentials` | Server-to-server Firefly Services token. Needs `-p client_id=… -p client_secret=…` (optional `-p org_id=… -p scope=…`). Distinct from `adobe-aio`. |
-| `aem` | `aem-ext`, then browser OAuth | env `AEM_TOKEN` / `AEM_API_KEY`, else the stored OAuth grant | When `aem-ext` is on `PATH`, `create` / `list` / `drop` wrap `aem-ext auth key` create, list, and delete (365-day admin API keys, `X-Auth-Token`). `create` prints the key once (`--json` → `/value`, id `/id`) and records the jti for `drop`. Needs `-p org=… -p site=…`. Without `aem-ext`, `create` / `drop` / `get` use the aem-cli loopback OAuth (`authToken`, ~20 minutes). Cookie login (`aem-ext auth login`) stays on the CLI for curl-only use. |
-| `fastly` | `fastly` | `fastly profile token` | Env `FASTLY_API_TOKEN` wins. `create` runs `fastly sso`; `list` is `profile list --json`; `drop <profile>` is `profile delete`. Optional `-p profile=…` selects a named profile for get/create. |
+| `claude` | `claude` (Claude Code) | env `ANTHROPIC_API_KEY`, else the token jerk kept from `create` | `create` runs `claude setup-token`, which signs in through the browser and prints a one-year subscription token once; jerk picks it out of the screen output and keeps it. `--force` gets a new one. `list` is `claude auth status --json` (Claude Code 2.1.41 or newer). `drop` forgets the kept token and leaves the Claude Code sign-in alone; `claude auth logout` doesn't revoke a `setup-token` token. |
+| `cloudflare` | `cf`, then `wrangler`, then browser OAuth | `cf accounts tokens create` (when `-p policies=…`), else `wrangler auth token --json`, else the stored OAuth grant | `create` / `drop` / `list` prefer `cf` (`auth login` / `logout` / `whoami`), then wrangler. `get` via `cf` mints an account-owned API token and needs `CLOUDFLARE_ACCOUNT_ID` plus `-p policies=…`. Wrangler needs 4.57.0+ for `create`/`get` and 4.65.0 for `list`. The browser fallback uses Cloudflare's `cf` OAuth app on `localhost:8877`. Session tokens are treated as expiring after 50 minutes. |
+| `aws` | `aws` (CLI v2) | `aws configure export-credentials` | Prints `AccessKeyId`; `lease` maps `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` (the last only when present). Env `AWS_*` wins when `AWS_ACCESS_KEY_ID` is set, even with no binary. `-p profile=` / `-p region=` are optional. `create` / `drop` are `aws sso login` / `logout`; `list` / `user` use `sts get-caller-identity`. |
+| `gcloud` | `gcloud`, then browser OAuth | `gcloud auth print-access-token`, else the stored OAuth grant | `create` is `gcloud auth login`, `drop` is `gcloud auth revoke`, `list` / `user` are `gcloud auth list` and `gcloud config get-value account`. Without the CLI, jerk uses the Cloud SDK public desktop client on loopback `:8085` (`cloud-platform` scope). Access tokens are treated as expiring after 55 minutes. |
+| `microsoft-graph` | `az`, then Entra OAuth | `az account get-access-token --resource-type ms-graph`, else the stored OAuth grant | Without `az`, jerk uses Microsoft identity PKCE (Graph PowerShell public client), so Outlook, SharePoint and Excel skills share one delegated grant. Env `MICROSOFT_GRAPH_TOKEN` or `EXCEL_GRAPH_TOKEN` wins. `create` / `drop` are `az login` / `logout` (or the OAuth grant). Expiry from the JWT. |
+| `adobe-aio` | `aio`, then IMS `client_credentials` | `aio login --bare --no-open`, else a stored or minted S2S grant | Interactive IMS via `aio` (default `-p ctx=cli`). For Adobe Developer Console OAuth Server-to-Server (e.g. `aem.cdn` / edge functions), pass `-p client_id=… -p client_secret=…` (optional `-p scope=…`; the default includes `aem.cdn`), which skips `aio` and POSTs to IMS `token/v3`. Env `ADOBE_IMS_TOKEN`, then `AEM_EDGE_FUNCTIONS_TOKEN`. |
+| `firefly` | jerk's own OAuth | IMS `client_credentials` | Server-to-server Firefly Services token. Needs `-p client_id=… -p client_secret=…` (optional `-p org_id=… -p scope=…`). |
+| `aem` | `aem-ext`, then browser OAuth | env `AEM_TOKEN` / `AEM_API_KEY`, else the stored OAuth grant | Needs `-p org=… -p site=…`. With `aem-ext` on `PATH`, `create` / `list` / `drop` wrap `aem-ext auth key` (`create --register --json`, list, delete): 365-day admin API keys sent as `X-Auth-Token`, printed once, with the jti recorded for `drop`. Without it, jerk uses the aem-cli loopback login (`client_id=aem-cli`, redirect `/.aem/cli/login/ack`) and keeps the ~20-minute admin JWT (`authToken`) for `api.aem.live` as `AEM_TOKEN`. The login host defaults to `admin.hlx.page`; `-p login_host=…` overrides it. |
+| `fastly` | `fastly` | `fastly profile token` | Env `FASTLY_API_TOKEN` wins. `create` runs `fastly sso`; `list` is `profile list --json`; `drop <profile>` is `profile delete`. `-p profile=…` picks a named profile. |
 | `xai` | jerk's own OAuth | PKCE through a loopback redirect | The sign-in opens in your browser. The grant is kept in the OS keyring. |
-| `printful` | `printful` (skill CLI) | `printful auth token` | Store-level private tokens for `api.printful.com`. `PRINTFUL_API_TOKEN` wins when set. `create` is `printful auth login`: pass `-p token=…` to store a Developer Portal token, or omit it to mint via a logged-in `www.printful.com` dashboard tab. `list` / `drop` are `auth status --json` / `auth logout`. |
-| `gmail` | jerk's own OAuth | refresh of a Google grant (or `$GWS_REFRESH_TOKEN`) | Loopback PKCE with `access_type=offline`. Defaults to Mozilla Thunderbird's public Google client; override with `GWS_CLIENT_ID` / `GWS_CLIENT_SECRET`. `drop` revokes at Google then clears the grant. |
-| `rescuetime` | jerk's own browser capture | the stored API key | `create` opens RescueTime's API key page over CDP; create a key there and jerk keeps it from the form post once RescueTime accepts it. Env `RESCUETIME_API_KEY` wins. Send it as `Authorization: Bearer …` to `/anapi/*`. `drop` forgets the key; delete it on the key page to revoke it. RescueTime's own OAuth needs an app registered with them, so jerk doesn't use it. |
-| `slack` | jerk's own browser capture | `SLACK_TOKEN` and `SLACK_D_COOKIE` | `create -p workspace=<team id>` opens `https://app.slack.com/client/<id>` over CDP in a browser already signed in and keeps the session `xoxc` token plus the paired `d` cookie. The id is the `T…` or enterprise `E…` segment of that URL. Slack sends no expiry, so the pair is stored without one and is not refreshed; it stops working when that browser session ends. `drop` forgets the local copy for that workspace. Slack's MCP server is separate: `jerk mcp:url:https://mcp.slack.com/mcp`. |
+| `linkedin` | jerk's own OAuth | the stored OAuth grant | Authorization code caught in a browser over CDP. Needs your LinkedIn app's `-p client_id=… -p client_secret=…`. |
+| `printful` | `printful` (skill CLI) | `printful auth token` | Store-level private tokens for `api.printful.com`. `PRINTFUL_API_TOKEN` wins. `create` is `printful auth login`: `-p token=…` stores a Developer Portal token, otherwise it mints one through a signed-in `www.printful.com` dashboard tab. `list` / `drop` are `auth status --json` / `auth logout`. |
+| `gmail` | jerk's own OAuth | refresh of a Google grant (or `$GWS_REFRESH_TOKEN`) | Loopback PKCE with `access_type=offline`. Defaults to Mozilla Thunderbird's public Google client; override with `GWS_CLIENT_ID` / `GWS_CLIENT_SECRET`. `drop` revokes at Google, then clears the grant. |
+| `garmin` | jerk's own browser capture | the stored OAuth grant | Opens Garmin SSO over CDP, catches `ticket` from the `connect.garmin.com/modern` redirect and exchanges it at `diauth.garmin.com` (`…/oauth/grant/service_ticket`). The token is `GARMIN_TOKEN` for `connectapi.garmin.com`. |
+| `rescuetime` | jerk's own browser capture | the stored API key | `create` opens RescueTime's API key page over CDP; create a key there and jerk keeps it from the form post once RescueTime accepts it. Env `RESCUETIME_API_KEY` wins. Send it as `Authorization: Bearer …` to `/anapi/*`. `drop` forgets the key; delete it on the key page to revoke it. |
+| `slack` | jerk's own browser capture | `SLACK_TOKEN` and `SLACK_D_COOKIE` | `create -p workspace=<T… or E… id>` opens `https://app.slack.com/client/<id>` in a new tab of a browser that's already signed in, and keeps the session `xoxc` token plus the paired `d` cookie. There's no expiry and no refresh: the pair stops working when that browser session ends. `drop` forgets the local copy. Sign-ins that need a Slack app or admin approval are out of scope. For Slack's MCP server, use `jerk mcp:url:https://mcp.slack.com/mcp`. |
 
-`jerk config show <provider>` prints the definition that's in effect.
+</details>
 
 ## Configuring providers
 
-Providers are TOML tables. Layers load from lowest to highest priority, and a provider defined in a later layer replaces the earlier one as a whole. A system provider with `locked = true` can't be replaced.
+Providers are TOML tables in layers, from lowest to highest priority. A provider in a later layer replaces the earlier one as a whole, except a system provider with `locked = true`. `jerk config check` validates every layer, and `jerk config path` shows where each one lives.
 
 | layer | macOS and Linux | Windows |
 | --- | --- | --- |
@@ -108,8 +106,6 @@ Providers are TOML tables. Layers load from lowest to highest priority, and a pr
 | system | `/etc/slicc-jerk/providers.d/*.toml` (`SLICC_JERK_SYSTEM_DIR` overrides) | `%ProgramData%\slicc-jerk\providers.d\*.toml` |
 | user | `$XDG_CONFIG_HOME/slicc-jerk/providers.toml`, default `~/.config/slicc-jerk/providers.toml` | `%APPDATA%\slicc-jerk\providers.toml` |
 | explicit | `--config <file>` or `SLICC_JERK_CONFIG` | same |
-
-`jerk config check` validates every layer, and `jerk config path` shows where each one lives.
 
 ### A CLI provider
 
@@ -126,7 +122,10 @@ create = { run = ["gh", "auth", "login", "--web", "--hostname", "{host}", "--sco
 drop = { run = ["gh", "auth", "logout", "--hostname", "{host}", "--user", "{id}"], interactive = true }
 ```
 
-Commands are argument lists, never shell strings, and the CLI runs without the provider's own token variables in its environment. `{name}` placeholders come from `params`, or from `scope`, `id`, `name`, `expires` and `user`. An argument whose placeholder is empty is dropped, together with the flag before it.
+Commands are argument lists, never shell strings, and the CLI runs without the provider's token variables in its environment. `{name}` placeholders come from `params`, or from `scope`, `id`, `name`, `expires` and `user`. An argument whose placeholder is empty is dropped, together with the flag before it.
+
+<details>
+<summary>Provider and command fields</summary>
 
 | provider field | meaning |
 | --- | --- |
@@ -160,6 +159,8 @@ Commands are argument lists, never shell strings, and the CLI runs without the p
 | `needs` | param names that must be non-empty for this step to be available |
 | `unless` | param names that must be empty for this step to be available |
 
+</details>
+
 ### An OAuth provider
 
 A provider can have an `[oauth]` block instead of CLI commands. jerk then runs the flow itself.
@@ -180,6 +181,11 @@ scope = "openid profile email offline_access grok-cli:access api:access"
 capture = { at = "request", from = "query", param = "code" }
 ```
 
+`create` signs in and keeps the grant in the OS keyring (service `slicc-jerk`), or with `store = "file"` in a 0600 file. On Linux that's the kernel keyring, which doesn't survive a reboot. `get` refreshes the token at `token_url` when it's close to expiring, and `drop` removes the grant.
+
+<details>
+<summary>Modes, flows and optional fields</summary>
+
 | `mode` | how the sign-in comes back |
 | --- | --- |
 | `loopback` | jerk listens on the `redirect_uri` port and opens your browser |
@@ -196,33 +202,31 @@ capture = { at = "request", from = "query", param = "code" }
 | `exchange` | POST `token_url` with `[oauth.exchange]` (`grant_type` plus a `body` map; `{value}` is the captured param) |
 | `client_credentials` | same machine grant as `mode = "client_credentials"` (no browser / capture) |
 
-
-`create` signs in and keeps the grant: in the OS keyring (service `slicc-jerk`), or with `store = "file"` in a 0600 file. `get` refreshes the token at `token_url` when it's close to expiring. `drop` removes the grant (and POSTs to `revoke_url` when set). On Linux the keyring is the kernel keyring, which doesn't survive a reboot.
-
-Optional oauth fields: `client_secret` (sent on code exchange and refresh), `revoke_url` (best-effort revoke on `drop`), `refresh_env` (env var holding a refresh token that `get` mints from before consulting the stored grant). `client_id` and `client_secret` may use `${NAME:-default}` expansion from the process environment.
-
-`jerk aem create -p org=… -p site=…` prefers `aem-ext auth key create --register --json` when that CLI is installed (long-lived admin API key). Without `aem-ext`, it uses the aem-cli loopback login (`client_id=aem-cli`, redirect `/.aem/cli/login/ack`). After you click Send, jerk stores the short-lived admin JWT (`authToken`) for `api.aem.live` as `AEM_TOKEN` (`X-Auth-Token` / `Authorization: token …`). The login host defaults to `admin.hlx.page` (Helix 6 sites still use that login endpoint today); override with `-p login_host=…` when `api.aem.live` returns `authToken` itself. Body capture CORS allow-list is the provider's `cors_origins`; any `{placeholder}` in `authorize_url` beyond the built-in OAuth vars must be supplied with `-p`.
-
-`jerk garmin create` opens Garmin SSO over CDP (`intercept`), captures `ticket` from the `connect.garmin.com/modern` redirect, and exchanges it at `diauth.garmin.com` with grant type `…/oauth/grant/service_ticket` (`flow = "exchange"`). The access token is `GARMIN_TOKEN` for `connectapi.garmin.com`.
-
-`jerk rescuetime create` uses `capture = { at = "network", from = "body", url = "https://www.rescuetime.com/anapi/setup_submit", param = "candidate" }`. With `from = "body"`, jerk waits for the response to a request matching `url`, and only when the status is below 400 takes `param` from its form or JSON body as the token. `capture.stage = "request"` reads that body on the way out instead, before a response exists, and only applies to a body capture. `capture.fields` takes more values from the same paused request: `cookie:<name>`, `header:<name>`, `body:<name>` or `query:<name>`. A cookie comes from the `Cookie` header, or from the browser cookie jar when that header is missing. Each field name must be listed in `env` and must not be the first name there. `{placeholders}` in an intercept `authorize_url` or `capture.url`, aside from the built-in OAuth ones, must be declared in `params` and come from `-p`. Built-in names in `capture.url`, such as `{client_id}`, are filled with the same values as the login URL. `config check` rejects a name that is not a param, rejects `{code_challenge}` unless the flow is `pkce`, and rejects `{client_secret}` unless `client_secret` is set. A provider with `capture.fields` stays multi-value when a secondary variable is unset, so `lease` and `sync` do not copy the token into that name. `get --json` masks `credentials` unless `--reveal`. The stored grant is keyed by `user` when that is set, otherwise by `workspace`, otherwise `default`.
-
-`jerk slack create -p workspace=T0123456789` opens that workspace in a new tab of the signed-in browser (the tab shares the browser's cookies) and keeps `token` from a `https://*.slack.com/api/*` form body as `SLACK_TOKEN`, plus the `d` cookie as `SLACK_D_COOKIE`. `get` prints both; a pipe masks each value unless `--reveal`. There is no `list`. Enterprise Grid sign-in that needs a Slack app or an admin approval is out of scope; a workspace that is already signed in, including an enterprise workspace, uses this same capture. Slack's own MCP server needs a registered app and does not offer dynamic client registration, so use `jerk mcp:url:https://mcp.slack.com/mcp` for that.
+Optional fields: `client_secret` (sent on code exchange and refresh), `revoke_url` (best-effort revoke on `drop`), and `refresh_env` (an env var holding a refresh token that `get` mints from before it looks at the stored grant). `client_id` and `client_secret` may use `${NAME:-default}` expansion from the environment.
 
 For `intercept`, the browser is the one in `--cdp`, otherwise `SLICC_CDP_URL`, otherwise a running browser from `slicc browsers --json` (the one with seven open first), otherwise exit 4. State is only checked when `authorize_url` contains `{state}`.
 
+</details>
+
+<details>
+<summary>Capturing from a request or response body</summary>
+
+`rescuetime` uses `capture = { at = "network", from = "body", url = "https://www.rescuetime.com/anapi/setup_submit", param = "candidate" }`.
+
+- With `from = "body"`, jerk waits for the response to a request matching `url`, and only when the status is below 400 takes `param` from its form or JSON body as the token. `capture.stage = "request"` reads that body on the way out instead, before a response exists.
+- `capture.fields` takes more values from the same paused request: `cookie:<name>`, `header:<name>`, `body:<name>` or `query:<name>`. A cookie comes from the `Cookie` header, or from the browser cookie jar when that header is missing. Each field name must be in `env`, but not first.
+- A provider with `capture.fields` stays multi-value when a secondary variable is unset, so `lease` and `sync` don't copy the token into that name. `get --json` masks `credentials` unless `--reveal`.
+- The provider's `cors_origins` is the CORS allow-list for a body capture.
+- The stored grant is keyed by `user` when that is set, otherwise by `workspace`, otherwise `default`.
+- `{placeholders}` in an intercept `authorize_url` or `capture.url`, other than the built-in OAuth ones, must be declared in `params` and come from `-p`. Built-in names in `capture.url`, such as `{client_id}`, get the same values as in the login URL. `config check` rejects a name that isn't a param, `{code_challenge}` unless the flow is `pkce`, and `{client_secret}` unless `client_secret` is set.
+
+</details>
+
 ### Fallback chains
 
-Each command can be an array of steps, tried in order. The built-in `cloudflare` provider prefers `cf`, then `wrangler`, then jerk's own OAuth sign-in (`jerk config show cloudflare`). A custom chain looks the same:
+Each command can be an array of steps, tried in order. The built-in `cloudflare` provider prefers `cf`, then `wrangler`, then jerk's own OAuth sign-in.
 
 ```toml
-[providers.flare]
-name = "Cloudflare"
-env = ["CLOUDFLARE_API_TOKEN"]
-domains = ["api.cloudflare.com"]
-max_age = "50m"
-params = { name = "jerk", policies = "" }
-
 [[providers.flare.get]]
 requires = "cf"
 run = ["cf", "accounts", "tokens", "create", "--quiet", "--name", "{name}", "--policies", "{policies}"]
@@ -236,75 +240,44 @@ min_version = "4.57.0"
 
 [[providers.flare.get]]
 oauth = true
-
-[[providers.flare.create]]
-requires = "cf"
-run = ["cf", "auth", "login", "--scopes", "{scope}"]
-interactive = true
-
-[[providers.flare.create]]
-requires = "wrangler"
-run = ["wrangler", "login", "--scopes", "{scope}"]
-interactive = true
-min_version = "4.57.0"
-
-[[providers.flare.create]]
-oauth = true
-
-[providers.flare.oauth]
-mode = "loopback"
-flow = "pkce"
-authorize_url = "https://dash.cloudflare.com/oauth2/auth?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&state={state}&code_challenge={code_challenge}&code_challenge_method=S256"
-token_url = "https://dash.cloudflare.com/oauth2/token"
-client_id = "cbca97e7-c331-4cdd-8fd8-e25a451b98bf"
-redirect_uri = "http://localhost:8877/oauth/callback"
-scope = "account:read user:read workers:write offline_access"
-capture = { at = "request", from = "query", param = "code" }
 ```
 
-Set `CLOUDFLARE_ACCOUNT_ID` and `-p policies='[…]'` (account-scoped resources) when you want `get` to mint through `cf`. With the default empty `policies`, `--policies` is omitted, that step fails, and `get` moves on.
+`jerk config show cloudflare` prints the full chain, including `create` and the `[oauth]` block.
 
 - A step is **unavailable** when its CLI isn't on `PATH`, or its `min_version` probe fails or reports an older version. Unavailable steps are always skipped.
 - `get`, `list`, `scopes` and `user` also move on when a step fails: a non-zero exit, an empty or unparseable token, or a timeout.
 - `create` and `drop` run the first available step, and its result is final. jerk never starts a second sign-in.
 - When every `get` step fails, `get` exits 3 if some step ran, or 4 if none was available. The message lists each step and why it failed, but never a token or the CLI's output.
-- A token in any of the provider's configured `env` variables still wins over every step. `get --login`, `lease`, `sync`, `--via-link` and the "already signed in" check in `create` use the same chains, and `link` is set on each `create` step.
-- An `[oauth]` block that no step names keeps its old meaning: `get` uses it in place of any CLI steps, and `create` and `drop` use it only when they have no command. Add `{ oauth = true }` to put it in a chain.
+- A token in any of the provider's `env` variables still wins over every step. `get --login`, `lease`, `sync`, `--via-link` and the "already signed in" check in `create` use the same chains.
+- An `[oauth]` block that no step names is used by `get` in place of any CLI steps, and by `create` and `drop` only when they have no command. Add `{ oauth = true }` to put it in a chain.
+- jerk's own OAuth grant is separate from the CLIs' sign-ins, so a chain can hold two different accounts. `jerk list` shows each step's CLI, such as `cf (missing), wrangler, oauth`.
 
-jerk's own OAuth grant is separate from the CLIs' sign-ins. `wrangler login` doesn't give jerk a grant, and jerk's `[oauth]` sign-in doesn't sign wrangler in, so a chain can hold two different accounts. `jerk config show` prints the chain, and `jerk list` shows each step's CLI, such as `cf (missing), wrangler, oauth`.
+## MCP servers
 
-### MCP servers
-
-Every server with a `url` in pi's `~/.pi/agent/mcp.json` (or `PI_MCP_CONFIG`) is a provider named `mcp:<server>`, and its token's variable is `MCP_<SERVER>_TOKEN`. Server names starting with `url:` are skipped.
+Every server with a `url` in [pi](https://github.com/earendil-works/pi)'s `~/.pi/agent/mcp.json` (or `PI_MCP_CONFIG`) is a provider named `mcp:<server>`, with its token in `MCP_<SERVER>_TOKEN`. Any other server can be named by its URL, `mcp:url:<url>`. [mcpcat](https://github.com/ai-ecoverse/mcpcat) uses these providers whenever jerk is installed.
 
 ```sh
 jerk mcp:linear create            # discovers the authorization server, registers a client, signs in
 jerk mcp:linear get --reveal --json
 jerk mcp:linear import-pi         # copy an existing sign-in from pi's mcp-auth.json
-```
-
-A server can also be named by its URL alone: `mcp:url:<url>`. It takes the same commands and flags, and `jerk config show` works for it too.
-
-```sh
 jerk mcp:url:https://mcp.example.com/mcp create
-jerk mcp:url:HTTPS://MCP.Example.com:443/mcp get   # the same provider
 ```
 
-- **Canonical form.** The URL must be `https`, or `http` on loopback (`localhost`, `127.0.0.1`, `::1`). Userinfo, a query or a fragment exit 2, and the error never repeats the URL. The scheme and host are lower-cased, the default port is dropped and an empty path becomes `/`; the rest of the path is kept, including a trailing slash. jerk prints the canonical id, `mcp:url:https://mcp.example.com/mcp`.
-- **Same URL as an `mcp.json` entry.** When an entry's `url` has the same canonical form, `mcp:url:` is that entry: its `oauth` fields, its variable and its grant. If several entries share the URL, the first by name wins, and `config show` lists the others.
-- **URL only.** Otherwise there are no `oauth` fields: the client is mcpcat's metadata document, else dynamic registration, and the callback is the default one. There is no variable, so `get` never reads the environment, and `get --json` reports `"env": []`. The grant goes in the OS keyring under `slicc-jerk` / `mcp:url:<canonical url>/url`, which can't clash with `mcp:<server>`. `import-pi` looks the URL up in `mcp-auth.json` (pi's legacy URL key, else a single `<server>|<url>` key) and exits 5 when several pi servers use it.
-- `jerk list` doesn't show URL-only ids, because they aren't configured.
+`create` follows the MCP authorization spec: it finds the authorization server through RFC 9728 and RFC 8414 metadata, registers through mcpcat's client metadata document or dynamic registration (or uses the `clientId` from `mcp.json`), and signs in with PKCE, sending the server as `resource` (RFC 8707). `--no-browser` prints the URL and reads the redirected URL from stdin. pi's `oauth` fields in `mcp.json` are honoured.
 
-`create` follows the MCP authorization spec:
-- it finds the authorization server through protected-resource metadata (RFC 9728) and its metadata (RFC 8414);
-- it registers through mcpcat's client metadata document, or dynamic registration, or uses the `clientId` from `mcp.json`;
-- it signs in with PKCE, sending the server as `resource` (RFC 8707).
+<details>
+<summary>How <code>mcp:url:</code> ids work</summary>
 
-`--no-browser` prints the URL and reads the redirected URL from stdin. pi's `oauth` fields in `mcp.json` are honoured. mcpcat uses these providers whenever jerk is installed.
+- **Canonical form.** The URL must be `https`, or `http` on loopback (`localhost`, `127.0.0.1`, `::1`). Userinfo, a query or a fragment exit 2, and the error never repeats the URL. The scheme and host are lower-cased, the default port is dropped and an empty path becomes `/`; the rest of the path is kept, including a trailing slash. So `mcp:url:HTTPS://MCP.Example.com:443/mcp` is `mcp:url:https://mcp.example.com/mcp`.
+- **Same URL as an `mcp.json` entry.** `mcp:url:` is that entry: its `oauth` fields, its variable and its grant. If several entries share the URL, the first by name wins, and `config show` lists the others.
+- **URL only.** There are no `oauth` fields: the client is mcpcat's metadata document, else dynamic registration, with the default callback. There is no variable, so `get` never reads the environment and `get --json` reports `"env": []`. The grant goes in the OS keyring under `slicc-jerk` / `mcp:url:<canonical url>/url`. `import-pi` looks the URL up in `mcp-auth.json` and exits 5 when several pi servers use it. `jerk list` doesn't show URL-only ids.
+- Server names in `mcp.json` that start with `url:` are skipped.
+
+</details>
 
 ## Moving a tab's session
 
-`jerk tab` copies one tab's signed-in state (its cookies, `localStorage` and `sessionStorage`) into another tab, in the same browser or in a different one. It works like slicc's `playwright teleport`, but you choose the tab, it doesn't wait for a URL pattern, and the state goes through a file or a pipe.
+`jerk tab` copies one tab's signed-in state (its cookies, `localStorage` and `sessionStorage`) into another tab, in the same browser or a different one. It's like `playwright teleport` from [slicc-cdp](https://github.com/ai-ecoverse/slicc-cdp), but you pick the tab and the state goes through a file or a pipe. It works with Chromium browsers.
 
 ```sh
 jerk tab list --cdp 9222                                        # tab ids, URLs and titles
@@ -314,15 +287,15 @@ jerk tab export --tab 3F2A --cdp 9222 | jerk tab import --tab 9C1B --cdp 9222
 ```
 
 - **Picking the tab:** `--tab` takes a target id or a unique prefix of one. `--url` matches part of the URL, or the whole URL when the pattern contains `*`. If more than one tab matches, jerk lists them and exits 2.
-- **The browser:** `--cdp` takes a port (`9222` becomes `http://127.0.0.1:9222`), an `http(s)` DevTools URL or a `ws(s)` URL. Without it, jerk uses `SLICC_CDP_URL`, then `slicc browsers`. In seven, `SLICC_CDP_URL` is the kernel's browser (see [In SLICC](#in-slicc)), and the kernel build has no TLS, so `wss://` and `https://` don't work there. It works with Chromium browsers (Chrome, Edge, Brave, Chromium).
-- **`export`** writes the state as one base64 line: the cookies Chrome sends to the page and its frames (HttpOnly included), plus the top frame's storage. Base64 isn't encryption, so the bundle is as sensitive as a password. jerk won't print it to a terminal.
-- **`import`** opens a new tab, or uses the one `--tab` or `--url` picks, and sets the cookies. Host-only and `__Host-` cookies stay host-only. It writes the storage before the page's own scripts run, opens the exported URL and prints the tab id. If the page redirects to another origin (a sign-in page, say), the storage can't be written there, so jerk exits 1.
-- **Not carried:** IndexedDB, Cache Storage, service workers, cookies of other sites (an identity provider's, for example), and anything tied to the device, such as client certificates or device-bound session credentials. Some sites also tie a session to its IP address or user agent.
-- jerk never opens or exports a seven tab. It never reads seven's cookies, and on import it leaves them out of a bundle that has any, so the rest still get set.
+- **The browser:** `--cdp` takes a port (`9222` is `http://127.0.0.1:9222`), an `http(s)` DevTools URL or a `ws(s)` URL. Without it, jerk uses `SLICC_CDP_URL`, then `slicc browsers` ([slicc-browsers](https://github.com/ai-ecoverse/slicc-browsers)).
+- **`export`** writes one base64 line: the cookies Chrome sends to the page and its frames (HttpOnly included), plus the top frame's storage. Base64 isn't encryption, so treat the bundle like a password. jerk won't print it to a terminal.
+- **`import`** opens a new tab, or uses the one `--tab` or `--url` picks, sets the cookies (host-only and `__Host-` cookies stay host-only), writes the storage before the page's own scripts run, opens the exported URL and prints the tab id. If the page redirects to another origin, such as a sign-in page, the storage can't be written there and jerk exits 1.
+- **Not carried:** IndexedDB, Cache Storage, service workers, other sites' cookies (an identity provider's, say), and anything tied to the device, such as client certificates or device-bound session credentials. Some sites also tie a session to its IP address or user agent.
+- jerk never opens, exports or reads cookies of a seven tab, and on import it leaves seven's cookies out of a bundle that has any.
 
 ## fnox
 
-jerk feeds [fnox](https://fnox.jdx.dev) as a `command` lease backend. `jerk config fnox` prints the stanzas for `~/.config/fnox/config.toml`:
+jerk is a `command` lease backend for [fnox](https://fnox.jdx.dev). `jerk config fnox` prints the stanzas for `~/.config/fnox/config.toml`, and `--proxy` adds `[[proxy.rules]]` for the provider's domains:
 
 ```toml
 [leases.github]
@@ -334,38 +307,34 @@ duration = "1h"
 
 - **`lease`** prints fnox's lease JSON: every `env` name mapped to the token, an `expires_at` that is the earlier of the token's own expiry and now + `FNOX_LEASE_DURATION`, and a `lease_id`. It refuses a terminal.
 - **`drop --lease`** reads `FNOX_LEASE_ID` and revokes upstream only a token jerk minted for that lease. A token jerk only read is left to expire.
-- **`sync --fnox <SECRET> --provider <p>`** pipes the token into `fnox set` on stdin. That's how jerk tokens reach `fnox proxy`, which reads only `[secrets]`. It writes only to fnox providers that encrypt or use an OS store (age, keychain, 1password, bitwarden, fido2, yubikey and the cloud KMSes), never `plain`. Run it again when the token is refreshed.
-- **`config fnox --proxy`** also prints `[[proxy.rules]]` for the provider's domains.
-- **On Windows,** fnox's lease backend runs `sh -c`, so `fnox exec` with jerk leases needs an `sh` on `PATH` (Git for Windows, MSYS2 or similar).
+- **`sync --fnox <SECRET> --provider <p>`** pipes the token into `fnox set` on stdin, which is how jerk tokens reach `fnox proxy`. It only writes to fnox providers that encrypt or use an OS store (age, keychain, 1password, bitwarden, fido2, yubikey and the cloud KMSes), never `plain`. Run it again when the token is refreshed.
+- **On Windows,** fnox runs lease commands with `sh -c`, so it needs an `sh` on `PATH` (Git for Windows, MSYS2 or similar).
 
 ## In SLICC
 
-The npm package also carries `bin/jerk.wasm`, a `wasm32-wasip1` build that seven runs as a kernel command (`slicc.abi` `wasi`). That jerk never holds a token: tokens live in the vault's sealed store, and kernel programs only ever see placeholders.
+The npm package also carries `bin/jerk.wasm`, a `wasm32-wasip1` build that seven runs as a [slicc-kernel](https://github.com/ai-ecoverse/slicc-kernel) command (`slicc.abi` `wasi`). That jerk never holds a token: tokens live in the [vault](https://github.com/ai-ecoverse/slicc-vault)'s sealed store behind `/dev/sealed`, and kernel programs only ever see placeholders.
 
-- **`jerk list`** shows seven's own `[oauth]` providers and, when a slicc CLI is linked, the providers of the machine behind it.
-- **`jerk <provider> get`** prints the placeholder.
-- **`create`** asks the linked machine's jerk to sign in, or bios to run an `[oauth]` sign-in, and the result is sealed.
-- **`drop`** removes the sealed record.
-- **`tab`** drives the browser seven runs in, through the kernel's CDP endpoint in `SLICC_CDP_URL`, whether the slicc extension or the slicc CLI provides it. `--cdp 9222` names the same endpoint. A bundle exported in seven holds that tab's cookies and storage in plain text, so keep it out of shared folders.
+- **`jerk list`** shows seven's own `[oauth]` providers and, when a [slicc CLI](https://github.com/ai-ecoverse/slicc-cli) is linked, the providers of the machine behind it.
+- **`get`** prints the placeholder. **`drop`** removes the sealed record.
+- **`create`** asks the linked machine's jerk to sign in, or [bios](https://github.com/ai-ecoverse/slicc-bios) to run an `[oauth]` sign-in, and the result is sealed.
+- **`tab`** drives the browser seven runs in, through the kernel's CDP endpoint in `SLICC_CDP_URL` (from the slicc extension or the slicc CLI); `--cdp 9222` names the same endpoint. The kernel build has no TLS, so `wss://` and `https://` don't work. A bundle exported in seven is plain text, so keep it out of shared folders.
 - **`<provider> list`, `lease`, `sync` and `intercept`** exit 5.
 
-All of this goes through `/dev/sealed`.
-
-On the machine side, the slicc CLI runs jerk with `--via-link`:
-- `create --via-link` prints progress lines and a final status as newline-delimited JSON, and never prompts. It refuses `--force`, minted tokens, and sign-ins that need a terminal.
-- `lease --via-link` prints the lease, then a status.
-- `drop --lease --via-link` prints a status. A CLI sign-out is never run over the link.
+On the machine side, the slicc CLI runs jerk with `--via-link`. `create --via-link` prints progress and a final status as newline-delimited JSON and never prompts; it refuses `--force`, minted tokens and sign-ins that need a terminal. `lease --via-link` prints the lease, then a status. `drop --lease --via-link` prints a status; a CLI sign-out never runs over the link.
 
 ## Security
 
 - **Printing tokens:** jerk prints a token only to a terminal or with `--reveal`, and never logs one. Errors never repeat tokens, codes, verifiers, `state`, config values or response bodies.
-- **Tokens at rest:** jerk stores no access tokens of CLI providers; they stay in the CLI's own store, except a token a `create` with `keep = true` prints once. Its own OAuth grants live in the OS keyring, or a 0600 file only when the config says so.
+- **Tokens at rest:** CLI providers' tokens stay in the CLI's own store, except a token a `create` with `keep = true` prints once. jerk's own OAuth grants live in the OS keyring, or a 0600 file only when the config says so.
 - **URLs:** OAuth and discovery URLs must be https, except http on loopback, with no userinfo. A captured redirect must match `redirect_uri` exactly.
 - **Child processes:** provider CLIs run from argument lists, never a shell, and without the provider's token variables.
 
 ## `@ai-ecoverse/jerk-oauth`
 
-jerk's OAuth core, compiled to WebAssembly for the browser (ESM, wasm-bindgen `web` target). bios uses it for sign-ins in seven, and the vault for refreshes. It does no I/O: the caller does every fetch, opens every popup, and supplies the clock and the random bytes.
+jerk's OAuth core, compiled to WebAssembly for the browser (ESM, wasm-bindgen `web` target). [bios](https://github.com/ai-ecoverse/slicc-bios) uses it for sign-ins in seven, and the [vault](https://github.com/ai-ecoverse/slicc-vault) for refreshes. It does no I/O: the caller does every fetch, opens every popup, and supplies the clock and the random bytes. Every release rebuilds it from its tag and checks it's byte-identical to the published package.
+
+<details>
+<summary>API</summary>
 
 ```js
 import init, { parseConfig, beginSignIn, completeSignIn, parseTokenResponse, parseRefreshResponse,
@@ -385,11 +354,20 @@ import init, { parseConfig, beginSignIn, completeSignIn, parseTokenResponse, par
 | `scopesSatisfied(granted, requested)` | boolean |
 | `shouldBackoff(lastFailureSecs, nowSecs)` | boolean, a 5-minute window after a failed refresh |
 
-Errors are thrown as `{ kind: "error", code, message }`.
-- **Provider errors** (`code: "idp_error"`) also carry `error` and `description`, cut to 128 printable ASCII characters. Use `code` and `error` to avoid showing the provider's free text.
-- **The clock:** `nowSecs` must be whole, non-negative seconds (`invalid_clock` otherwise).
-- **The random bytes** must come from `crypto.getRandomValues`; jerk only checks they aren't constant.
-- **Reproducible:** every release rebuilds the package from its tag and checks it's byte-identical to the published one.
+Errors are thrown as `{ kind: "error", code, message }`. Provider errors (`code: "idp_error"`) also carry `error` and `description`, cut to 128 printable ASCII characters; show `code` and `error` rather than the provider's free text. `nowSecs` must be whole, non-negative seconds (`invalid_clock` otherwise). The random bytes must come from `crypto.getRandomValues`; jerk only checks they aren't constant.
+
+</details>
+
+## Related projects
+
+- [slicc](https://github.com/ai-ecoverse/slicc): the browser-native agent jerk was built for.
+- [slicc-cli](https://github.com/ai-ecoverse/slicc-cli): links a running seven to this machine, installs jerk, and runs it over that link.
+- [slicc-kernel](https://github.com/ai-ecoverse/slicc-kernel): seven's wasm process kernel, which runs `jerk.wasm`.
+- [slicc-vault](https://github.com/ai-ecoverse/slicc-vault): the sealed store for tokens in seven, refreshed with `jerk-oauth`.
+- [slicc-bios](https://github.com/ai-ecoverse/slicc-bios): boots seven and runs its `[oauth]` sign-ins with `jerk-oauth`.
+- [slicc-cdp](https://github.com/ai-ecoverse/slicc-cdp) and [slicc-browsers](https://github.com/ai-ecoverse/slicc-browsers): CDP, `playwright teleport`, and the browser discovery jerk uses.
+- [mcpcat](https://github.com/ai-ecoverse/mcpcat): a curl for MCP, which signs in through jerk.
+- [fnox](https://fnox.jdx.dev): secrets and leases, with jerk as a lease backend.
 
 ## Development
 
