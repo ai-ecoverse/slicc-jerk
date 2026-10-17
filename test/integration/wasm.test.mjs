@@ -18,10 +18,14 @@ function runWasm(args) {
     stderr: fd,
     returnOnExit: true,
   });
-  const instance = new WebAssembly.Instance(
-    new WebAssembly.Module(readFileSync(wasm)),
-    wasi.getImportObject()
-  );
+  const module = new WebAssembly.Module(readFileSync(wasm));
+  const imports = wasi.getImportObject();
+  for (const { module: from, name } of WebAssembly.Module.imports(module)) {
+    if (from !== 'wasix_32v1') continue;
+    imports[from] ??= {};
+    imports[from][name] = () => 52;
+  }
+  const instance = new WebAssembly.Instance(module, imports);
   const code = wasi.start(instance);
   fs.closeSync(fd);
   const text = readFileSync(out, 'utf8');
@@ -51,4 +55,12 @@ test('the kernel build keeps the exit codes', {
   assert.equal(runWasm(['--nope']).code, 2);
   assert.equal(runWasm(['intercept']).code, 5);
   assert.equal(runWasm(['github', 'get']).code, 2);
+});
+
+test('the kernel build needs the kernel browser for jerk tab', {
+  skip: !existsSync(wasm) && 'run npm run build:wasm first',
+}, () => {
+  const res = runWasm(['tab', 'list']);
+  assert.equal(res.code, 4);
+  assert.equal(res.text, 'jerk tab: this kernel offers no browser: SLICC_CDP_URL is not set\n');
 });

@@ -67,20 +67,41 @@ fn cdp_error(message: String) -> Failure {
 pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     let (env, runner, exists) = (ctx.env, ctx.runner, ctx.exists);
     let open = |explicit: Option<&str>| -> Result<Cdp, String> {
-        let wanted = explicit.map(endpoint);
-        let url = crate::browser_select::resolve_cdp_url(
-            wanted.as_deref(),
-            None,
-            env,
-            runner,
-            exists,
-            &mut std::io::sink(),
-        )
-        .map_err(|e| e.message)?;
+        let url = locate(explicit.map(endpoint), env, runner, exists)?;
         let start = cdp_client::connect::choose_start(Some(&url), None)?;
         cdp::open(start, None)
     };
     run_with(args, ctx, io, &open)
+}
+
+#[cfg(not(target_os = "wasi"))]
+fn locate(
+    wanted: Option<String>,
+    env: &crate::paths::Env,
+    runner: &dyn crate::run::Runner,
+    exists: &dyn Fn(&std::path::Path) -> bool,
+) -> Result<String, String> {
+    crate::browser_select::resolve_cdp_url(
+        wanted.as_deref(),
+        None,
+        env,
+        runner,
+        exists,
+        &mut std::io::sink(),
+    )
+    .map_err(|e| e.message)
+}
+
+#[cfg(target_os = "wasi")]
+fn locate(
+    wanted: Option<String>,
+    env: &crate::paths::Env,
+    _runner: &dyn crate::run::Runner,
+    _exists: &dyn Fn(&std::path::Path) -> bool,
+) -> Result<String, String> {
+    wanted
+        .or_else(|| env.var("SLICC_CDP_URL").map(str::to_string))
+        .ok_or_else(|| "this kernel offers no browser: SLICC_CDP_URL is not set".to_string())
 }
 
 pub(crate) fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>, open: Opener) -> Exit {
@@ -487,7 +508,12 @@ pub(crate) fn restore(
 fn restore_in(cdp: &mut Cdp, session: &str, bundle: &Bundle) -> Result<(usize, String), Failure> {
     cdp.call("Page.enable", json!({}), Some(session))
         .map_err(cdp_error)?;
-    let params: Vec<Value> = bundle.cookies.iter().filter_map(cookie_param).collect();
+    let params: Vec<Value> = bundle
+        .cookies
+        .iter()
+        .filter_map(cookie_param)
+        .filter(|param| !cdp_client::shield::cookie_refused(cdp.guard(), param))
+        .collect();
     let cookies_set = set_cookies(cdp, session, &params);
     let script = if bundle.local_storage.is_empty() && bundle.session_storage.is_empty() {
         None
@@ -576,7 +602,7 @@ fn import(flags: &Flags, ctx: &mut Ctx<'_>, open: Opener, io: &mut Io<'_>) -> Re
     if skipped > 0 {
         let _ = writeln!(
             io.err,
-            "jerk tab: the browser refused {skipped} of the cookies"
+            "jerk tab: {skipped} of the cookies could not be set"
         );
     }
     let landed_origin = url::Url::parse(&restored.landed)
