@@ -163,13 +163,13 @@ else if (args[0] === 'token' && args[1] === 'list') process.stdout.write(JSON.st
     '1',
     '--json',
   ]);
-  const minted = readFileSync(join(sb.dir, 'state', 'slicc-jerk', 'minted.json'), 'utf8');
+  const minted = readFileSync(join(sb.stateDir, 'minted.json'), 'utf8');
   assert.deepEqual(JSON.parse(minted), { npm: ['abcdef123'] });
   assert.ok(!minted.includes('npm_MINTED'));
   assert.equal(sb.jerk(['npm', 'drop', 'abcdef123', '--yes']).status, 0);
   assert.deepEqual(sb.calls().at(-1).args, ['token', 'revoke', 'abcdef123']);
   assert.deepEqual(
-    JSON.parse(readFileSync(join(sb.dir, 'state', 'slicc-jerk', 'minted.json'), 'utf8')),
+    JSON.parse(readFileSync(join(sb.stateDir, 'minted.json'), 'utf8')),
     { npm: [] }
   );
 });

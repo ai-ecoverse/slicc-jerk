@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { join } from 'node:path';
 import { test } from 'node:test';
 import { sandbox } from './helpers.mjs';
 
@@ -37,8 +36,7 @@ client_secret = "secret"
     const got = await sb.jerkAsync(['sandboxed', 'get', '--reveal']);
     assert.equal(got.status, 0, got.stderr);
     assert.equal(got.stdout, 'sandboxAccessFAKE1234567890\n');
-    const state = join(sb.dir, 'state');
-    assert.ok(readdirSync(state, { recursive: true }).length > 0);
+    assert.ok(readdirSync(sb.stateDir, { recursive: true }).length > 0);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
