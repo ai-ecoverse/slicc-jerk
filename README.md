@@ -333,7 +333,7 @@ On the machine side, the slicc CLI runs jerk with `--via-link`. `create --via-li
 
 ## `@ai-ecoverse/jerk-oauth`
 
-jerk's OAuth core, compiled to WebAssembly for the browser (ESM, wasm-bindgen `web` target). [bios](https://github.com/ai-ecoverse/slicc-bios) uses it for sign-ins in seven, and the [vault](https://github.com/ai-ecoverse/slicc-vault) for refreshes. It does no I/O: the caller does every fetch, opens every popup, and supplies the clock and the random bytes. Every release rebuilds it from its tag and checks it's byte-identical to the published package.
+jerk's OAuth core, compiled to WebAssembly for the browser (ESM, wasm-bindgen `web` target). [bios](https://github.com/ai-ecoverse/slicc-bios) uses it for sign-ins in seven, and the [vault](https://github.com/ai-ecoverse/slicc-vault) for refreshes. It does no I/O: the caller does every fetch, opens every popup, and supplies the clock and the random bytes.
 
 <details>
 <summary>API</summary>
