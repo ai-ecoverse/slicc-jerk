@@ -98,6 +98,7 @@ pub fn build_code_exchange_body(
 pub fn build_configured_exchange_body(
     exchange: &crate::config::Exchange,
     value: &str,
+    verifier: Option<&str>,
     client_id: &str,
     redirect_uri: &str,
     scope: Option<&str>,
@@ -105,21 +106,39 @@ pub fn build_configured_exchange_body(
     let scope = scope.unwrap_or("");
     let vars = [
         ("value", value),
+        ("code_verifier", verifier.unwrap_or("")),
         ("client_id", client_id),
         ("redirect_uri", redirect_uri),
         ("scope", scope),
     ];
-    let mut pairs = vec![
-        ("grant_type".into(), exchange.grant_type.clone()),
-        ("client_id".into(), client_id.into()),
-    ];
+    let mut pairs = Vec::new();
+    if let Some(grant_type) = &exchange.grant_type {
+        pairs.push(("grant_type".into(), grant_type.clone()));
+        pairs.push(("client_id".into(), client_id.into()));
+    }
     for (key, template) in &exchange.body {
-        if key == "grant_type" || key == "client_id" {
+        if exchange.grant_type.is_some() && (key == "grant_type" || key == "client_id") {
             continue;
         }
         pairs.push((key.clone(), render_plain(template, &vars)));
     }
     pairs
+}
+
+pub fn encode_exchange_body(
+    format: crate::config::ExchangeFormat,
+    pairs: &[(String, String)],
+) -> String {
+    match format {
+        crate::config::ExchangeFormat::Form => encode_form_body(pairs),
+        crate::config::ExchangeFormat::Json => {
+            let map: serde_json::Map<String, serde_json::Value> = pairs
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect();
+            serde_json::Value::Object(map).to_string()
+        }
+    }
 }
 
 fn render_plain(template: &str, vars: &[(&str, &str)]) -> String {
@@ -246,11 +265,19 @@ pub fn encode_form_body(pairs: &[(String, String)]) -> String {
 }
 
 pub fn parse_token_response(body: &str) -> Result<TokenResponse, ExchangeError> {
+    parse_token_response_field(body, None)
+}
+
+pub fn parse_token_response_field(
+    body: &str,
+    token_field: Option<&str>,
+) -> Result<TokenResponse, ExchangeError> {
+    let field = token_field.unwrap_or("access_token");
     let map: BTreeMap<String, serde_json::Value> =
         serde_json::from_str(body).map_err(|_| ExchangeError::InvalidJson("parse error".into()))?;
 
     let has_error = map.get("error").and_then(|v| v.as_str()).is_some();
-    let has_token = map.get("access_token").and_then(|v| v.as_str()).is_some();
+    let has_token = map.get(field).and_then(|v| v.as_str()).is_some();
 
     if has_error && has_token {
         return Err(ExchangeError::ErrorWithToken);
@@ -279,7 +306,7 @@ pub fn parse_token_response(body: &str) -> Result<TokenResponse, ExchangeError> 
     }
 
     let access_token = map
-        .get("access_token")
+        .get(field)
         .and_then(|v| v.as_str())
         .ok_or(ExchangeError::MissingAccessToken)?
         .to_string();
@@ -296,7 +323,7 @@ pub fn parse_token_response(body: &str) -> Result<TokenResponse, ExchangeError> 
         } else {
             return Err(ExchangeError::InvalidTokenType);
         }
-    } else {
+    } else if token_field.is_none() {
         return Err(ExchangeError::MissingTokenType);
     }
 

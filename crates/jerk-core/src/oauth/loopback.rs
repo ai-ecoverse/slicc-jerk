@@ -37,7 +37,7 @@ pub fn run(
     now_secs: u64,
     random_32: &[u8; 32],
     random_16: &[u8; 16],
-    http_post: &dyn Fn(&str, &str) -> Result<String, String>,
+    http_post: &oauth::HttpPost<'_>,
     extra_vars: &[(&str, &str)],
     cors_origins: &[String],
 ) -> Result<Token, OAuthError> {

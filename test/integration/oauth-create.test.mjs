@@ -141,7 +141,7 @@ capture = { at = "network", from = "body", stage = "request", url = "https://{cl
 `);
   const check = sb.jerk(['config', 'check']);
   assert.equal(check.status, 0, check.stderr);
-  assert.match(check.stdout, /ok: 24 providers/);
+  assert.match(check.stdout, /ok: 25 providers/);
 
   const cdp = await stubCdp({
     paused: [
@@ -202,7 +202,7 @@ capture = { at = "network", from = "body", stage = "request", url = "https://api
 `);
   const accepted = sb.jerk(['config', 'check']);
   assert.equal(accepted.status, 0, accepted.stderr);
-  assert.match(accepted.stdout, /ok: 24 providers/);
+  assert.match(accepted.stdout, /ok: 25 providers/);
 });
 
 test('config check rejects capture.url builtins the flow cannot fill', () => {
@@ -236,5 +236,5 @@ capture = { at = "network", from = "body", url = "https://{client_id}.example/ap
 `);
   const accepted = sb.jerk(['config', 'check']);
   assert.equal(accepted.status, 0, accepted.stderr);
-  assert.match(accepted.stdout, /ok: 24 providers/);
+  assert.match(accepted.stdout, /ok: 25 providers/);
 });

@@ -382,7 +382,15 @@ pub fn complete_sign_in(
             .map_err(|_| -> JsValue { make_error("nonce_mismatch", "relay nonce mismatch") })?;
     }
 
+    let verifier = match pending.flow {
+        Flow::Pkce => Some(pending.verifier.as_str()),
+        Flow::Code | Flow::Exchange | Flow::Implicit | Flow::ClientCredentials => None,
+    };
+
     match pending.flow {
+        Flow::Pkce | Flow::Code if cfg.exchange.is_some() => {
+            configured_exchange(cfg, &result.value, verifier)
+        }
         Flow::Pkce | Flow::Code => {
             let token_url = cfg.token_url.as_deref().ok_or_else(|| {
                 make_error(
@@ -396,10 +404,6 @@ pub fn complete_sign_in(
                     },
                 )
             })?;
-            let verifier = match pending.flow {
-                Flow::Pkce => Some(pending.verifier.as_str()),
-                Flow::Code | Flow::Exchange | Flow::Implicit | Flow::ClientCredentials => None,
-            };
             let body_pairs = exchange::build_code_exchange_body(
                 &result.value,
                 &cfg.client_id,
@@ -413,6 +417,12 @@ pub fn complete_sign_in(
             js_sys::Reflect::set(&obj, &"kind".into(), &"exchange".into()).ok();
             js_sys::Reflect::set(&obj, &"url".into(), &token_url.into()).ok();
             js_sys::Reflect::set(&obj, &"body".into(), &body.into()).ok();
+            js_sys::Reflect::set(
+                &obj,
+                &"contentType".into(),
+                &"application/x-www-form-urlencoded".into(),
+            )
+            .ok();
             Ok(obj.into())
         }
         Flow::Implicit => {
@@ -434,33 +444,47 @@ pub fn complete_sign_in(
             }
             Ok(obj.into())
         }
-        Flow::Exchange => {
-            let exchange_cfg = cfg.exchange.as_ref().ok_or_else(|| {
-                make_error("config_invalid", "exchange required for exchange flow")
-            })?;
-            let token_url = cfg.token_url.as_deref().ok_or_else(|| {
-                make_error("config_invalid", "token_url required for exchange flow")
-            })?;
-            let body_pairs = exchange::build_configured_exchange_body(
-                exchange_cfg,
-                &result.value,
-                &cfg.client_id,
-                &cfg.redirect_uri,
-                cfg.scope.as_deref(),
-            );
-            let body = exchange::encode_form_body(&body_pairs);
-
-            let obj = js_sys::Object::new();
-            js_sys::Reflect::set(&obj, &"kind".into(), &"exchange".into()).ok();
-            js_sys::Reflect::set(&obj, &"url".into(), &token_url.into()).ok();
-            js_sys::Reflect::set(&obj, &"body".into(), &body.into()).ok();
-            Ok(obj.into())
-        }
+        Flow::Exchange => configured_exchange(cfg, &result.value, None),
         Flow::ClientCredentials => Err(make_error(
             "unsupported_flow",
             "client_credentials is not available in the wasm complete path",
         )),
     }
+}
+
+fn configured_exchange(
+    cfg: &config::OAuthConfig,
+    value: &str,
+    verifier: Option<&str>,
+) -> Result<JsValue, JsValue> {
+    let exchange_cfg = cfg
+        .exchange
+        .as_ref()
+        .ok_or_else(|| make_error("config_invalid", "exchange required for exchange flow"))?;
+    let token_url = cfg
+        .token_url
+        .as_deref()
+        .ok_or_else(|| make_error("config_invalid", "token_url required for exchange flow"))?;
+    let body_pairs = exchange::build_configured_exchange_body(
+        exchange_cfg,
+        value,
+        verifier,
+        &cfg.client_id,
+        &cfg.redirect_uri,
+        cfg.scope.as_deref(),
+    );
+    let body = exchange::encode_exchange_body(exchange_cfg.format, &body_pairs);
+    let content_type = match exchange_cfg.format {
+        config::ExchangeFormat::Form => "application/x-www-form-urlencoded",
+        config::ExchangeFormat::Json => "application/json",
+    };
+
+    let obj = js_sys::Object::new();
+    js_sys::Reflect::set(&obj, &"kind".into(), &"exchange".into()).ok();
+    js_sys::Reflect::set(&obj, &"url".into(), &token_url.into()).ok();
+    js_sys::Reflect::set(&obj, &"body".into(), &body.into()).ok();
+    js_sys::Reflect::set(&obj, &"contentType".into(), &content_type.into()).ok();
+    Ok(obj.into())
 }
 
 #[wasm_bindgen(js_name = parseTokenResponse)]
@@ -470,18 +494,27 @@ pub fn parse_token_response(
     now_secs: f64,
 ) -> Result<JsValue, JsValue> {
     let raw_cfg = parse_oauth_config(config_json)?;
-    let _valid = validate_config(raw_cfg)?;
-    token_response_to_js(body, now_secs)
+    let valid = validate_config(raw_cfg)?;
+    let token_field = valid
+        .inner()
+        .exchange
+        .as_ref()
+        .and_then(|ex| ex.token_field.as_deref());
+    token_response_to_js(body, now_secs, token_field)
 }
 
 #[wasm_bindgen(js_name = parseRefreshResponse)]
 pub fn parse_refresh_response(body: &str, now_secs: f64) -> Result<JsValue, JsValue> {
-    token_response_to_js(body, now_secs)
+    token_response_to_js(body, now_secs, None)
 }
 
-fn token_response_to_js(body: &str, now_secs: f64) -> Result<JsValue, JsValue> {
+fn token_response_to_js(
+    body: &str,
+    now_secs: f64,
+    token_field: Option<&str>,
+) -> Result<JsValue, JsValue> {
     let now = clock(now_secs)?;
-    let resp = exchange::parse_token_response(body).map_err(|e| -> JsValue {
+    let resp = exchange::parse_token_response_field(body, token_field).map_err(|e| -> JsValue {
         let (code, msg) = match &e {
             exchange::ExchangeError::MissingAccessToken => {
                 ("missing_access_token", "missing access_token".into())
