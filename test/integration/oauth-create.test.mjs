@@ -79,10 +79,15 @@ capture = { at = "request", from = "query", param = "code" }
     assert.equal(wider.stdout, 'noscope: signed in\n');
     assert.equal(server.posts.filter((p) => p.url === '/device').length, 2);
 
-    const param = await sb.jerkAsync(['noscope', 'create', '-p', 'scope=admin']);
+    const covered = await sb.jerkAsync(['noscope', 'create', '-p', 'scope=admin']);
+    assert.equal(covered.stdout, 'noscope: already signed in; use --force to sign in again\n');
+
+    const param = await sb.jerkAsync(['noscope', 'create', '-p', 'scope=write']);
     assert.equal(param.status, 0, param.stderr);
     assert.equal(param.stdout, 'noscope: signed in\n');
-    assert.equal(server.posts.filter((p) => p.url === '/device').length, 3);
+    const devices = server.posts.filter((p) => p.url === '/device');
+    assert.equal(devices.length, 3);
+    assert.equal(new URLSearchParams(devices[2].body).get('scope'), 'openid profile admin write');
   } finally {
     await server.close();
   }

@@ -79,7 +79,11 @@ pub fn scopes_satisfied(granted: Option<&str>, requested: &str) -> bool {
 }
 
 pub fn union_scopes(granted: &str, requested: &str) -> String {
-    let sep = if requested.contains(',') && !requested.contains(char::is_whitespace) {
+    let commas = |s: &str| s.contains(',') && !s.contains(char::is_whitespace);
+    let single = !requested
+        .trim()
+        .contains(|c: char| c.is_whitespace() || c == ',');
+    let sep = if commas(requested) || (single && commas(granted)) {
         ","
     } else {
         " "

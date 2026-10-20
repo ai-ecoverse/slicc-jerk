@@ -816,7 +816,10 @@ fn fetch_oauth(
                         refresh_token: new_rt.clone(),
                         access_token: None,
                         expires_at: token.expires_at,
-                        scope: token.scope.clone(),
+                        scope: token
+                            .scope
+                            .clone()
+                            .or_else(|| grant.as_ref().and_then(|g| g.scope.clone())),
                         fields: grant
                             .as_ref()
                             .map(|item| item.fields.clone())
@@ -1416,6 +1419,7 @@ fn oauth_create_cmd(
         }
     };
 
+    let recorded = token.scope.clone().or(scope.map(String::from));
     let grants = host.grants(entry.provider.store.as_deref());
     let grant = if token.refresh_token.is_some() {
         crate::grants::Grant {
@@ -1424,7 +1428,7 @@ fn oauth_create_cmd(
             refresh_token: token.refresh_token.clone().unwrap_or_default(),
             access_token: None,
             expires_at: token.expires_at,
-            scope: token.scope.clone(),
+            scope: recorded,
             fields: token.fields.clone(),
         }
     } else {
@@ -1434,7 +1438,7 @@ fn oauth_create_cmd(
             refresh_token: String::new(),
             access_token: Some(token.access_token.clone()),
             expires_at: token.expires_at,
-            scope: token.scope.clone(),
+            scope: recorded,
             fields: token.fields.clone(),
         }
     };
