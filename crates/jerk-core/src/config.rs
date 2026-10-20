@@ -104,6 +104,8 @@ pub struct Verb {
     #[serde(default, skip_serializing_if = "is_false")]
     pub echo: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub needs: Vec<String>,
@@ -701,6 +703,10 @@ fn validate_verb(
     if verb.oauth {
         return;
     }
+    if let Some(url) = &verb.ask {
+        validate_ask(&label, name, url, verb, messages);
+        return;
+    }
     if verb.keep && name != "create" {
         validate_kept(&label, name, verb, provider, messages);
         return;
@@ -846,6 +852,24 @@ fn validate_verb(
                 }
             }
             Err(e) => messages.push(format!("{label}: {e} in {text:?}")),
+        }
+    }
+}
+
+fn validate_ask(label: &str, name: &str, url: &str, verb: &Verb, messages: &mut Vec<String>) {
+    if name != "create" || !verb.keep {
+        messages.push(format!(
+            "{label}: ask only applies to a create with keep = true"
+        ));
+    }
+    let web = url::Url::parse(url).is_ok_and(|u| ["https", "http"].contains(&u.scheme()));
+    if !web {
+        messages.push(format!("{label}: ask {url:?} must be an http(s) URL"));
+    }
+    let fields = toml::Value::try_from(verb).unwrap_or(toml::Value::Table(toml::Table::new()));
+    for field in fields.as_table().into_iter().flat_map(|t| t.keys()) {
+        if !["ask", "keep", "needs", "unless"].contains(&field.as_str()) {
+            messages.push(format!("{label}: ask cannot have {field}"));
         }
     }
 }
