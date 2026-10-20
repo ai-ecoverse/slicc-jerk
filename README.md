@@ -53,7 +53,7 @@ jerk tab import [--tab ID | --url PATTERN] [--cdp P] < bundle
 
 `--config <file>` (or `SLICC_JERK_CONFIG`) adds a providers file on top of the others. `-p k=v` sets a provider parameter, for example `-p host=github.example.com`.
 
-`get` prints the token to a terminal, or with `--reveal`. In a pipe it prints a masked form such as `gho_…1234`, so it doubles as a status check. `--json` prints `provider`, `source`, `masked`, `expires_at` and `scopes`, plus `token` only with `--reveal`; `--refresh` prints a status line, never the token.
+`get` prints the token to a terminal, or with `--reveal`. In a pipe it prints a masked form such as `gho_…1234`, so it doubles as a status check. `--json` prints `provider`, `source`, `masked`, `expires_at` and `scopes`, plus `token` only with `--reveal`; `--refresh` prints a status line, never the token. For an env token, `--scope` checks the JWT's `scp` or `scope` claim when it has one (the signature isn't verified), otherwise the provider's `scopes` command.
 
 A token already in one of the provider's `env` variables (`GH_TOKEN`, `GITHUB_TOKEN`, …) wins over the CLI, the way gh itself behaves. jerk never signs in on its own: without a token, `get` exits 3 and names the `create` to run, and `get --login` on a terminal runs it first.
 

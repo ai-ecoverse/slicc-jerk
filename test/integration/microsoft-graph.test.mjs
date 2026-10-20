@@ -258,3 +258,51 @@ test('drop --scope forgets the Entra grant instead of signing az out', () => {
     [['logout']]
   );
 });
+
+function unsignedJwt(claims) {
+  const part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${part({ alg: 'none', typ: 'JWT' })}.${part(claims)}.`;
+}
+
+test('get --scope checks a JWT env token against its scp claim', () => {
+  const sb = sandbox();
+  az(sb);
+  const covered = unsignedJwt({
+    exp: 4700000000,
+    scp: 'User.Read Chat.ReadWrite ChannelMessage.Read.All',
+  });
+  const ok = sb.jerk(['microsoft-graph', 'get', '--scope', 'Chat.ReadWrite', '--json'], {
+    MICROSOFT_GRAPH_TOKEN: covered,
+  });
+  assert.equal(ok.status, 0, ok.stderr);
+  const doc = JSON.parse(ok.stdout);
+  assert.equal(doc.source, 'env');
+  assert.match(doc.scopes, /Chat\.ReadWrite/);
+
+  const narrow = unsignedJwt({ exp: 4700000000, scp: 'User.Read Mail.ReadWrite' });
+  const missing = sb.jerk(['microsoft-graph', 'get', '--scope', 'Chat.ReadWrite'], {
+    TEAMS_GRAPH_TOKEN: narrow,
+  });
+  assert.equal(missing.status, 3);
+  assert.match(missing.stderr, /does not cover Chat\.ReadWrite/);
+
+  const scoped = unsignedJwt({ scope: 'User.Read,Chat.ReadWrite' });
+  const comma = sb.jerk(['microsoft-graph', 'get', '-p', 'scope=Chat.ReadWrite'], {
+    TEAMS_GRAPH_TOKEN: scoped,
+  });
+  assert.equal(comma.status, 0, comma.stderr);
+  assert.deepEqual(sb.calls(), []);
+});
+
+test('get --scope with an opaque env token still exits 3', () => {
+  const sb = sandbox();
+  az(sb);
+  for (const token of ['envgraphtokenvalue1234567', unsignedJwt({ exp: 4700000000 })]) {
+    const res = sb.jerk(['microsoft-graph', 'get', '--scope', 'Chat.ReadWrite'], {
+      MICROSOFT_GRAPH_TOKEN: token,
+    });
+    assert.equal(res.status, 3);
+    assert.match(res.stderr, /does not cover Chat\.ReadWrite/);
+  }
+  assert.deepEqual(sb.calls(), []);
+});
