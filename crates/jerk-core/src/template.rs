@@ -8,9 +8,13 @@ pub fn render_text(text: &str, vars: &Vars) -> String {
     let mut rest = text;
     while let Some(start) = rest.find('{') {
         let dollar = start > 0 && rest.as_bytes()[start - 1] == b'$';
-        let end = rest[start..]
-            .find('}')
-            .map(|e| start + e)
+        let close = if dollar {
+            crate::source::closing(&rest[start + 1..])
+        } else {
+            rest[start..].find('}')
+        };
+        let end = close
+            .map(|e| start + e + usize::from(dollar))
             .unwrap_or(rest.len() - 1);
         out.push_str(&rest[..start]);
         let name = &rest[start + 1..end];

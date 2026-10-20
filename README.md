@@ -68,7 +68,7 @@ A token already in one of the provider's `env` variables (`GH_TOKEN`, `GITHUB_TO
 
 ## Providers
 
-Built in: `github`, `npm`, `claude`, `cloudflare`, `aws`, `gcloud`, `microsoft-graph`, `adobe-aio`, `firefly`, `aem`, `fastly`, `xai`, `linkedin`, `printful`, `gmail`, `google`, `garmin`, `rescuetime` and `slack`. Every [MCP server](#mcp-servers) is one too. `jerk config show <provider>` prints the definition in effect.
+Built in: `github`, `npm`, `claude`, `openai`, `huggingface`, `cloudflare`, `aws`, `gcloud`, `microsoft-graph`, `adobe-aio`, `firefly`, `aem`, `fastly`, `xai`, `linkedin`, `printful`, `gmail`, `google`, `garmin`, `rescuetime` and `slack`. Every [MCP server](#mcp-servers) is one too. `jerk config show <provider>` prints the definition in effect.
 
 <details>
 <summary>What each built-in provider runs</summary>
@@ -78,6 +78,8 @@ Built in: `github`, `npm`, `claude`, `cloudflare`, `aws`, `gcloud`, `microsoft-g
 | `github` | `gh` | `gh auth token` | `--scope` understands GitHub's implied scopes (`repo` covers `public_repo`). Sign-out is `gh auth logout`. |
 | `npm` | `npm` | `//registry.npmjs.org/:_authToken` from `$NPM_CONFIG_USERCONFIG` or `~/.npmrc` | `npm config get` won't print auth keys, so jerk reads the file. `create` mints a granular token (npm 11.6.3 or newer) and records only its id, so `drop <id>` can revoke it. |
 | `claude` | `claude` (Claude Code) | env `ANTHROPIC_API_KEY`, else the token jerk kept from `create` | `create` runs `claude setup-token`, which signs in through the browser and prints a one-year subscription token once; jerk picks it out of the screen output and keeps it. `--force` gets a new one. `list` is `claude auth status --json` (Claude Code 2.1.41 or newer). `drop` forgets the kept token and leaves the Claude Code sign-in alone; `claude auth logout` doesn't revoke a `setup-token` token. |
+| `openai` | `codex` (Codex CLI) | `OPENAI_API_KEY` from `${CODEX_HOME:-~/.codex}/auth.json` | Env `OPENAI_API_KEY` wins, and `get` needs no `codex` to read the file. A ChatGPT sign-in's `tokens.access_token` is left out: it's for `chatgpt.com`'s Codex backend, not `api.openai.com`, so a ChatGPT-only sign-in with no API key exits 3. `create` is `codex login`, `drop` is `codex logout`. There's no `list`, because `codex login status` writes only to stderr. Credentials Codex keeps in the OS keyring (`cli_auth_credentials_store`) aren't read. |
+| `huggingface` | `hf` | the token file at `$HF_TOKEN_PATH`, else `$HF_HOME/token`, else `${XDG_CACHE_HOME:-~/.cache}/huggingface/token` | The same order as `huggingface_hub`. Env `HF_TOKEN`, then `HUGGING_FACE_HUB_TOKEN`, wins. `create` is `hf auth login`, `drop [<name>]` is `hf auth logout [--token-name <name>]`, and `user` is `hf auth whoami --format json`. |
 | `cloudflare` | `cf`, then `wrangler`, then browser OAuth | `cf accounts tokens create` (when `-p policies=…`), else `wrangler auth token --json`, else the stored OAuth grant | `create` / `drop` / `list` prefer `cf` (`auth login` / `logout` / `whoami`), then wrangler. `get` via `cf` mints an account-owned API token and needs `CLOUDFLARE_ACCOUNT_ID` plus `-p policies=…`. Wrangler needs 4.57.0+ for `create`/`get` and 4.65.0 for `list`. The browser fallback uses Cloudflare's `cf` OAuth app on `localhost:8877`. Session tokens are treated as expiring after 50 minutes. |
 | `aws` | `aws` (CLI v2) | `aws configure export-credentials` | Prints `AccessKeyId`; `lease` maps `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` (the last only when present). Env `AWS_*` wins when `AWS_ACCESS_KEY_ID` is set, even with no binary. `-p profile=` / `-p region=` are optional. `create` / `drop` are `aws sso login` / `logout`; `list` / `user` use `sts get-caller-identity`. |
 | `gcloud` | `gcloud`, then browser OAuth | `gcloud auth print-access-token`, else the stored OAuth grant | `create` is `gcloud auth login`, `drop` is `gcloud auth revoke`, `list` / `user` are `gcloud auth list` and `gcloud config get-value account`. Without the CLI, jerk uses the Cloud SDK public desktop client on loopback `:8085` (`cloud-platform` scope). Access tokens are treated as expiring after 55 minutes. |
@@ -146,7 +148,7 @@ Commands are argument lists, never shell strings, and the CLI runs without the p
 | command field | meaning |
 | --- | --- |
 | `run` | the argument list |
-| `read` | `get` only: `{ ini = path, key = k }` reads a value from an ini file instead |
+| `read` | `get` only: read the token from a file instead. `{ ini = path, key = k }` takes a key from an ini file, `{ file = path }` the trimmed contents, and `{ json = path, pointer = "/…" }` a string from a JSON file. A missing file, key or value, or an empty or null one, moves the chain on. Paths expand `${NAME:-default}`, nested too, and a leading `~` |
 | `parse` | `text`, `jwt`, `json:<pointer>`, or `scan:<prefix>` for the last token starting with `<prefix>` in screen output, ignoring ANSI codes and joining a token wrapped over lines |
 | `fields` | `get` only: map extra `env` names to `json:<pointer>` values from the same CLI stdout (for multi-value credentials such as AWS) |
 | `expiry` | `jwt` to read the expiry from the token, or `json:<pointer>` for an RFC3339 / unix timestamp in the CLI JSON |

@@ -6,11 +6,11 @@ pub fn expand(text: &str, env: &Env) -> String {
     let mut rest = text;
     while let Some(start) = rest.find("${") {
         out.push_str(&rest[..start]);
-        let Some(len) = rest[start..].find('}') else {
+        let Some(len) = closing(&rest[start + 2..]) else {
             out.push_str(&rest[start..]);
             return out;
         };
-        let inner = &rest[start + 2..start + len];
+        let inner = &rest[start + 2..start + 2 + len];
         let (name, default) = match inner.split_once(":-") {
             Some((n, d)) => (n, Some(d)),
             None => (inner, None),
@@ -19,10 +19,23 @@ pub fn expand(text: &str, env: &Env) -> String {
             Some(value) => out.push_str(value),
             None => out.push_str(&expand(default.unwrap_or(""), env)),
         }
-        rest = &rest[start + len + 1..];
+        rest = &rest[start + len + 3..];
     }
     out.push_str(rest);
     out
+}
+
+pub fn closing(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, c) in text.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' if depth == 0 => return Some(i),
+            '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
 }
 
 pub fn path(text: &str, env: &Env) -> PathBuf {
