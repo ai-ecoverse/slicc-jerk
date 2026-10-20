@@ -388,6 +388,23 @@ capture = { at = "request", from = "query", param = "code" }
 revoke_url = "https://oauth2.googleapis.com/revoke"
 refresh_env = "GWS_REFRESH_TOKEN"
 
+[providers.google]
+name = "Google APIs (Google OAuth)"
+params = { scope = "openid https://www.googleapis.com/auth/userinfo.email" }
+env = ["GOOGLE_ACCESS_TOKEN"]
+domains = ["www.googleapis.com", "calendar-json.googleapis.com", "drive.googleapis.com", "sheets.googleapis.com", "docs.googleapis.com"]
+[providers.google.oauth]
+mode = "loopback"
+flow = "pkce"
+authorize_url = "https://accounts.google.com/o/oauth2/auth?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&state={state}&code_challenge={code_challenge}&code_challenge_method=S256&access_type=offline&include_granted_scopes=true&prompt=consent"
+token_url = "https://oauth2.googleapis.com/token"
+client_id = "${GWS_CLIENT_ID:-406964657835-aq8lmia8j95dhl1a2bvharmfk3t1hgqj.apps.googleusercontent.com}"
+client_secret = "${GWS_CLIENT_SECRET:-kSmqreRr0qwBWJgbf5Y-PjSU}"
+redirect_uri = "http://127.0.0.1:56121"
+scope = "openid https://www.googleapis.com/auth/userinfo.email"
+capture = { at = "request", from = "query", param = "code" }
+revoke_url = "https://oauth2.googleapis.com/revoke"
+
 [providers.rescuetime]
 name = "RescueTime"
 env = ["RESCUETIME_API_KEY"]
