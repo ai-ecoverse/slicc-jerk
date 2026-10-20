@@ -290,17 +290,18 @@ capture = { at = "request", from = "query", param = "code" }
 
 [providers.microsoft-graph]
 name = "Microsoft Graph (az / Entra)"
-env = ["MICROSOFT_GRAPH_TOKEN", "EXCEL_GRAPH_TOKEN"]
+env = ["MICROSOFT_GRAPH_TOKEN", "EXCEL_GRAPH_TOKEN", "TEAMS_GRAPH_TOKEN"]
 domains = [
   "graph.microsoft.com",
   "outlook.office.com",
   "outlook.office365.com",
   "outlook.cloud.microsoft",
 ]
-params = { tenant = "common" }
+params = { tenant = "common", scope = "" }
 
 [[providers.microsoft-graph.get]]
 requires = "az"
+unless = ["scope"]
 run = ["az", "account", "get-access-token", "--resource-type", "ms-graph", "-o", "json"]
 parse = "json:/accessToken"
 expiry = "jwt"
@@ -320,6 +321,7 @@ parse = "text"
 
 [[providers.microsoft-graph.create]]
 requires = "az"
+unless = ["scope"]
 run = ["az", "login", "--tenant", "{tenant}"]
 interactive = true
 

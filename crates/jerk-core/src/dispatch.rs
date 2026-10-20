@@ -1304,6 +1304,7 @@ fn oauth_create_cmd(
     let requested = requested_scope(flags);
     let scope = requested
         .or(vars.get("scope").map(String::as_str))
+        .filter(|s| !s.is_empty())
         .or(config.scope.as_deref());
     let user = grant_user(vars);
     let host = ctx.oauth;

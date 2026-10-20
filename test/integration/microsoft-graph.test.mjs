@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { stubCdp } from './cdp-stub.mjs';
 import { sandbox } from './helpers.mjs';
@@ -67,6 +69,15 @@ test('EXCEL_GRAPH_TOKEN is accepted when MICROSOFT_GRAPH_TOKEN is unset', () => 
   assert.equal(JSON.parse(res.stdout).source, 'env');
 });
 
+test('TEAMS_GRAPH_TOKEN is accepted too', () => {
+  const sb = sandbox();
+  const res = sb.jerk(['microsoft-graph', 'get', '--json'], {
+    TEAMS_GRAPH_TOKEN: 'teamsgraphtokenvalue1234567',
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(JSON.parse(res.stdout).source, 'env');
+});
+
 test('without az, get falls through to oauth and list --json shows the chain', () => {
   const sb = sandbox();
   const res = sb.jerk(['microsoft-graph', 'get']);
@@ -76,7 +87,7 @@ test('without az, get falls through to oauth and list --json shows the chain', (
     (p) => p.provider === 'microsoft-graph'
   );
   assert.deepEqual(entry.steps, [{ cli: 'az', found: false }, { oauth: true }]);
-  assert.deepEqual(entry.env, ['MICROSOFT_GRAPH_TOKEN', 'EXCEL_GRAPH_TOKEN']);
+  assert.deepEqual(entry.env, ['MICROSOFT_GRAPH_TOKEN', 'EXCEL_GRAPH_TOKEN', 'TEAMS_GRAPH_TOKEN']);
 });
 
 test('config show prints the az then oauth chain', () => {
@@ -144,4 +155,77 @@ test('the Entra sign-in sends the Graph Command Line Tools client id', async () 
   assert.match(clientId, GUID);
   assert.equal(clientId, '14d82eec-204b-4c2f-b7e8-296a70dab67e');
   assert.match(url.searchParams.get('scope'), /Files\.ReadWrite\.All/);
+});
+
+const TEAMS = 'Chat.ReadWrite ChannelMessage.Read.All Team.ReadBasic.All Channel.ReadBasic.All';
+const ENTRA = 'eyJhbGciOiJub25lIn0.eyJzY3AiOiJDaGF0LlJlYWRXcml0ZSJ9.entra';
+
+function grantFile(sb, scope) {
+  let h = 0xcbf29ce484222325n;
+  for (const b of Buffer.from('microsoft-graph\0default')) {
+    h = ((h ^ BigInt(b)) * 0x100000001b3n) & ((1n << 128n) - 1n);
+  }
+  const name = Buffer.from(h.toString(16).padStart(32, '0'), 'hex').reverse().toString('hex');
+  const dir = join(sb.stateDir, 'grants');
+  mkdirSync(dir, { recursive: true });
+  const grant = {
+    provider: 'microsoft-graph',
+    user: 'default',
+    refresh_token: '',
+    access_token: ENTRA,
+    expires_at: 4700000000,
+    scope,
+  };
+  writeFileSync(
+    join(dir, `${name}.json`),
+    JSON.stringify({ provider: 'microsoft-graph', user: 'default', grant })
+  );
+}
+
+test('create --scope with Teams scopes skips az and asks Entra for exactly those scopes', async () => {
+  const sb = sandbox();
+  az(sb);
+  const { res, url } = await authorize(sb, ['--scope', TEAMS]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /state/);
+  assert.equal(url.searchParams.get('scope'), TEAMS);
+  assert.equal(url.searchParams.get('client_id'), '14d82eec-204b-4c2f-b7e8-296a70dab67e');
+  assert.deepEqual(
+    sb.calls().filter((c) => c.args[0] === 'login'),
+    []
+  );
+});
+
+test('get --scope reads the Entra grant, not az, and exits 3 when it does not cover the scope', () => {
+  const sb = sandbox();
+  az(sb);
+  grantFile(sb, 'openid profile User.Read Mail.ReadWrite offline_access');
+  const env = { SLICC_JERK_STORE: 'file' };
+  const narrow = sb.jerk(['microsoft-graph', 'get', '--scope', 'Chat.ReadWrite'], env);
+  assert.equal(narrow.status, 3);
+  assert.match(narrow.stderr, /does not cover Chat\.ReadWrite; run jerk microsoft-graph create/);
+  assert.deepEqual(sb.calls(), []);
+
+  grantFile(sb, `openid profile User.Read ${TEAMS}`);
+  const wide = sb.jerk(['microsoft-graph', 'get', '--scope', 'Chat.ReadWrite', '--json'], env);
+  assert.equal(wide.status, 0, wide.stderr);
+  const doc = JSON.parse(wide.stdout);
+  assert.equal(doc.source, 'oauth');
+  assert.ok(doc.scopes.includes('ChannelMessage.Read.All'));
+  const all = sb.jerk(['microsoft-graph', 'get', '--scope', TEAMS, '--reveal'], env);
+  assert.equal(all.status, 0, all.stderr);
+  assert.equal(all.stdout, `${ENTRA}\n`);
+  assert.deepEqual(sb.calls(), []);
+
+  const again = sb.jerk(['microsoft-graph', 'create', '--scope', TEAMS], env);
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /already signed in/);
+  assert.deepEqual(sb.calls(), []);
+
+  const plain = sb.jerk(['microsoft-graph', 'get', '--reveal'], env);
+  assert.equal(plain.stdout, `${TOKEN}\n`);
+  assert.deepEqual(
+    sb.calls().map((c) => c.args.slice(0, 2)),
+    [['account', 'get-access-token']]
+  );
 });
