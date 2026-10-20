@@ -191,6 +191,29 @@ test('PKCE with a JSON exchange body and a key token field', { skip }, async () 
   assert.equal(parsed.refreshToken, undefined);
 });
 
+test('a configured exchange sends the scope passed to beginSignIn', { skip }, async () => {
+  const wasm = await loadWasm();
+  const config = JSON.stringify({
+    mode: 'loopback',
+    flow: 'pkce',
+    authorize_url: 'https://keys.example.com/auth?scope={scope}&c={code_challenge}&state={state}',
+    token_url: 'https://keys.example.com/api/keys',
+    client_id: 'app',
+    redirect_uri: 'http://localhost:9998/callback',
+    scope: 'default',
+    capture: { at: 'request', from: 'query', param: 'code' },
+    exchange: { format: 'json', body: { code: '{value}', scope: '{scope}' } },
+  });
+  const begin = wasm.beginSignIn(config, 'wider', 1700000000, random32, random16);
+  assert.equal(new URL(begin.authorizeUrl).searchParams.get('scope'), 'wider');
+  const complete = wasm.completeSignIn(
+    config,
+    begin.pending,
+    `http://localhost:9998/callback?code=c&state=${encodeURIComponent(begin.state)}`
+  );
+  assert.equal(JSON.parse(complete.body).scope, 'wider');
+});
+
 test('implicit flow with relay (Adobe-shaped)', { skip }, async () => {
   const wasm = await loadWasm();
   const now = 1700000000;

@@ -292,6 +292,7 @@ pub fn begin_sign_in(
         "expected_nonce": expected_nonce,
         "flow": cfg.flow,
         "now_secs": now,
+        "scope": effective_scope,
     });
 
     verifier_str.zeroize();
@@ -330,6 +331,8 @@ pub fn complete_sign_in(
         expected_nonce: Option<String>,
         flow: Flow,
         now_secs: u64,
+        #[serde(default)]
+        scope: Option<String>,
     }
 
     let pending: Pending = serde_json::from_str(pending_json)
@@ -389,7 +392,7 @@ pub fn complete_sign_in(
 
     match pending.flow {
         Flow::Pkce | Flow::Code if cfg.exchange.is_some() => {
-            configured_exchange(cfg, &result.value, verifier)
+            configured_exchange(cfg, &result.value, verifier, pending.scope.as_deref())
         }
         Flow::Pkce | Flow::Code => {
             let token_url = cfg.token_url.as_deref().ok_or_else(|| {
@@ -444,7 +447,7 @@ pub fn complete_sign_in(
             }
             Ok(obj.into())
         }
-        Flow::Exchange => configured_exchange(cfg, &result.value, None),
+        Flow::Exchange => configured_exchange(cfg, &result.value, None, pending.scope.as_deref()),
         Flow::ClientCredentials => Err(make_error(
             "unsupported_flow",
             "client_credentials is not available in the wasm complete path",
@@ -456,6 +459,7 @@ fn configured_exchange(
     cfg: &config::OAuthConfig,
     value: &str,
     verifier: Option<&str>,
+    scope: Option<&str>,
 ) -> Result<JsValue, JsValue> {
     let exchange_cfg = cfg
         .exchange
@@ -471,7 +475,7 @@ fn configured_exchange(
         verifier,
         &cfg.client_id,
         &cfg.redirect_uri,
-        cfg.scope.as_deref(),
+        scope.or(cfg.scope.as_deref()),
     );
     let body = exchange::encode_exchange_body(exchange_cfg.format, &body_pairs);
     let content_type = match exchange_cfg.format {
