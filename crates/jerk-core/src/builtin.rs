@@ -36,6 +36,28 @@ list = { run = ["claude", "auth", "status", "--json"], parse = "json:", min_vers
 create = { run = ["claude", "setup-token"], parse = "scan:sk-ant-oat", interactive = true, echo = true, keep = true }
 drop = { keep = true }
 
+[providers.openai]
+name = "OpenAI (Codex CLI)"
+env = ["OPENAI_API_KEY"]
+domains = ["api.openai.com"]
+requires = "codex"
+get = { read = { json = "${CODEX_HOME:-~/.codex}/auth.json", pointer = "/OPENAI_API_KEY" } }
+create = { run = ["codex", "login"], interactive = true }
+drop = { run = ["codex", "logout"] }
+
+[providers.huggingface]
+name = "Hugging Face (hf)"
+env = ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"]
+domains = ["huggingface.co", "router.huggingface.co", "api-inference.huggingface.co"]
+requires = "hf"
+get = { read = { file = "${HF_TOKEN_PATH:-${HF_HOME:-${XDG_CACHE_HOME:-~/.cache}/huggingface}/token}" } }
+create = { run = ["hf", "auth", "login"], interactive = true }
+drop = { run = ["hf", "auth", "logout", "--token-name", "{id}"] }
+user = [
+  { run = ["hf", "auth", "whoami", "--format", "json"], parse = "json:/user" },
+  { run = ["hf", "auth", "whoami", "--format", "json"], parse = "json:/name" },
+]
+
 [providers.cloudflare]
 name = "Cloudflare"
 env = ["CLOUDFLARE_API_TOKEN"]

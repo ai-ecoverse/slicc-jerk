@@ -8,8 +8,58 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Read {
-    pub ini: String,
-    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ini: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer: Option<String>,
+}
+
+impl Read {
+    pub fn path(&self) -> &str {
+        [&self.ini, &self.file, &self.json]
+            .into_iter()
+            .flatten()
+            .next()
+            .map_or("", String::as_str)
+    }
+
+    fn texts(&self) -> impl Iterator<Item = &str> {
+        [&self.ini, &self.key, &self.file, &self.json, &self.pointer]
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+    }
+}
+
+fn validate_read(label: &str, read: &Read, messages: &mut Vec<String>) {
+    let forms = [&read.ini, &read.file, &read.json]
+        .into_iter()
+        .filter(|f| f.is_some())
+        .count();
+    if forms != 1 {
+        messages.push(format!(
+            "{label}: read needs exactly one of ini, file or json"
+        ));
+    }
+    match (&read.ini, &read.key) {
+        (Some(_), None) => messages.push(format!("{label}: read.ini needs key")),
+        (None, Some(_)) => messages.push(format!("{label}: read.key only applies to ini")),
+        _ => {}
+    }
+    match (&read.json, &read.pointer) {
+        (Some(_), None) => messages.push(format!("{label}: read.json needs pointer")),
+        (None, Some(_)) => messages.push(format!("{label}: read.pointer only applies to json")),
+        (Some(_), Some(pointer)) if !pointer.starts_with('/') => messages.push(format!(
+            "{label}: read.pointer {pointer:?} must start with /"
+        )),
+        _ => {}
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -665,8 +715,11 @@ fn validate_verb(
         }
         _ => {}
     }
-    if verb.read.is_some() && name != "get" {
-        messages.push(format!("{label}: read only applies to get"));
+    if let Some(read) = &verb.read {
+        if name != "get" {
+            messages.push(format!("{label}: read only applies to get"));
+        }
+        validate_read(&label, read, messages);
     }
     if verb.keep && verb.parse.is_none() {
         messages.push(format!("{label}: keep needs parse"));
@@ -769,8 +822,7 @@ fn validate_verb(
     }
     let mut texts: Vec<&str> = verb.run.iter().flatten().map(String::as_str).collect();
     if let Some(read) = &verb.read {
-        texts.push(&read.ini);
-        texts.push(&read.key);
+        texts.extend(read.texts());
     }
     if let Some(parse) = &verb.parse {
         texts.push(parse);
@@ -834,8 +886,8 @@ pub fn placeholders(text: &str) -> Result<Vec<String>, String> {
     while i < bytes.len() {
         match bytes[i] {
             b'$' if bytes.get(i + 1) == Some(&b'{') => {
-                let end = text[i..].find('}').ok_or("an unclosed ${")?;
-                i += end + 1;
+                let end = crate::source::closing(&text[i + 2..]).ok_or("an unclosed ${")?;
+                i += end + 3;
             }
             b'{' => {
                 let end = text[i..].find('}').ok_or("an unclosed {")?;

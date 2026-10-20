@@ -673,11 +673,17 @@ fn read_token(
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Result<Token, Exit> {
-    let path = source::path(&render_text(&read.ini, vars), ctx.env);
-    let key = render_text(&read.key, vars);
-    let value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| source::ini_value(&text, &key, ctx.env));
+    let path = source::path(&render_text(read.path(), vars), ctx.env);
+    let value =
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| match (&read.key, &read.pointer) {
+                (Some(key), _) => source::ini_value(&text, &render_text(key, vars), ctx.env),
+                (None, Some(pointer)) => {
+                    extract::token(&text, Some(&format!("json:{}", render_text(pointer, vars))))
+                }
+                (None, None) => extract::token(&text, Some("text")),
+            });
     match value {
         Some(value) => Ok(Token {
             value,
