@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { jerk, sandbox } from './helpers.mjs';
 
@@ -49,6 +51,30 @@ test('KAGI_API_KEY wins over the kept key', () => {
   const doc = JSON.parse(res.stdout);
   assert.equal(doc.source, 'env');
   assert.equal(doc.token, 'kagi-env-FAKEFAKEFAKEFAKE');
+});
+
+test('kagi create counts KAGI_API_KEY as signed in until --force', () => {
+  const sb = sandbox();
+  const env = { KAGI_API_KEY: 'kagi-env-FAKEFAKEFAKEFAKE' };
+  const res = run(sb, ['kagi', 'create'], '', env);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, 'kagi: already signed in; use --force to sign in again\n');
+  assert.equal(res.stderr, '');
+  const forced = run(sb, ['kagi', 'create', '--force'], KEY, env);
+  assert.equal(forced.status, 0, forced.stderr);
+  assert.equal(run(sb, ['kagi', 'get', '--reveal']).stdout, `${KEY}\n`);
+});
+
+test('kagi create fails when the grant store cannot keep the key', () => {
+  const sb = sandbox();
+  const blocker = join(sb.dir, 'not-a-dir');
+  writeFileSync(blocker, '');
+  const res = run(sb, ['kagi', 'create'], KEY, { SLICC_JERK_STATE_DIR: blocker });
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /jerk: kagi: cannot keep the token/);
+  assert.doesNotMatch(res.stderr, /kept the key for get/);
+  assert.equal(res.stdout, '');
+  secretFree(res, KEY);
 });
 
 test('kagi create with no terminal and empty stdin exits 3 and keeps nothing', () => {

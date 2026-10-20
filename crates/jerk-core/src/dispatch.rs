@@ -635,7 +635,7 @@ fn keep_minted(
     stdout: &str,
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
-) {
+) -> bool {
     let expires_at = extract::expiry(stdout, token, verb.expiry.as_deref()).or_else(|| {
         entry
             .provider
@@ -653,17 +653,18 @@ fn keep_minted(
         scope: None,
         fields: BTreeMap::new(),
     };
-    if let Err(e) = ctx
+    let stored = ctx
         .oauth
         .grants(entry.provider.store.as_deref())
-        .store(&grant)
-    {
+        .store(&grant);
+    if let Err(e) = &stored {
         let _ = writeln!(
             io.err,
             "jerk: {}: cannot keep the token, so save it now: {e}",
             entry.id
         );
     }
+    stored.is_ok()
 }
 
 fn read_token(
@@ -1259,7 +1260,15 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         .ok()
         .filter(|v| v.parse.is_some() || v.ask.is_some())
     {
-        if verb.keep && !flags.has("--force") && kept(entry, &vars, ctx).is_some() {
+        let mut quiet = Io {
+            out: &mut std::io::sink(),
+            err: &mut std::io::sink(),
+        };
+        let signed_in = match verb.ask {
+            Some(_) => fetch(entry, &vars, ctx, &mut quiet).is_ok(),
+            None => kept(entry, &vars, ctx).is_some(),
+        };
+        if verb.keep && !flags.has("--force") && signed_in {
             let _ = writeln!(
                 io.out,
                 "{}: already signed in; use --force to sign in again",
@@ -1553,7 +1562,7 @@ pub fn mint_token(
         .and_then(|v| v.as_str().map(String::from))
         .or_else(|| lookup_id(entry, verb, &token, vars, ctx, io));
     if verb.keep {
-        keep_minted(entry, verb, vars, &token, &ran.stdout, ctx, io);
+        let _ = keep_minted(entry, verb, vars, &token, &ran.stdout, ctx, io);
     }
     if let Some(id) = &id {
         if let Err(e) = state::record(ctx.env, &entry.id, id) {
@@ -1576,8 +1585,10 @@ fn take_key(
     io: &mut Io<'_>,
 ) -> Result<String, Exit> {
     let key = crate::paste::ask(entry, url, ctx, io)?;
-    keep_minted(entry, verb, vars, &key, "", ctx, io);
-    Ok(key)
+    match keep_minted(entry, verb, vars, &key, "", ctx, io) {
+        true => Ok(key),
+        false => Err(Exit::Error),
+    }
 }
 
 fn mint(
