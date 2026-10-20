@@ -51,9 +51,12 @@ env = ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"]
 domains = ["huggingface.co", "router.huggingface.co", "api-inference.huggingface.co"]
 requires = "hf"
 get = { read = { file = "${HF_TOKEN_PATH:-${HF_HOME:-${XDG_CACHE_HOME:-~/.cache}/huggingface}/token}" } }
-user = { run = ["hf", "auth", "whoami", "--format", "json"], parse = "json:/user" }
 create = { run = ["hf", "auth", "login"], interactive = true }
 drop = { run = ["hf", "auth", "logout", "--token-name", "{id}"] }
+user = [
+  { run = ["hf", "auth", "whoami", "--format", "json"], parse = "json:/user" },
+  { run = ["hf", "auth", "whoami", "--format", "json"], parse = "json:/name" },
+]
 
 [providers.cloudflare]
 name = "Cloudflare"

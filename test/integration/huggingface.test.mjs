@@ -29,10 +29,16 @@ test('huggingface get reads ~/.cache/huggingface/token without running hf', () =
   assert.equal(body.token, TOKEN);
   assert.equal(body.source, 'file');
   assert.equal(sb.calls().length, 0);
-  const shown = sb.jerk(['config', 'show', 'huggingface']);
-  assert.match(
-    shown.stdout,
-    /\[providers\.huggingface\.user\]\nparse = "json:\/user"\nrun = \["hf", "auth", "whoami", "--format", "json"\]/
+  const shown = sb.jerk(['config', 'show', 'huggingface']).stdout;
+  const users = [
+    ...shown.matchAll(
+      /\[\[providers\.huggingface\.user\]\]\nparse = "json:\/(\w+)"\nrun = \["hf", "auth", "whoami", "--format", "json"\]/g
+    ),
+  ];
+  assert.deepEqual(
+    users.map((m) => m[1]),
+    ['user', 'name'],
+    shown
   );
 });
 
