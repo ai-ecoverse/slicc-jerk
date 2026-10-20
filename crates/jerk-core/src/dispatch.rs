@@ -1307,6 +1307,7 @@ fn oauth_create_cmd(
         .or(config.scope.as_deref());
     let user = grant_user(vars);
     let host = ctx.oauth;
+    let mut widened = None;
 
     if !flags.has("--force") {
         let grants = host.grants(entry.provider.store.as_deref());
@@ -1315,8 +1316,16 @@ fn oauth_create_cmd(
                 out: &mut std::io::sink(),
                 err: &mut std::io::sink(),
             };
-            if let Ok(tok) = fetch_oauth(entry, base, vars, ctx, &mut quiet) {
-                let have = tok.scope.or(g.scope);
+            let fetched = fetch_oauth(entry, base, vars, ctx, &mut quiet);
+            let have = match &fetched {
+                Ok(tok) => tok.scope.clone().or(g.scope.clone()),
+                Err(_) => g.scope.clone(),
+            };
+            widened = have
+                .as_deref()
+                .zip(scope)
+                .map(|(have, want)| jerk_oauth::scopes::union_scopes(have, want));
+            if fetched.is_ok() {
                 let covered = match (requested, have.as_deref()) {
                     (Some(want), have) => jerk_oauth::scopes::scopes_satisfied(have, want),
                     (None, Some(have)) => scope
@@ -1386,6 +1395,7 @@ fn oauth_create_cmd(
     #[cfg(target_os = "wasi")]
     let cdp_ref: Option<&dyn oauth::CdpOpener> = None;
 
+    let scope = widened.as_deref().or(scope);
     let config = resolve_oauth(&config, ctx.env);
     let extra: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let token = match oauth::oauth_create_with_vars(

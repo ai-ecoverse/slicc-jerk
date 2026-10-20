@@ -77,3 +77,22 @@ pub fn scopes_satisfied(granted: Option<&str>, requested: &str) -> bool {
     let covered = expand_scopes(&granted_set);
     requested_set.iter().all(|s| covered.contains(s))
 }
+
+pub fn union_scopes(granted: &str, requested: &str) -> String {
+    let sep = if requested.contains(',') && !requested.contains(char::is_whitespace) {
+        ","
+    } else {
+        " "
+    };
+    let mut seen = BTreeSet::new();
+    let mut out: Vec<&str> = Vec::new();
+    for s in granted
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .chain(requested.split(|c: char| c.is_whitespace() || c == ','))
+    {
+        if !s.is_empty() && seen.insert(s.to_ascii_lowercase()) {
+            out.push(s);
+        }
+    }
+    out.join(sep)
+}
