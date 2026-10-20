@@ -330,6 +330,7 @@ oauth = true
 
 [[providers.microsoft-graph.drop]]
 requires = "az"
+unless = ["scope"]
 run = ["az", "logout"]
 interactive = true
 

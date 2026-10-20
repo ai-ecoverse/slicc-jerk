@@ -16,7 +16,7 @@ Usage:
   jerk <provider> get    [--scope S] [--reveal] [--refresh] [--login] [--json] [-p k=v]
   jerk <provider> list   [--json]
   jerk <provider> create [--scope S] [--force] [--name N] [--expires D] [--cdp URL] [-p k=v]
-  jerk <provider> drop   [<id>] [--yes]
+  jerk <provider> drop   [<id>] [--scope S] [--yes]
   jerk <provider> lease
   jerk <provider> drop --lease
   jerk <provider> sync --fnox <SECRET> --provider <fnox provider> [--global]

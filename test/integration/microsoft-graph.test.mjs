@@ -229,3 +229,32 @@ test('get --scope reads the Entra grant, not az, and exits 3 when it does not co
     [['account', 'get-access-token']]
   );
 });
+
+test('get -p scope= checks coverage like --scope', () => {
+  const sb = sandbox();
+  az(sb);
+  grantFile(sb, 'openid profile User.Read');
+  const env = { SLICC_JERK_STORE: 'file' };
+  const res = sb.jerk(['microsoft-graph', 'get', '-p', 'scope=Chat.ReadWrite'], env);
+  assert.equal(res.status, 3);
+  assert.match(res.stderr, /does not cover Chat\.ReadWrite/);
+  assert.deepEqual(sb.calls(), []);
+});
+
+test('drop --scope forgets the Entra grant instead of signing az out', () => {
+  const sb = sandbox();
+  az(sb);
+  grantFile(sb, `openid profile ${TEAMS}`);
+  const env = { SLICC_JERK_STORE: 'file' };
+  const dropped = sb.jerk(['microsoft-graph', 'drop', '--scope', 'Chat.ReadWrite', '--yes'], env);
+  assert.equal(dropped.status, 0, dropped.stderr);
+  assert.deepEqual(sb.calls(), []);
+  const after = sb.jerk(['microsoft-graph', 'get', '--scope', 'Chat.ReadWrite'], env);
+  assert.equal(after.status, 3);
+  assert.doesNotMatch(after.stderr, /does not cover/);
+  assert.equal(sb.jerk(['microsoft-graph', 'drop', '--yes'], env).status, 0);
+  assert.deepEqual(
+    sb.calls().map((c) => c.args),
+    [['logout']]
+  );
+});

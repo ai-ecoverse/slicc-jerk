@@ -1012,7 +1012,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
         Err(e) => return usage(&e, io),
     };
     let login = flags.has("--login") && ctx.stdin_terminal && ctx.stdout_terminal;
-    let requested = flags.value("--scope");
+    let requested = requested_scope(&flags).filter(|s| !s.is_empty());
     let mut signed_in = false;
     let (token, granted_scopes) = loop {
         let token = match fetch(entry, &vars, ctx, io) {
@@ -1576,7 +1576,7 @@ fn mint(
 }
 
 pub fn drop(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
-    let flags = match parse_flags(args, &[], &["--lease", "--yes"], 1) {
+    let flags = match parse_flags(args, &["--scope"], &["--lease", "--yes"], 1) {
         Ok(flags) => flags,
         Err(e) => return usage(&format!("{} drop: {e}", entry.id), io),
     };
