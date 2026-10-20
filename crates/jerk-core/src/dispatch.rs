@@ -374,10 +374,10 @@ pub fn fetch_from(
     if let Some(value) = from_env {
         return Ok(Token {
             expires_at: None,
+            scope: extract::jwt_scopes(&value),
             value,
             fields: env_fields(entry, ctx),
             source: "env",
-            scope: None,
         });
     }
     let chain = entry.provider.get.as_ref();

@@ -101,12 +101,23 @@ pub fn scopes(value: &Value) -> Option<String> {
     }
 }
 
-pub fn jwt_expiry(token: &str) -> Option<u64> {
+fn jwt_claims(token: &str) -> Option<Value> {
     let payload = token.split('.').nth(1)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload.trim_end_matches('='))
         .ok()?;
-    let claims: Value = serde_json::from_slice(&bytes).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub fn jwt_scopes(token: &str) -> Option<String> {
+    let claims = jwt_claims(token)?;
+    ["scp", "scope"]
+        .iter()
+        .find_map(|key| claims.get(*key).and_then(scopes))
+}
+
+pub fn jwt_expiry(token: &str) -> Option<u64> {
+    let claims = jwt_claims(token)?;
     if let Some(exp) = claims.get("exp").and_then(Value::as_u64) {
         return Some(exp);
     }

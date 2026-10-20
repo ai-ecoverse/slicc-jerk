@@ -59,6 +59,23 @@ test('get --scope checks the granted scopes', () => {
   assert.match(missing.stderr, /run jerk github create --scope workflow/);
 });
 
+test('get --scope with GH_TOKEN asks gh auth status for the scopes', () => {
+  const sb = sandbox();
+  fakeGh(sb);
+  const env = { GH_TOKEN: 'envtokenvalue1234567' };
+  const ok = sb.jerk(['github', 'get', '--scope', 'public_repo', '--json'], env);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(JSON.parse(ok.stdout).source, 'env');
+  assert.equal(sb.jerk(['github', 'get', '--scope', 'workflow'], env).status, 3);
+  assert.deepEqual(
+    sb.calls().map((c) => c.args.slice(0, 2)),
+    [
+      ['auth', 'status'],
+      ['auth', 'status'],
+    ]
+  );
+});
+
 test('list redacts tokens', () => {
   const sb = sandbox();
   fakeGh(sb);
