@@ -26,7 +26,7 @@ pub fn run(
     now_secs: u64,
     random_32: &[u8; 32],
     random_16: &[u8; 16],
-    http_post: &dyn Fn(&str, &str) -> Result<String, String>,
+    http_post: &oauth::HttpPost<'_>,
     err: &mut dyn Write,
 ) -> Result<Token, OAuthError> {
     let timeout_ms = jerk_oauth::config::timeout_ms(config);

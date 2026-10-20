@@ -68,7 +68,7 @@ A token already in one of the provider's `env` variables (`GH_TOKEN`, `GITHUB_TO
 
 ## Providers
 
-Built in: `github`, `npm`, `claude`, `openai`, `huggingface`, `cloudflare`, `aws`, `gcloud`, `microsoft-graph`, `adobe-aio`, `firefly`, `aem`, `fastly`, `xai`, `linkedin`, `printful`, `gmail`, `google`, `garmin`, `rescuetime`, `slack`, `kagi` and `elevenlabs`. Every [MCP server](#mcp-servers) is one too. `jerk config show <provider>` prints the definition in effect.
+Built in: `github`, `npm`, `claude`, `openai`, `huggingface`, `cloudflare`, `aws`, `gcloud`, `microsoft-graph`, `adobe-aio`, `firefly`, `aem`, `fastly`, `xai`, `linkedin`, `printful`, `gmail`, `google`, `garmin`, `rescuetime`, `slack`, `kagi`, `elevenlabs` and `openrouter`. Every [MCP server](#mcp-servers) is one too. `jerk config show <provider>` prints the definition in effect.
 
 <details>
 <summary>What each built-in provider runs</summary>
@@ -95,6 +95,7 @@ Built in: `github`, `npm`, `claude`, `openai`, `huggingface`, `cloudflare`, `aws
 | `google` | jerk's own OAuth | refresh of one Google grant | One grant for Calendar, Drive, Sheets, Docs and other Google APIs, picked with `--scope` or `-p scope=…`: `https://www.googleapis.com/auth/calendar`, `…/auth/drive`, `…/auth/spreadsheets`, `…/auth/documents`. A bare `create` asks only for `openid` and the email scope. On an existing grant, `create --scope` asks Google for the old scopes plus the new ones (`include_granted_scopes=true`), so the grant keeps covering both; `--force` asks for only what you name. The token is `GOOGLE_ACCESS_TOKEN`; `gmail` keeps its own grant. Loopback PKCE with `access_type=offline` and the same default client as `gmail` (Mozilla Thunderbird's), which Google may refuse for Drive, Sheets and Docs: set `GWS_CLIENT_ID` / `GWS_CLIENT_SECRET` to your own desktop client then. `drop` revokes at Google, then clears the grant. |
 | `garmin` | jerk's own browser capture | the stored OAuth grant | Opens Garmin SSO over CDP, catches `ticket` from the `connect.garmin.com/modern` redirect and exchanges it at `diauth.garmin.com` (`…/oauth/grant/service_ticket`). The token is `GARMIN_TOKEN` for `connectapi.garmin.com`. |
 | `rescuetime` | jerk's own browser capture | the stored API key | `create` opens RescueTime's API key page over CDP; create a key there and jerk keeps it from the form post once RescueTime accepts it. Env `RESCUETIME_API_KEY` wins. Send it as `Authorization: Bearer …` to `/anapi/*`. `drop` forgets the key; delete it on the key page to revoke it. |
+| `openrouter` | jerk's own OAuth | the stored API key | Loopback PKCE (S256) through `openrouter.ai/auth` with a `callback_url` on `localhost:56124`; jerk posts the code as JSON to `/api/v1/auth/keys` and keeps the returned `key` as `OPENROUTER_API_KEY` for `openrouter.ai`. No app registration: `client_id = "slicc-jerk"` is only the prefilled key label. The key has no expiry and no refresh. Env `OPENROUTER_API_KEY` wins. `drop` forgets the key; revoke it on openrouter.ai's keys page. |
 | `slack` | jerk's own browser capture | `SLACK_TOKEN` and `SLACK_D_COOKIE` | `create -p workspace=<T… or E… id>` opens `https://app.slack.com/client/<id>` in a new tab of a browser that's already signed in, and keeps the session `xoxc` token plus the paired `d` cookie. There's no expiry and no refresh: the pair stops working when that browser session ends. `drop` forgets the local copy. Sign-ins that need a Slack app or admin approval are out of scope. For Slack's MCP server, use `jerk mcp:url:https://mcp.slack.com/mcp`. |
 | `kagi` | a pasted key | env `KAGI_API_KEY`, else the key jerk kept from `create` | `create` prints and opens `https://kagi.com/api/keys`, then reads the key you paste without echoing it, or from stdin when that isn't a terminal (`printf %s "$KEY" \| jerk kagi create`). `--force` replaces it. `drop` forgets the key; revoke it on the key page. |
 | `elevenlabs` | a pasted key | env `ELEVENLABS_API_KEY`, then `XI_API_KEY`, else the key jerk kept from `create` | `create` prints and opens `https://elevenlabs.io/app/settings/api-keys` and keeps the key you paste or pipe in, like `kagi`. Send it as `xi-api-key: …` to `api.elevenlabs.io`. `drop` forgets the key; revoke it on the API keys page. |
@@ -207,8 +208,10 @@ capture = { at = "request", from = "query", param = "code" }
 | `pkce` | authorization code + PKCE (`code_verifier` on the token request) |
 | `code` | authorization code without PKCE (optional `client_secret` for public desktop clients) |
 | `implicit` | the capture value is the access token (no token endpoint) |
-| `exchange` | POST `token_url` with `[oauth.exchange]` (`grant_type` plus a `body` map; `{value}` is the captured param) |
+| `exchange` | POST `token_url` with `[oauth.exchange]` (`grant_type` plus a `body` map) |
 | `client_credentials` | same machine grant as `mode = "client_credentials"` (no browser / capture) |
+
+`[oauth.exchange]` shapes the token request. With `flow = "exchange"` it needs `grant_type`, and jerk sends `grant_type` and `client_id` ahead of `body`. With `pkce` or `code` it replaces the standard code exchange: `grant_type` is optional, and without it jerk sends exactly `body`. In `body`, `{value}` is the captured param, `{code_verifier}` the PKCE verifier, and `{client_id}`, `{redirect_uri}` and `{scope}` work too. `format = "json"` posts a JSON object instead of a form (the default, `"form"`). `token_field` names the response field that holds the token (default `access_token`); with it set, `token_type` may be missing.
 
 Optional fields: `client_secret` (sent on code exchange and refresh), `revoke_url` (best-effort revoke on `drop`), and `refresh_env` (an env var holding a refresh token that `get` mints from before it looks at the stored grant). `client_id` and `client_secret` may use `${NAME:-default}` expansion from the environment.
 
@@ -353,8 +356,8 @@ import init, { parseConfig, beginSignIn, completeSignIn, parseTokenResponse, par
 | --- | --- |
 | `parseConfig(tomlOrJson)` | `{ ok, config?, errors? }` for an `[oauth]` block |
 | `beginSignIn(config, scope, nowSecs, random32, random16)` | `{ authorizeUrl, state, expectedNonce?, pending }`; keep `pending` in memory |
-| `completeSignIn(config, pending, capturedUrl)` | `{ kind: "exchange", url, body }` to POST, or `{ kind: "token", … }` for implicit flows |
-| `parseTokenResponse(config, body, nowSecs)` | `{ accessToken, refreshToken?, expiresAt?, scope? }` |
+| `completeSignIn(config, pending, capturedUrl)` | `{ kind: "exchange", url, body, contentType }` to POST, or `{ kind: "token", … }` for implicit flows |
+| `parseTokenResponse(config, body, nowSecs)` | `{ accessToken, refreshToken?, expiresAt?, scope? }`, with the token read from `exchange.token_field` when set |
 | `refreshTokenRequest(paramsJson)` | `{ url, body }` from `{ token_url, client_id, refresh_token, scope?, resource?, client_secret? }`, no sign-in config needed |
 | `refreshTokenRequestBytes(bytes)` | the same, and it zeroes the caller's buffer |
 | `parseRefreshResponse(body, nowSecs)` | like `parseTokenResponse`, no config needed |

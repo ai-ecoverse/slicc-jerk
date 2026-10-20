@@ -28,6 +28,11 @@ pub trait CdpOpener {
     fn open(&self) -> Result<CdpResult, String>;
 }
 
+pub struct HttpPost<'a> {
+    pub form: &'a dyn Fn(&str, &str) -> Result<String, String>,
+    pub json: &'a dyn Fn(&str, &str) -> Result<String, String>,
+}
+
 pub struct OAuthEnv<'a> {
     pub config: &'a OAuthConfig,
     pub scope: Option<&'a str>,
@@ -131,57 +136,30 @@ pub(crate) fn token_from_capture(
     verifier: Option<&str>,
     scope: Option<&str>,
     now_secs: u64,
-    http_post: &dyn Fn(&str, &str) -> Result<String, String>,
+    http_post: &HttpPost<'_>,
 ) -> Result<Token, OAuthError> {
     use jerk_oauth::config::Flow;
-    use jerk_oauth::exchange;
     use jerk_oauth::expiry;
 
     match config.flow {
+        Flow::Pkce | Flow::Code if config.exchange.is_some() => configured_exchange(
+            config,
+            &captured.value,
+            verifier,
+            scope,
+            now_secs,
+            http_post,
+        ),
         Flow::Pkce | Flow::Code => exchange_authorization_code(
             config,
             &captured.value,
             &config.redirect_uri,
             verifier,
             now_secs,
-            http_post,
+            http_post.form,
         ),
         Flow::Exchange => {
-            let exchange_cfg = config.exchange.as_ref().ok_or_else(|| OAuthError {
-                exit: Exit::Usage,
-                message: "exchange required for exchange flow".into(),
-            })?;
-            let token_url = config.token_url.as_deref().ok_or_else(|| OAuthError {
-                exit: Exit::Usage,
-                message: "token_url required for exchange flow".into(),
-            })?;
-            let actual_scope = scope.or(config.scope.as_deref());
-            let body = exchange::build_configured_exchange_body(
-                exchange_cfg,
-                &captured.value,
-                &config.client_id,
-                &config.redirect_uri,
-                actual_scope,
-            );
-            let form_body = exchange::encode_form_body(&body);
-            let response = http_post(token_url, &form_body).map_err(|e| OAuthError {
-                exit: Exit::Error,
-                message: e,
-            })?;
-            let token_response =
-                exchange::parse_token_response(&response).map_err(|e| OAuthError {
-                    exit: Exit::Error,
-                    message: e.to_string(),
-                })?;
-            let expires_at = expiry::compute_expiry(now_secs, token_response.expires_in, None);
-            Ok(Token {
-                access_token: token_response.access_token.clone(),
-                refresh_token: token_response.refresh_token.clone(),
-                expires_at,
-                scope: token_response.scope.clone(),
-                token_type: Some(token_response.token_type.clone()),
-                fields: BTreeMap::new(),
-            })
+            configured_exchange(config, &captured.value, None, scope, now_secs, http_post)
         }
         Flow::Implicit => {
             let expires_in = captured
@@ -204,6 +182,60 @@ pub(crate) fn token_from_capture(
             message: "client_credentials does not use a capture".into(),
         }),
     }
+}
+
+fn configured_exchange(
+    config: &OAuthConfig,
+    value: &str,
+    verifier: Option<&str>,
+    scope: Option<&str>,
+    now_secs: u64,
+    http_post: &HttpPost<'_>,
+) -> Result<Token, OAuthError> {
+    use jerk_oauth::config::ExchangeFormat;
+    use jerk_oauth::exchange;
+
+    let exchange_cfg = config.exchange.as_ref().ok_or_else(|| OAuthError {
+        exit: Exit::Usage,
+        message: "exchange required for exchange flow".into(),
+    })?;
+    let token_url = config.token_url.as_deref().ok_or_else(|| OAuthError {
+        exit: Exit::Usage,
+        message: "token_url required for exchange flow".into(),
+    })?;
+    let actual_scope = scope.or(config.scope.as_deref());
+    let pairs = exchange::build_configured_exchange_body(
+        exchange_cfg,
+        value,
+        verifier,
+        &config.client_id,
+        &config.redirect_uri,
+        actual_scope,
+    );
+    let body = exchange::encode_exchange_body(exchange_cfg.format, &pairs);
+    let post = match exchange_cfg.format {
+        ExchangeFormat::Form => http_post.form,
+        ExchangeFormat::Json => http_post.json,
+    };
+    let response = post(token_url, &body).map_err(|e| OAuthError {
+        exit: Exit::Error,
+        message: e,
+    })?;
+    let token_response =
+        exchange::parse_token_response_field(&response, exchange_cfg.token_field.as_deref())
+            .map_err(|e| OAuthError {
+                exit: Exit::Error,
+                message: e.to_string(),
+            })?;
+    let expires_at = jerk_oauth::expiry::compute_expiry(now_secs, token_response.expires_in, None);
+    Ok(Token {
+        access_token: token_response.access_token.clone(),
+        refresh_token: token_response.refresh_token.clone(),
+        expires_at,
+        scope: token_response.scope.clone(),
+        token_type: Some(token_response.token_type.clone()),
+        fields: BTreeMap::new(),
+    })
 }
 
 pub fn oauth_create(
@@ -271,6 +303,12 @@ pub fn oauth_create_with_vars(
         message: msg.into(),
     })?;
 
+    #[cfg(not(target_os = "wasi"))]
+    let post = HttpPost {
+        form: &|url, body| host.http_post(url, body),
+        json: &|url, body| host.http_post_json(url, body),
+    };
+
     match mode {
         InteractiveMode::Loopback => {
             #[cfg(not(target_os = "wasi"))]
@@ -282,7 +320,7 @@ pub fn oauth_create_with_vars(
                     now_secs,
                     &r32,
                     &r16,
-                    &|url, body| host.http_post(url, body),
+                    &post,
                     extra_vars,
                     cors_origins,
                 )
@@ -310,7 +348,7 @@ pub fn oauth_create_with_vars(
                             now_secs,
                             &r32,
                             &r16,
-                            &|url, body| host.http_post(url, body),
+                            &post,
                             extra_vars,
                             cors_origins,
                         );
@@ -332,7 +370,7 @@ pub fn oauth_create_with_vars(
                     now_secs,
                     &r32,
                     &r16,
-                    &|url, body| host.http_post(url, body),
+                    &post,
                     err,
                 )
             }
@@ -379,7 +417,7 @@ pub fn oauth_create_with_vars(
                     now_secs,
                     &r32,
                     &r16,
-                    &|url, body| host.http_post(url, body),
+                    &post,
                     err,
                 )
             }

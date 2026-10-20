@@ -26,9 +26,26 @@ pub enum Flow {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Exchange {
-    pub grant_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_type: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub body: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "is_form")]
+    pub format: ExchangeFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_field: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExchangeFormat {
+    #[default]
+    Form,
+    Json,
+}
+
+fn is_form(format: &ExchangeFormat) -> bool {
+    *format == ExchangeFormat::Form
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -344,13 +361,17 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
                     field: "exchange".into(),
                     message: "required for exchange flow".into(),
                 }),
-                Some(ex) if ex.grant_type.is_empty() => errors.push(ValidationError {
-                    field: "exchange.grant_type".into(),
-                    message: "must not be empty".into(),
-                }),
+                Some(ex) if ex.grant_type.as_deref().unwrap_or("").is_empty() => {
+                    errors.push(ValidationError {
+                        field: "exchange.grant_type".into(),
+                        message: "must not be empty".into(),
+                    })
+                }
                 Some(_) => {}
             }
         }
+
+        validate_exchange(config, &mut errors);
 
         if config.capture.at == CaptureAt::Network && config.capture.url.is_none() {
             errors.push(ValidationError {
@@ -452,6 +473,39 @@ pub fn validated(config: OAuthConfig) -> Result<ValidConfig, Vec<ValidationError
         Ok(ValidConfig(config))
     } else {
         Err(errors)
+    }
+}
+
+fn validate_exchange(config: &OAuthConfig, errors: &mut Vec<ValidationError>) {
+    let Some(ex) = &config.exchange else {
+        return;
+    };
+    if config.flow == Flow::Implicit {
+        errors.push(ValidationError {
+            field: "exchange".into(),
+            message: "only applies to the exchange, pkce or code flow".into(),
+        });
+    }
+    let override_code = config.flow != Flow::Exchange;
+    if override_code && ex.grant_type.as_deref() == Some("") {
+        errors.push(ValidationError {
+            field: "exchange.grant_type".into(),
+            message: "must not be empty".into(),
+        });
+    }
+    if override_code && ex.grant_type.is_none() && ex.body.is_empty() {
+        errors.push(ValidationError {
+            field: "exchange.body".into(),
+            message: "must not be empty without grant_type".into(),
+        });
+    }
+    if let Some(field) = &ex.token_field {
+        if safe_field_name(field).is_none() {
+            errors.push(ValidationError {
+                field: "exchange.token_field".into(),
+                message: "must be 1-64 letters, digits, _, . or -".into(),
+            });
+        }
     }
 }
 

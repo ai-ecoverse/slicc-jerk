@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -131,6 +132,7 @@ test('full PKCE flow', { skip }, async () => {
   const complete = wasm.completeSignIn(pkceConfig, begin.pending, callbackUrl);
   assert.equal(complete.kind, 'exchange');
   assert.equal(complete.url, 'https://auth.example.com/token');
+  assert.equal(complete.contentType, 'application/x-www-form-urlencoded');
   assert.ok(complete.body.includes('grant_type=authorization_code'));
   assert.ok(complete.body.includes('code=auth-code-123'));
   assert.ok(complete.body.includes('code_verifier='));
@@ -148,6 +150,68 @@ test('full PKCE flow', { skip }, async () => {
   assert.equal(parsed.refreshToken, 'refresh-tok-abc');
   assert.equal(parsed.expiresAt, now + 3600);
   assert.equal(parsed.scope, 'openid profile');
+});
+
+test('PKCE with a JSON exchange body and a key token field', { skip }, async () => {
+  const wasm = await loadWasm();
+  const now = 1700000000;
+  const config = JSON.stringify({
+    mode: 'loopback',
+    flow: 'pkce',
+    authorize_url:
+      'https://keys.example.com/auth?callback_url={redirect_uri}&code_challenge={code_challenge}&code_challenge_method=S256&state={state}',
+    token_url: 'https://keys.example.com/api/keys',
+    client_id: 'app',
+    redirect_uri: 'http://localhost:9998/callback',
+    capture: { at: 'request', from: 'query', param: 'code' },
+    exchange: {
+      format: 'json',
+      token_field: 'key',
+      body: { code: '{value}', code_verifier: '{code_verifier}', code_challenge_method: 'S256' },
+    },
+  });
+  const begin = wasm.beginSignIn(config, '', now, random32, random16);
+  const challenge = new URL(begin.authorizeUrl).searchParams.get('code_challenge');
+  const complete = wasm.completeSignIn(
+    config,
+    begin.pending,
+    `http://localhost:9998/callback?code=code-1&state=${encodeURIComponent(begin.state)}`
+  );
+  assert.equal(complete.kind, 'exchange');
+  assert.equal(complete.url, 'https://keys.example.com/api/keys');
+  assert.equal(complete.contentType, 'application/json');
+  const sent = JSON.parse(complete.body);
+  assert.deepEqual(Object.keys(sent).sort(), ['code', 'code_challenge_method', 'code_verifier']);
+  assert.equal(sent.code, 'code-1');
+  assert.equal(createHash('sha256').update(sent.code_verifier).digest('base64url'), challenge);
+
+  const parsed = wasm.parseTokenResponse(config, JSON.stringify({ key: 'sk-FAKE-key-1' }), now);
+  assert.equal(parsed.accessToken, 'sk-FAKE-key-1');
+  assert.equal(parsed.expiresAt, undefined);
+  assert.equal(parsed.refreshToken, undefined);
+});
+
+test('a configured exchange sends the scope passed to beginSignIn', { skip }, async () => {
+  const wasm = await loadWasm();
+  const config = JSON.stringify({
+    mode: 'loopback',
+    flow: 'pkce',
+    authorize_url: 'https://keys.example.com/auth?scope={scope}&c={code_challenge}&state={state}',
+    token_url: 'https://keys.example.com/api/keys',
+    client_id: 'app',
+    redirect_uri: 'http://localhost:9998/callback',
+    scope: 'default',
+    capture: { at: 'request', from: 'query', param: 'code' },
+    exchange: { format: 'json', body: { code: '{value}', scope: '{scope}' } },
+  });
+  const begin = wasm.beginSignIn(config, 'wider', 1700000000, random32, random16);
+  assert.equal(new URL(begin.authorizeUrl).searchParams.get('scope'), 'wider');
+  const complete = wasm.completeSignIn(
+    config,
+    begin.pending,
+    `http://localhost:9998/callback?code=c&state=${encodeURIComponent(begin.state)}`
+  );
+  assert.equal(JSON.parse(complete.body).scope, 'wider');
 });
 
 test('implicit flow with relay (Adobe-shaped)', { skip }, async () => {

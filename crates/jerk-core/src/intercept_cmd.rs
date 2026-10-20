@@ -164,6 +164,7 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
         let mut capture_config = config.clone();
         capture_config.flow = Flow::Implicit;
         capture_config.token_url = None;
+        let no_exchange = |_: &str, _: &str| Err("no exchange".to_string());
         match crate::oauth::intercept::run(
             &mut cdp,
             &capture_config,
@@ -171,7 +172,10 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
             ctx.now,
             &r32,
             &r16,
-            &|_, _| Err("no exchange".into()),
+            &oauth::HttpPost {
+                form: &no_exchange,
+                json: &no_exchange,
+            },
             io.err,
         ) {
             Ok(token) => {

@@ -490,6 +490,23 @@ domains = ["api.elevenlabs.io"]
 get = { keep = true }
 create = { ask = "https://elevenlabs.io/app/settings/api-keys", keep = true }
 drop = { keep = true }
+
+[providers.openrouter]
+name = "OpenRouter"
+env = ["OPENROUTER_API_KEY"]
+domains = ["openrouter.ai"]
+[providers.openrouter.oauth]
+mode = "loopback"
+flow = "pkce"
+authorize_url = "https://openrouter.ai/auth?callback_url={redirect_uri}&code_challenge={code_challenge}&code_challenge_method=S256&state={state}&key_label={client_id}"
+token_url = "https://openrouter.ai/api/v1/auth/keys"
+client_id = "slicc-jerk"
+redirect_uri = "http://localhost:56124/callback"
+capture = { at = "request", from = "query", param = "code" }
+[providers.openrouter.oauth.exchange]
+format = "json"
+token_field = "key"
+body = { code = "{value}", code_verifier = "{code_verifier}", code_challenge_method = "S256" }
 "#;
 
 #[cfg(target_os = "wasi")]
