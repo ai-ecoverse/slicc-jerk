@@ -93,6 +93,36 @@ capture = { at = "request", from = "query", param = "code" }
   }
 });
 
+test('widening a comma-separated grant by one scope keeps the commas', async () => {
+  const sb = sandbox();
+  const server = await idp();
+  try {
+    sb.writeUser(`[providers.commas]
+env = ["COMMAS_TOKEN"]
+store = "file"
+params = { scope = "openid,AdobeID" }
+[providers.commas.oauth]
+mode = "device"
+flow = "pkce"
+authorize_url = "http://127.0.0.1:${server.port}/device"
+token_url = "http://127.0.0.1:${server.port}/token"
+client_id = "cid"
+redirect_uri = "http://127.0.0.1:1/cb"
+scope = "openid,AdobeID"
+capture = { at = "request", from = "query", param = "code" }
+`);
+    assert.equal((await sb.jerkAsync(['commas', 'create'])).status, 0);
+    const wider = await sb.jerkAsync(['commas', 'create', '--scope', 'session']);
+    assert.equal(wider.status, 0, wider.stderr);
+    const devices = server.posts.filter((p) => p.url === '/device');
+    assert.equal(new URLSearchParams(devices[1].body).get('scope'), 'openid,AdobeID,session');
+    const got = await sb.jerkAsync(['commas', 'get', '--scope', 'session']);
+    assert.equal(got.status, 0, got.stderr);
+  } finally {
+    await server.close();
+  }
+});
+
 test('intercept create renders a built-in placeholder in capture.url', async () => {
   const sb = sandbox();
   const token = 'cap-FAKETOKENVALUE1234';
