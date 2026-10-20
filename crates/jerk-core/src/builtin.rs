@@ -312,17 +312,18 @@ capture = { at = "request", from = "query", param = "code" }
 
 [providers.microsoft-graph]
 name = "Microsoft Graph (az / Entra)"
-env = ["MICROSOFT_GRAPH_TOKEN", "EXCEL_GRAPH_TOKEN"]
+env = ["MICROSOFT_GRAPH_TOKEN", "EXCEL_GRAPH_TOKEN", "TEAMS_GRAPH_TOKEN"]
 domains = [
   "graph.microsoft.com",
   "outlook.office.com",
   "outlook.office365.com",
   "outlook.cloud.microsoft",
 ]
-params = { tenant = "common" }
+params = { tenant = "common", scope = "" }
 
 [[providers.microsoft-graph.get]]
 requires = "az"
+unless = ["scope"]
 run = ["az", "account", "get-access-token", "--resource-type", "ms-graph", "-o", "json"]
 parse = "json:/accessToken"
 expiry = "jwt"
@@ -342,6 +343,7 @@ parse = "text"
 
 [[providers.microsoft-graph.create]]
 requires = "az"
+unless = ["scope"]
 run = ["az", "login", "--tenant", "{tenant}"]
 interactive = true
 
@@ -350,6 +352,7 @@ oauth = true
 
 [[providers.microsoft-graph.drop]]
 requires = "az"
+unless = ["scope"]
 run = ["az", "logout"]
 interactive = true
 
@@ -361,7 +364,7 @@ mode = "auto"
 flow = "pkce"
 authorize_url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id={client_id}&response_type=code&redirect_uri={redirect_uri}&response_mode=query&scope={scope}&state={state}&code_challenge={code_challenge}&code_challenge_method=S256"
 token_url = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
-client_id = "14d82eec-204b-4c2f-b7e0-23000bd7a84"
+client_id = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 redirect_uri = "http://localhost:56123"
 scope = "offline_access openid profile User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite Files.ReadWrite.All Sites.ReadWrite.All"
 capture = { at = "request", from = "query", param = "code" }
