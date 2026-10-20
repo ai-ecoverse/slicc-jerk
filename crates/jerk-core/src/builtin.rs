@@ -471,6 +471,22 @@ client_id = "slack"
 redirect_uri = "https://app.slack.com/"
 capture = { at = "network", from = "body", stage = "request", url = "https://*.slack.com/api/*", param = "token", fields = { SLACK_D_COOKIE = "cookie:d" } }
 timeout = "2m"
+
+[providers.kagi]
+name = "Kagi"
+env = ["KAGI_API_KEY"]
+domains = ["kagi.com"]
+get = { keep = true }
+create = { ask = "https://kagi.com/api/keys", keep = true }
+drop = { keep = true }
+
+[providers.elevenlabs]
+name = "ElevenLabs"
+env = ["ELEVENLABS_API_KEY", "XI_API_KEY"]
+domains = ["api.elevenlabs.io"]
+get = { keep = true }
+create = { ask = "https://elevenlabs.io/app/settings/api-keys", keep = true }
+drop = { keep = true }
 "#;
 
 #[cfg(target_os = "wasi")]

@@ -18,6 +18,7 @@ pub mod mcp;
 pub mod mcp_config;
 pub mod oauth;
 pub mod output;
+pub mod paste;
 pub mod paths;
 pub mod run;
 pub mod sealed;

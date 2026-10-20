@@ -1181,7 +1181,13 @@ fn list_step(
     Ok(serde_json::to_string_pretty(&value).unwrap_or_default())
 }
 
-fn do_create(entry: &Entry, vars: &Vars, flags: &Flags, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit {
+fn do_create(
+    entry: &Entry,
+    vars: &Vars,
+    flags: &Flags,
+    ctx: &mut Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Exit {
     if entry.oauth_config.is_some() && entry.provider.create.is_none() {
         return oauth_create_cmd(entry, vars, flags, ctx, io);
     }
@@ -1191,6 +1197,12 @@ fn do_create(entry: &Entry, vars: &Vars, flags: &Flags, ctx: &Ctx<'_>, io: &mut 
     };
     if verb.oauth {
         return oauth_create_cmd(entry, vars, flags, ctx, io);
+    }
+    if let Some(url) = &verb.ask {
+        return match take_key(entry, &verb, url, vars, ctx, io) {
+            Ok(_) => Exit::Ok,
+            Err(code) => code,
+        };
     }
     if verb.keep {
         return match mint_token(entry, &verb, vars, verb.interactive, ctx, io) {
@@ -1242,7 +1254,11 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
             err: &mut held,
         },
     );
-    if let Some(verb) = step.as_ref().ok().filter(|v| v.parse.is_some()) {
+    if let Some(verb) = step
+        .as_ref()
+        .ok()
+        .filter(|v| v.parse.is_some() || v.ask.is_some())
+    {
         if verb.keep && !flags.has("--force") && kept(entry, &vars, ctx).is_some() {
             let _ = writeln!(
                 io.out,
@@ -1551,15 +1567,32 @@ pub fn mint_token(
     Ok((token, id))
 }
 
+fn take_key(
+    entry: &Entry,
+    verb: &Verb,
+    url: &str,
+    vars: &Vars,
+    ctx: &mut Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<String, Exit> {
+    let key = crate::paste::ask(entry, url, ctx, io)?;
+    keep_minted(entry, verb, vars, &key, "", ctx, io);
+    Ok(key)
+}
+
 fn mint(
     entry: &Entry,
     verb: &Verb,
     vars: &Vars,
     flags: &Flags,
-    ctx: &Ctx<'_>,
+    ctx: &mut Ctx<'_>,
     io: &mut Io<'_>,
 ) -> Exit {
-    let (token, id) = match mint_token(entry, verb, vars, verb.interactive, ctx, io) {
+    let minted = match &verb.ask {
+        Some(url) => take_key(entry, verb, url, vars, ctx, io).map(|key| (key, None)),
+        None => mint_token(entry, verb, vars, verb.interactive, ctx, io),
+    };
+    let (token, id) = match minted {
         Ok(minted) => minted,
         Err(code) => return code,
     };
@@ -1573,10 +1606,15 @@ fn mint(
         let _ = writeln!(io.out, "{doc}");
         return Exit::Ok;
     }
-    let label = id.as_deref().unwrap_or("(no id)");
-    let note = if verb.keep { ", kept for get" } else { "" };
-    let _ = writeln!(io.err, "jerk: {}: created token {label}{note}", entry.id);
-    let shown = match choose(false, ctx.stdout_terminal, reveal) {
+    let pasted = verb.ask.is_some();
+    if pasted {
+        let _ = writeln!(io.err, "jerk: {}: kept the key for get", entry.id);
+    } else {
+        let label = id.as_deref().unwrap_or("(no id)");
+        let note = if verb.keep { ", kept for get" } else { "" };
+        let _ = writeln!(io.err, "jerk: {}: created token {label}{note}", entry.id);
+    }
+    let shown = match choose(false, ctx.stdout_terminal && !pasted, reveal) {
         Shown::Masked => masked,
         _ => token,
     };

@@ -60,6 +60,7 @@ test('jerk list shows the built-in providers and finds their CLIs on PATH', () =
       'aws',
       'claude',
       'cloudflare',
+      'elevenlabs',
       'fastly',
       'firefly',
       'garmin',
@@ -68,6 +69,7 @@ test('jerk list shows the built-in providers and finds their CLIs on PATH', () =
       'gmail',
       'google',
       'huggingface',
+      'kagi',
       'linkedin',
       'microsoft-graph',
       'npm',
@@ -121,7 +123,7 @@ test('a user file replaces a built-in provider as a unit', () => {
   assert.equal(github.requires, null);
   const check = sb.jerk(['config', 'check']);
   assert.equal(check.status, 0);
-  assert.equal(check.stdout, 'ok: 21 providers (20 built-in, 1 user)\n');
+  assert.equal(check.stdout, 'ok: 23 providers (22 built-in, 1 user)\n');
 });
 
 test('config check reports every problem and exits 2', () => {

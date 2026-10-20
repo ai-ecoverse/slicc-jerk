@@ -68,7 +68,7 @@ A token already in one of the provider's `env` variables (`GH_TOKEN`, `GITHUB_TO
 
 ## Providers
 
-Built in: `github`, `npm`, `claude`, `openai`, `huggingface`, `cloudflare`, `aws`, `gcloud`, `microsoft-graph`, `adobe-aio`, `firefly`, `aem`, `fastly`, `xai`, `linkedin`, `printful`, `gmail`, `google`, `garmin`, `rescuetime` and `slack`. Every [MCP server](#mcp-servers) is one too. `jerk config show <provider>` prints the definition in effect.
+Built in: `github`, `npm`, `claude`, `openai`, `huggingface`, `cloudflare`, `aws`, `gcloud`, `microsoft-graph`, `adobe-aio`, `firefly`, `aem`, `fastly`, `xai`, `linkedin`, `printful`, `gmail`, `google`, `garmin`, `rescuetime`, `slack`, `kagi` and `elevenlabs`. Every [MCP server](#mcp-servers) is one too. `jerk config show <provider>` prints the definition in effect.
 
 <details>
 <summary>What each built-in provider runs</summary>
@@ -96,6 +96,8 @@ Built in: `github`, `npm`, `claude`, `openai`, `huggingface`, `cloudflare`, `aws
 | `garmin` | jerk's own browser capture | the stored OAuth grant | Opens Garmin SSO over CDP, catches `ticket` from the `connect.garmin.com/modern` redirect and exchanges it at `diauth.garmin.com` (`…/oauth/grant/service_ticket`). The token is `GARMIN_TOKEN` for `connectapi.garmin.com`. |
 | `rescuetime` | jerk's own browser capture | the stored API key | `create` opens RescueTime's API key page over CDP; create a key there and jerk keeps it from the form post once RescueTime accepts it. Env `RESCUETIME_API_KEY` wins. Send it as `Authorization: Bearer …` to `/anapi/*`. `drop` forgets the key; delete it on the key page to revoke it. |
 | `slack` | jerk's own browser capture | `SLACK_TOKEN` and `SLACK_D_COOKIE` | `create -p workspace=<T… or E… id>` opens `https://app.slack.com/client/<id>` in a new tab of a browser that's already signed in, and keeps the session `xoxc` token plus the paired `d` cookie. There's no expiry and no refresh: the pair stops working when that browser session ends. `drop` forgets the local copy. Sign-ins that need a Slack app or admin approval are out of scope. For Slack's MCP server, use `jerk mcp:url:https://mcp.slack.com/mcp`. |
+| `kagi` | a pasted key | env `KAGI_API_KEY`, else the key jerk kept from `create` | `create` prints and opens `https://kagi.com/api/keys`, then reads the key you paste without echoing it, or from stdin when that isn't a terminal (`printf %s "$KEY" \| jerk kagi create`). `--force` replaces it. `drop` forgets the key; revoke it on the key page. |
+| `elevenlabs` | a pasted key | env `ELEVENLABS_API_KEY`, then `XI_API_KEY`, else the key jerk kept from `create` | `create` prints and opens `https://elevenlabs.io/app/settings/api-keys` and keeps the key you paste or pipe in, like `kagi`. Send it as `xi-api-key: …` to `api.elevenlabs.io`. `drop` forgets the key; revoke it on the API keys page. |
 
 </details>
 
@@ -156,6 +158,7 @@ Commands are argument lists, never shell strings, and the CLI runs without the p
 | `min_version` | the oldest CLI version that supports this command (exit 4 below it) |
 | `interactive` | the command keeps the terminal (sign-ins) |
 | `echo` | an `interactive` `create` with `parse`: also show the CLI's screen output while jerk reads it, when stdin is a terminal |
+| `ask` | a `create` with `keep = true` and no other field except `needs` / `unless`: the http(s) page where the user makes a key; jerk prints it, opens it when stdin is a terminal, reads the pasted key without echo (or the first line of stdin otherwise, exit 3 when empty) and keeps it |
 | `keep` | `true` on a `create` with `parse` keeps the token it prints in jerk's grant store, expiring after `max_age`; a `get` or `drop` step with `keep = true` and no other field except `needs` / `unless` returns or forgets it |
 | `link` | a `create` that may run from seven over the slicc link |
 | `id`, `lookup` | for a `create` that mints a token: where to find its id for revocation |
@@ -330,7 +333,7 @@ On the machine side, the slicc CLI runs jerk with `--via-link`. `create --via-li
 ## Security
 
 - **Printing tokens:** jerk prints a token only to a terminal or with `--reveal`, and never logs one. Errors never repeat tokens, codes, verifiers, `state`, config values or response bodies.
-- **Tokens at rest:** CLI providers' tokens stay in the CLI's own store, except a token a `create` with `keep = true` prints once. jerk's own OAuth grants live in the OS keyring, or a 0600 file only when the config says so.
+- **Tokens at rest:** CLI providers' tokens stay in the CLI's own store, except a token a `create` with `keep = true` prints once or a key pasted into an `ask` create. jerk's own OAuth grants live in the OS keyring, or a 0600 file only when the config says so.
 - **URLs:** OAuth and discovery URLs must be https, except http on loopback, with no userinfo. A captured redirect must match `redirect_uri` exactly.
 - **Child processes:** provider CLIs run from argument lists, never a shell, and without the provider's token variables.
 
