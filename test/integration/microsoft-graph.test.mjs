@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { createServer } from 'node:net';
 import { test } from 'node:test';
+import { stubCdp } from './cdp-stub.mjs';
 import { sandbox } from './helpers.mjs';
 
 const TOKEN = 'eyJhbGciOiJub25lIn0.eyJleHAiOjQ3MDAwMDAwMDAsInNjcCI6IlVzZXIuUmVhZCJ9.sig';
@@ -86,7 +88,60 @@ test('config show prints the az then oauth chain', () => {
   assert.match(shown.stdout, /resource-type/);
   assert.match(shown.stdout, /oauth = true/);
   assert.match(shown.stdout, /login\.microsoftonline\.com\/common/);
-  assert.match(shown.stdout, /14d82eec-204b-4c2f-b7e0-23000bd7a84/);
+  assert.match(shown.stdout, /14d82eec-204b-4c2f-b7e8-296a70dab67e/);
   assert.match(shown.stdout, /Files\.ReadWrite\.All/);
   assert.equal(sb.jerk(['config', 'check']).status, 0);
+});
+
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function holdLoopback() {
+  return new Promise((resolve) => {
+    const server = createServer();
+    const close = () => new Promise((done) => server.close(() => done()));
+    server.once('error', () => resolve(async () => {}));
+    server.listen(56123, '127.0.0.1', () => resolve(close));
+  });
+}
+
+async function authorize(sb, args) {
+  const release = await holdLoopback();
+  const cdp = await stubCdp({
+    paused: [
+      {
+        resourceType: 'Document',
+        request: {
+          url: 'http://localhost:56123/?code=fake-code&state=not-the-state',
+          method: 'GET',
+          headers: {},
+        },
+      },
+    ],
+  });
+  try {
+    const res = await sb.jerkAsync(['microsoft-graph', 'create', ...args, '--cdp', cdp.wsUrl], {
+      SLICC_JERK_STORE: 'file',
+    });
+    const nav = cdp
+      .log()
+      .split('\n')
+      .filter((line) => line.startsWith('>> '))
+      .map((line) => JSON.parse(line.slice(3)))
+      .find((msg) => msg.method === 'Page.navigate');
+    assert.ok(nav, `${res.stderr}\n--- cdp ---\n${cdp.log()}`);
+    return { res, url: new URL(nav.params.url) };
+  } finally {
+    await Promise.all([cdp.close(), release()]);
+  }
+}
+
+test('the Entra sign-in sends the Graph Command Line Tools client id', async () => {
+  const sb = sandbox();
+  const { res, url } = await authorize(sb, ['--force']);
+  assert.notEqual(res.status, 0);
+  assert.equal(url.host, 'login.microsoftonline.com');
+  const clientId = url.searchParams.get('client_id');
+  assert.match(clientId, GUID);
+  assert.equal(clientId, '14d82eec-204b-4c2f-b7e8-296a70dab67e');
+  assert.match(url.searchParams.get('scope'), /Files\.ReadWrite\.All/);
 });

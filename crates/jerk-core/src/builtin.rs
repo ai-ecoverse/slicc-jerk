@@ -339,7 +339,7 @@ mode = "auto"
 flow = "pkce"
 authorize_url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id={client_id}&response_type=code&redirect_uri={redirect_uri}&response_mode=query&scope={scope}&state={state}&code_challenge={code_challenge}&code_challenge_method=S256"
 token_url = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
-client_id = "14d82eec-204b-4c2f-b7e0-23000bd7a84"
+client_id = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 redirect_uri = "http://localhost:56123"
 scope = "offline_access openid profile User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite Files.ReadWrite.All Sites.ReadWrite.All"
 capture = { at = "request", from = "query", param = "code" }
