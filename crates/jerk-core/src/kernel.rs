@@ -138,7 +138,7 @@ pub fn get(
 ) -> Exit {
     let json = args.iter().any(|a| a == "--json");
     for arg in args {
-        if arg.starts_with('-') && arg != "--json" {
+        if arg.starts_with('-') && arg != "--json" && arg != "--reveal" {
             let _ = writeln!(
                 io.err,
                 "jerk: {} get: unexpected {arg}\nRun jerk --help for usage.",

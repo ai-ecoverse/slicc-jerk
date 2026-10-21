@@ -326,7 +326,7 @@ duration = "1h"
 The npm package also carries `bin/jerk.wasm`, a `wasm32-wasip1` build that seven runs as a [slicc-kernel](https://github.com/ai-ecoverse/slicc-kernel) command (`slicc.abi` `wasi`). That jerk never holds a token: tokens live in the [vault](https://github.com/ai-ecoverse/slicc-vault)'s sealed store behind `/dev/sealed`, and kernel programs only ever see placeholders.
 
 - **`jerk list`** shows seven's own `[oauth]` providers and, when a [slicc CLI](https://github.com/ai-ecoverse/slicc-cli) is linked, the providers of the machine behind it.
-- **`get`** prints the placeholder. **`drop`** removes the sealed record.
+- **`get`** prints the placeholder, and still only the placeholder with `--reveal`. **`drop`** removes the sealed record.
 - **`create`** asks the linked machine's jerk to sign in, or [bios](https://github.com/ai-ecoverse/slicc-bios) to run an `[oauth]` sign-in, and the result is sealed.
 - **`tab`** drives the browser seven runs in, through the kernel's CDP endpoint in `SLICC_CDP_URL` (from the slicc extension or the slicc CLI); `--cdp 9222` names the same endpoint. The kernel build has no TLS, so `wss://` and `https://` don't work. A bundle exported in seven is plain text, so keep it out of shared folders.
 - **`<provider> list`, `lease`, `sync` and `intercept`** exit 5.
