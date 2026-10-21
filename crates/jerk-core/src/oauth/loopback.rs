@@ -223,12 +223,9 @@ fn wait_for_callback(
             });
         }
 
-        let stream = match listener.accept() {
-            Ok((s, _)) => s,
-            Err(_) => {
-                std::thread::sleep(POLL_INTERVAL);
-                continue;
-            }
+        let Some(stream) = oauth::accept_blocking(listener) else {
+            std::thread::sleep(POLL_INTERVAL);
+            continue;
         };
 
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
@@ -295,12 +292,9 @@ fn wait_for_json_body(
             }
         }
 
-        let stream = match listener.accept() {
-            Ok((s, _)) => s,
-            Err(_) => {
-                std::thread::sleep(POLL_INTERVAL);
-                continue;
-            }
+        let Some(stream) = oauth::accept_blocking(listener) else {
+            std::thread::sleep(POLL_INTERVAL);
+            continue;
         };
 
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
@@ -421,12 +415,9 @@ fn wait_for_fragment(
             });
         }
 
-        let stream = match listener.accept() {
-            Ok((s, _)) => s,
-            Err(_) => {
-                std::thread::sleep(POLL_INTERVAL);
-                continue;
-            }
+        let Some(stream) = oauth::accept_blocking(listener) else {
+            std::thread::sleep(POLL_INTERVAL);
+            continue;
         };
 
         if let Some(frag) = try_read_fragment(&stream) {
