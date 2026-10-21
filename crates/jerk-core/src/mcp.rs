@@ -961,12 +961,9 @@ fn wait_for_callback(
         if std::time::Instant::now() >= deadline {
             return Err("timed out waiting for callback".into());
         }
-        let stream = match listener.accept() {
-            Ok((s, _)) => s,
-            Err(_) => {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                continue;
-            }
+        let Some(stream) = crate::oauth::accept_blocking(listener) else {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            continue;
         };
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
         let mut reader = BufReader::new(&stream);

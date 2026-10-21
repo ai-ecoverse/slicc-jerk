@@ -117,6 +117,12 @@ impl OAuthHost for NoOAuthHost {
     fn sleep(&self, _: u64) {}
 }
 
+pub(crate) fn accept_blocking(listener: &std::net::TcpListener) -> Option<std::net::TcpStream> {
+    let (stream, _) = listener.accept().ok()?;
+    stream.set_nonblocking(false).ok()?;
+    Some(stream)
+}
+
 fn validate_config(config: &OAuthConfig) -> Result<(), OAuthError> {
     let errors = jerk_oauth::config::validate(config);
     if errors.is_empty() {
