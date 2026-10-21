@@ -300,6 +300,12 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
             }),
             Some(_) => {}
         }
+        if config.exchange.is_some() {
+            errors.push(ValidationError {
+                field: "exchange".into(),
+                message: "is not used by client_credentials".into(),
+            });
+        }
     } else {
         if config.authorize_url.is_empty() {
             errors.push(ValidationError {
@@ -357,6 +363,7 @@ pub fn validate(config: &OAuthConfig) -> Vec<ValidationError> {
                 });
             }
             match &config.exchange {
+                None if config.mode == Mode::Device => {}
                 None => errors.push(ValidationError {
                     field: "exchange".into(),
                     message: "required for exchange flow".into(),
@@ -480,6 +487,13 @@ fn validate_exchange(config: &OAuthConfig, errors: &mut Vec<ValidationError>) {
     let Some(ex) = &config.exchange else {
         return;
     };
+    if config.mode == Mode::Device {
+        errors.push(ValidationError {
+            field: "exchange".into(),
+            message: "is not used by device mode".into(),
+        });
+        return;
+    }
     if config.flow == Flow::Implicit {
         errors.push(ValidationError {
             field: "exchange".into(),
