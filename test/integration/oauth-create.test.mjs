@@ -238,3 +238,61 @@ capture = { at = "network", from = "body", url = "https://{client_id}.example/ap
   assert.equal(accepted.status, 0, accepted.stderr);
   assert.match(accepted.stdout, /ok: 25 providers/);
 });
+
+test('config check rejects an exchange block on a flow that never uses it', () => {
+  const sb = sandbox();
+  sb.writeUser(`[providers.devex]
+env = ["DEVEX_TOKEN"]
+[providers.devex.oauth]
+mode = "device"
+authorize_url = "https://app.example/device"
+token_url = "https://app.example/token"
+client_id = "app-id"
+redirect_uri = "http://127.0.0.1:1/cb"
+[providers.devex.oauth.exchange]
+grant_type = "urn:example:grant"
+`);
+  const device = sb.jerk(['config', 'check']);
+  assert.equal(device.status, 2);
+  assert.match(device.stderr, /devex: oauth: exchange: is not used by device mode/);
+
+  sb.writeUser(`[providers.ccex]
+env = ["CCEX_TOKEN"]
+[providers.ccex.oauth]
+mode = "client_credentials"
+token_url = "https://app.example/token"
+client_id = "app-id"
+client_secret = "sekret"
+[providers.ccex.oauth.exchange]
+grant_type = "urn:example:grant"
+`);
+  const machine = sb.jerk(['config', 'check']);
+  assert.equal(machine.status, 2);
+  assert.match(machine.stderr, /ccex: oauth: exchange: is not used by client_credentials/);
+
+  sb.writeUser(`[providers.ccflow]
+env = ["CCFLOW_TOKEN"]
+[providers.ccflow.oauth]
+mode = "loopback"
+flow = "client_credentials"
+token_url = "https://app.example/token"
+client_id = "app-id"
+client_secret = "sekret"
+[providers.ccflow.oauth.exchange]
+body = { audience = "api" }
+`);
+  const flow = sb.jerk(['config', 'check']);
+  assert.equal(flow.status, 2);
+  assert.match(flow.stderr, /ccflow: oauth: exchange: is not used by client_credentials/);
+
+  sb.writeUser(`[providers.ccok]
+env = ["CCOK_TOKEN"]
+[providers.ccok.oauth]
+mode = "client_credentials"
+token_url = "https://app.example/token"
+client_id = "app-id"
+client_secret = "sekret"
+`);
+  const accepted = sb.jerk(['config', 'check']);
+  assert.equal(accepted.status, 0, accepted.stderr);
+});
