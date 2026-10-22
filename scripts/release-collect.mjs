@@ -39,6 +39,4 @@ for (const asset of assets) {
   sums.push(`${createHash('sha256').update(readFileSync(source)).digest('hex')}  ${asset}`);
 }
 writeFileSync(join(values.out, 'SHA256SUMS'), `${sums.join('\n')}\n`);
-mkdirSync(join(root, 'dist'), { recursive: true });
-writeFileSync(join(root, 'dist', 'VERSION'), values.version.replace(/^v/, ''));
 process.stdout.write(`collected ${sums.length} assets for ${values.version} in ${values.out}\n`);

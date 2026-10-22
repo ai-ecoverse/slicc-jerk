@@ -386,9 +386,10 @@ Errors are thrown as `{ kind: "error", code, message }`. Provider errors (`code:
 - `npm test`: builds jerk and runs `test/integration/`.
 - `npm run test:unit`: the gitignored unit tests in `test/unit/`, with coverage through `cargo-llvm-cov`.
 - `npm run build:wasm`: the kernel build, `bin/jerk.wasm`.
-- `npm run build:oauth-wasm`: `@ai-ecoverse/jerk-oauth`, into `dist/jerk-oauth/`.
+- `npm run build:oauth-wasm`: `@ai-ecoverse/jerk-oauth`, into `dist/jerk-oauth/`, with the prebuilt `wasm-bindgen` of the version in `Cargo.lock`.
+- `npm run lint:targets` and `npm run lint:wasm`: `cargo check` for Windows and macOS, and two `jerk-oauth` builds that must be byte-identical.
 
-Releases come from `main` through semantic-release.
+CI is `.github/workflows/ci.yml`, one caller of [slicc-shared-web's pipeline](https://github.com/ai-ecoverse/slicc-shared-web#pipeline), on Linux: lint, the integration tests in shards, and a Claude and a Codex review on pull requests. Every merge to `main` goes through semantic-release, which tags a release and opens it as a draft. When there's a new tag, the jobs after `released` build the six native binaries and `jerk.wasm`, sign and notarize the macOS ones, write `SHA256SUMS`, attest them, upload them with `install.sh`, publish the eight npm packages with provenance and then publish the release. If one of those jobs fails, re-run it from the Actions run.
 
 ## License
 

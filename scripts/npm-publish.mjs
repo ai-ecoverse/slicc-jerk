@@ -14,7 +14,6 @@ const { values } = parseArgs({
   },
 });
 const dryRun = values['dry-run'];
-const gate = 'SLICC_NPM_PUBLISH';
 
 function fail(message) {
   process.stderr.write(`npm-publish: ${message}\n`);
@@ -41,13 +40,6 @@ const packages = readdirSync(values.dir)
     (a, b) =>
       Number(Boolean(a.pkg.optionalDependencies)) - Number(Boolean(b.pkg.optionalDependencies))
   );
-
-if (!dryRun && process.env[gate] !== 'true') {
-  process.stdout.write(
-    `::notice::skipping npm; set the repository variable ${gate} to true to publish\n`
-  );
-  process.exit(0);
-}
 
 for (const { dir, pkg } of packages) {
   if (!dryRun && published(pkg.name, pkg.version)) {
