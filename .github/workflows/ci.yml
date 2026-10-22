@@ -48,7 +48,8 @@ jobs:
         Deny for a confirmed leak of a secret, a broken release asset or package, a crash or regression in a common command without a workaround, or a behaviour change without its test. Comment on and approve a narrow problem with a workaround.
 
   released:
-    if: github.event_name == 'pull_request'
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -63,7 +64,7 @@ jobs:
       - id: version
         run: |
           git fetch --tags --force --quiet origin
-          version=0.0.0-dryrun.$GITHUB_RUN_NUMBER
+          version=$(git tag --points-at HEAD --list 'v*' | sed 's/^v//' | sort -V | tail -1)
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "release: ${version:-none} at $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
 
@@ -189,21 +190,11 @@ jobs:
 
       - run: node scripts/npm-stage.mjs --version "$VERSION"
 
-      - name: Dry run
-        run: |
-          cp install.sh artifacts/release/
-          ls -la artifacts/release dist/npm
-          cat artifacts/release/SHA256SUMS
-          node scripts/npm-publish.mjs --dry-run
-          exit 0
-
-      - if: github.event_name == 'push'
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-checksums: artifacts/release/SHA256SUMS
 
       - name: Upload the release assets
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -214,17 +205,14 @@ jobs:
             printf '%s\n' "$uploaded" | grep -qx "$name" || { echo "::error::$name is not on v$VERSION"; exit 1; }
           done
 
-      - if: github.event_name == 'push'
-        run: node scripts/npm-publish.mjs
+      - run: node scripts/npm-publish.mjs
 
       - name: Publish the draft release as latest
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit "v$VERSION" --draft=false --latest --repo "$GITHUB_REPOSITORY"
 
       - name: Install through the published install.sh
-        if: github.event_name == 'push'
         run: |
           curl -fsSL https://github.com/ai-ecoverse/slicc-jerk/releases/latest/download/install.sh | INSTALL_DIR="$RUNNER_TEMP/bin" sh
           test "$("$RUNNER_TEMP/bin/jerk" --version)" = "jerk $VERSION"
