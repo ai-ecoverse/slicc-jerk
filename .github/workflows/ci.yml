@@ -47,6 +47,36 @@ jobs:
 
         Deny for a confirmed leak of a secret, a broken release asset or package, a crash or regression in a common command without a workaround, or a behaviour change without its test. Comment on and approve a narrow problem with a workaround.
 
+  native-check:
+    if: github.event_name == 'merge_group'
+    name: native-check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, targets: 'x86_64-pc-windows-msvc aarch64-pc-windows-msvc' }
+          - { os: macos-latest, targets: 'x86_64-apple-darwin aarch64-apple-darwin' }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      TARGETS: ${{ matrix.targets }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - run: |
+          rustup toolchain install
+          for target in $TARGETS; do rustup target add "$target"; done
+
+      - run: |
+          for target in $TARGETS; do cargo check --locked --workspace --target "$target"; done
+
   released:
     needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

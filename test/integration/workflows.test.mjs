@@ -7,7 +7,7 @@ const read = (path) => readFile(new URL(`../../${path}`, import.meta.url), 'utf8
 const ci = await read('.github/workflows/ci.yml');
 const pkg = JSON.parse(await read('package.json'));
 const release = JSON.parse(await read('.releaserc.json'));
-const pipeline = ci.split('\n  released:\n')[0];
+const pipeline = ci.split('\n  native-check:\n')[0];
 const input = (name) => pipeline.match(new RegExp(`\\n {6}${name}: (.+)\\n`))?.[1];
 const job = (name) => ci.match(new RegExp(`\\n {2}${name}:\\n((?: {4}.*\\n|\\n)+)`))?.[1] ?? '';
 
@@ -24,6 +24,7 @@ test('ci.yml is the one workflow, and the only caller of pipeline.yml at the dev
   assert.equal(ci.match(/slicc-shared-web\//g).length, 1);
   assert.deepEqual(ci.split('\njobs:\n')[1].match(/^ {2}[a-z-]+:$/gm), [
     '  ci:',
+    '  native-check:',
     '  released:',
     '  binaries:',
     '  assets:',
@@ -121,4 +122,35 @@ test('the binaries and assets follow only a new tag on main, and ship every asse
     [...order].sort((a, b) => a - b)
   );
   assert.match(assets, /id-token: write\n {6}attestations: write\n/);
+});
+
+test('the merge queue checks the workspace for every Windows and macOS target, on their own hosts', () => {
+  const native = job('native-check');
+  assert.match(
+    native,
+    /^ {4}if: github\.event_name == 'merge_group'\n {4}name: native-check \(\$\{\{ matrix\.os \}\}\)\n/
+  );
+  assert.match(native, /runs-on: \$\{\{ matrix\.os \}\}\n/);
+  assert.doesNotMatch(native, /needs:/);
+  const legs = Object.fromEntries(
+    [...native.matchAll(/- \{ os: ([\w-]+), targets: '([^']+)' \}/g)].map((m) => [
+      m[1],
+      m[2].split(' '),
+    ])
+  );
+  assert.deepEqual(legs, {
+    'windows-latest': TARGETS.filter((t) => t.os === 'win32')
+      .map((t) => t.rust)
+      .sort()
+      .reverse(),
+    'macos-latest': TARGETS.filter((t) => t.os === 'darwin')
+      .map((t) => t.rust)
+      .sort()
+      .reverse(),
+  });
+  assert.match(
+    native,
+    /rustup toolchain install\n {10}for target in \$TARGETS; do rustup target add "\$target"; done/
+  );
+  assert.match(native, /cargo check --locked --workspace --target "\$target"/);
 });
