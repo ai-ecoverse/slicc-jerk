@@ -7,260 +7,255 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
+  actions: read
+  issues: write
+  pull-requests: write
+  statuses: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  runner:
-    runs-on: ${{ vars.CERT_LIGHT_RUNNER || vars.CERT_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      runner: ${{ steps.pick.outputs.runner }}
-    steps:
-      - id: pick
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
-        env:
-          FORCED: ${{ vars.CI_RUNNER }}
-          POOL: ${{ vars.CERT_RUNNER || 'ubuntu-latest' }}
-        with:
-          script: |
-            const hosted = 'ubuntu-latest';
-            const pick = async (runner, why) => {
-              core.setOutput('runner', runner);
-              await core.summary.addRaw(`runner: ${runner} (${why})\n`).write();
-            };
-            if (process.env.FORCED) return await pick(process.env.FORCED, 'vars.CI_RUNNER');
-            const pool = process.env.POOL;
-            const { owner, repo } = context.repo;
-            if (context.eventName === 'pull_request') {
-              const head = context.payload.pull_request.head.repo;
-              const same = head && head.full_name === `${owner}/${repo}`;
-              return same ? await pick(pool, 'same-repo PR') : await pick(hosted, 'fork PR');
-            }
-            if (context.eventName === 'merge_group') {
-              const base = context.payload.merge_group.base_ref.replace('refs/heads/', '');
-              const q = await github.graphql(
-                `query($o:String!,$n:String!,$b:String!){repository(owner:$o,name:$n){mergeQueue(branch:$b){entries(first:100){nodes{pullRequest{number isCrossRepository}}}}}}`,
-                { o: owner, n: repo, b: base }
-              );
-              const entries = q.repository.mergeQueue?.entries?.nodes ?? [];
-              const forks = entries.filter((e) => e.pullRequest?.isCrossRepository !== false);
-              return forks.length === 0
-                ? await pick(pool, `merge group, ${entries.length} same-repo entries`)
-                : await pick(hosted, `merge group with a fork or unknown PR: ${forks.map((e) => e.pullRequest?.number).join(', ')}`);
-            }
-            await pick(hosted, context.eventName);
+  ci:
+    uses: ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@v2.8.4
+    secrets: inherit
+    with:
+      lint: rustup toolchain install && npm run lint && npm run lint:wasm
+      test: rustup toolchain install && npm run test:ci
+      test-glob: test/integration/*.test.mjs
+      shards: 2
+      timeout-minutes: 30
+      review-prompt: |
+        SLICC-JERK
 
-  lint:
-    needs: runner
-    runs-on: ${{ needs.runner.outputs.runner }}
-    timeout-minutes: 15
-    env:
-      LEFTHOOK: '0'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        This repository is slicc-jerk: `jerk`, which gets, lists, creates and drops OAuth tokens by dispatching to each provider's own CLI. It ships the native binaries, `jerk.wasm`, `SHA256SUMS` and `install.sh` on the GitHub release (get.sliccy.ai/jerk serves that `install.sh`), `@ai-ecoverse/slicc-jerk` with its six platform packages, and `@ai-ecoverse/jerk-oauth` for bios and the vault. AGENTS.md and the README are the contract.
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24
-          cache: npm
+        Once this pull request passes the merge queue, semantic-release tags it and the jobs after `released` in ci.yml build, sign, attest and publish it. Review it as the last check before it ships.
 
-      - uses: ./.github/actions/toolchain
+        Look for real defects, in this order:
+        1. Secrets: no token, cookie or key is printed, logged, written where another user can read it, or sent anywhere but its provider; a refusal fails closed.
+        2. Providers: the TOML in crates/jerk-core/src/builtin.rs, config validation in crates/jerk-core/src/config.rs, and the README's lists stay in step.
+        3. Consumers: the CLI's commands, flags and output, release asset names, `SHA256SUMS`, `install.sh`, the npm packages and `@ai-ecoverse/jerk-oauth`'s API.
+        4. Tests: every behaviour change has an integration test in `test/integration/` that drives the real CLI with fake CLIs on `PATH` and the stub servers, and a fix's test fails without the fix.
+        5. Repo rules: no comments anywhere, no unit tests in git, and a conventional-commit title.
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        Build with `cargo build -p jerk`, `npm run build:wasm` and `npm run build:oauth-wasm`, then run one file with `node --test test/integration/<file>.test.mjs`. Never use a real token, keychain or browser. Don't report style preferences, or anything you haven't confirmed.
 
-      - id: shellcheck
-        run: command -v shellcheck || echo "missing=true" >> "$GITHUB_OUTPUT"
+        Deny for a confirmed leak of a secret, a broken release asset or package, a crash or regression in a common command without a workaround, or a behaviour change without its test. Comment on and approve a narrow problem with a workaround.
 
-      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8
-        if: steps.shellcheck.outputs.missing
-        with:
-          tool: shellcheck
-
-      - run: npm ci
-
-      - run: npm run lint
-
-  test:
-    needs: [runner, reproducible-wasm]
+  native-check:
+    if: github.event_name == 'merge_group'
+    name: native-check (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event_name != 'push' && fromJSON('["ubuntu-latest","windows-latest"]') || fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') }}
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && needs.runner.outputs.runner || matrix.os }}
-    timeout-minutes: 20
+        include:
+          - { os: windows-latest, targets: 'x86_64-pc-windows-msvc aarch64-pc-windows-msvc' }
+          - { os: macos-latest, targets: 'x86_64-apple-darwin aarch64-apple-darwin' }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
     env:
-      LEFTHOOK: '0'
+      TARGETS: ${{ matrix.targets }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - run: |
+          rustup toolchain install
+          for target in $TARGETS; do rustup target add "$target"; done
+
+      - run: |
+          for target in $TARGETS; do cargo check --locked --workspace --target "$target"; done
+
+  native-check-result:
+    needs: native-check
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - env:
+          RESULT: ${{ needs.native-check.result }}
+        run: |
+          echo "native-check: $RESULT"
+          case "$RESULT" in success|skipped) ;; *) exit 1 ;; esac
+
+  released:
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - id: version
+        run: |
+          git fetch --tags --force --quiet origin
+          version=$(git tag --points-at HEAD --list 'v*' | sed 's/^v//' | sort -V | tail -1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release: ${version:-none} at $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+  binaries:
+    needs: released
+    if: needs.released.outputs.version != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: darwin, os: macos-latest, builds: 'aarch64-apple-darwin:jerk:jerk-darwin-arm64 x86_64-apple-darwin:jerk:jerk-darwin-amd64' }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, builds: 'aarch64-unknown-linux-musl:jerk:jerk-linux-arm64' }
+          - { name: linux-amd64, os: ubuntu-latest, builds: 'x86_64-unknown-linux-musl:jerk:jerk-linux-amd64' }
+          - { name: windows-arm64, os: windows-11-arm, builds: 'aarch64-pc-windows-msvc:jerk.exe:jerk-windows-arm64.exe' }
+          - { name: windows-amd64, os: windows-latest, builds: 'x86_64-pc-windows-msvc:jerk.exe:jerk-windows-amd64.exe' }
+          - { name: wasm, os: ubuntu-latest, builds: 'wasm32-wasip1:jerk.wasm:jerk.wasm' }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      JERK_VERSION: ${{ needs.released.outputs.version }}
+      BUILDS: ${{ matrix.builds }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install
+          for build in $BUILDS; do rustup target add "${build%%:*}"; done
+
+      - if: contains(matrix.builds, 'musl')
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
+      - name: Build
+        run: |
+          mkdir -p out
+          for build in $BUILDS; do
+            IFS=: read -r target file asset <<< "$build"
+            cargo build --release --locked --target "$target" -p jerk
+            cp "target/$target/release/$file" "out/$asset"
+          done
+
+      - name: Sign and notarize the darwin binaries
+        if: matrix.name == 'darwin'
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_ISSUER_ID: ${{ secrets.APPLE_API_KEY_ISSUER_ID }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          scripts/sign-macos.sh out/jerk-darwin-arm64 out/jerk-darwin-amd64
+          for bin in out/jerk-darwin-arm64 out/jerk-darwin-amd64; do
+            codesign -dv --verbose=2 "$bin" 2>&1 | grep -q 'Authority=Developer ID Application' || { echo "::error::$bin is not signed with a Developer ID"; exit 1; }
+          done
+
+      - name: Check the version
+        if: matrix.name != 'wasm'
+        run: |
+          first="${BUILDS%% *}"
+          test "$("out/${first##*:}" --version)" = "jerk $JERK_VERSION"
+
+      - name: Linux binaries are static
+        if: contains(matrix.builds, 'musl')
+        run: |
+          for f in out/jerk-linux-*; do
+            info=$(file "$f")
+            printf '%s: %s\n' "$f" "$info"
+            echo "$info" | grep -qi 'static' || { echo "::error::$f is not statically linked"; exit 1; }
+          done
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: jerk-${{ matrix.name }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
+
+  assets:
+    needs: [released, binaries]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      LEFTHOOK: '0'
+      VERSION: ${{ needs.released.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24
           cache: npm
 
-      - uses: ./.github/actions/toolchain
+      - run: npm ci
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        if: runner.os != 'Windows'
+      - run: rustup toolchain install
+
+      - run: npm run build:oauth-wasm
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: wasm
+          pattern: jerk-*
+          path: artifacts/build
 
-      - run: npm ci
+      - run: node scripts/release-collect.mjs --version "$VERSION"
 
-      - run: npm test
+      - run: node scripts/npm-stage.mjs --version "$VERSION"
 
-  reproducible-wasm:
-    needs: runner
-    runs-on: ${{ needs.runner.outputs.runner }}
-    timeout-minutes: 15
-    env:
-      LEFTHOOK: '0'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
-          node-version: 24
-          cache: npm
+          subject-checksums: artifacts/release/SHA256SUMS
 
-      - uses: ./.github/actions/toolchain
-
-      - uses: ./.github/actions/wasm-bindgen
-
-      - run: npm ci
-
-      - name: Build jerk-oauth wasm (first)
+      - name: Upload the release assets
         env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/target-a
+          GH_TOKEN: ${{ github.token }}
         run: |
-          npm run build:oauth-wasm
-          mkdir -p /tmp/build-a
-          cp dist/jerk-oauth/jerk_oauth_wasm_bg.wasm dist/jerk-oauth/jerk_oauth_wasm.js dist/jerk-oauth/jerk_oauth_wasm.d.ts /tmp/build-a/
-
-      - name: Build jerk-oauth wasm (second, from a fresh target dir)
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/target-b
-        run: |
-          test ! -e "$CARGO_TARGET_DIR"
-          npm run build:oauth-wasm
-          mkdir -p /tmp/build-b
-          cp dist/jerk-oauth/jerk_oauth_wasm_bg.wasm dist/jerk-oauth/jerk_oauth_wasm.js dist/jerk-oauth/jerk_oauth_wasm.d.ts /tmp/build-b/
-
-      - name: Compare builds
-        run: |
-          diff /tmp/build-a/jerk_oauth_wasm_bg.wasm /tmp/build-b/jerk_oauth_wasm_bg.wasm
-          diff /tmp/build-a/jerk_oauth_wasm.js /tmp/build-b/jerk_oauth_wasm.js
-          diff /tmp/build-a/jerk_oauth_wasm.d.ts /tmp/build-b/jerk_oauth_wasm.d.ts
-          echo "All jerk-oauth wasm artifacts are byte-identical across builds"
-
-      - run: npm run build:wasm
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: wasm
-          path: |
-            bin/jerk.wasm
-            dist/jerk-oauth/
-          if-no-files-found: error
-          retention-days: 1
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: jerk-oauth-reproducible
-          path: /tmp/build-a/
-          retention-days: 7
-
-  test-installer:
-    needs: runner
-    runs-on: ${{ needs.runner.outputs.runner }}
-    timeout-minutes: 10
-    env:
-      LEFTHOOK: '0'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Create fake assets
-        run: |
-          mkdir -p _test_assets
-          arch=$(uname -m)
-          case "$arch" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; esac
-          asset="jerk-linux-${arch}"
-          printf '#!/bin/sh\nprintf "jerk 0.99.0\\n"\n' > "_test_assets/$asset"
-          chmod +x "_test_assets/$asset"
-          hash=$(sha256sum "_test_assets/$asset" | cut -d' ' -f1)
-          printf '%s  %s\n' "$hash" "$asset" > _test_assets/SHA256SUMS
-
-      - name: Run installer tests
-        run: FAKE_VERSION=0.99.0 sh scripts/test-install.sh _test_assets
-
-      - name: Run installer tests in alpine (wget only)
-        env:
-          SCRIPT: |
-            apk add --no-cache python3 coreutils
-            apk del curl 2>/dev/null || true
-            FAKE_VERSION=0.99.0 sh /w/scripts/test-install.sh /w/_test_assets
-        run: |
-          if docker info >/dev/null 2>&1; then
-            docker run --rm -v "$PWD:/w" -e SCRIPT alpine:latest sh -c "$SCRIPT"
-            exit 0
-          fi
-          base="https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/$(uname -m)"
-          releases=$(curl -fsSL "$base/latest-releases.yaml")
-          entry=$(printf '%s\n' "$releases" | awk '/flavor: alpine-minirootfs/{f=1} f&&/file:/{file=$2} f&&/sha256:/{print file, $2; exit}')
-          file=${entry% *}
-          sha=${entry#* }
-          curl -fsSL -o "$RUNNER_TEMP/$file" "$base/$file"
-          echo "$sha  $RUNNER_TEMP/$file" | sha256sum -c -
-          rootfs="$RUNNER_TEMP/alpine"
-          mkdir -p "$rootfs"
-          tar -xzf "$RUNNER_TEMP/$file" -C "$rootfs"
-          cp /etc/resolv.conf "$rootfs/etc/resolv.conf"
-          mkdir -p "$rootfs/w"
-          unshare -rm sh -c 'mount --rbind /dev "$1/dev" && mount --rbind /proc "$1/proc" && mount --bind "$PWD" "$1/w" && chroot "$1" /bin/sh -c "$SCRIPT"' sh "$rootfs"
-
-  test-installer-macos:
-    if: github.event_name == 'push'
-    runs-on: macos-latest
-    timeout-minutes: 10
-    env:
-      LEFTHOOK: '0'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Create fake assets
-        run: |
-          mkdir -p _test_assets
-          os=$(uname -s | tr '[:upper:]' '[:lower:]')
-          case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; esac
-          asset="jerk-${os}-${arch}"
-          printf '#!/bin/sh\nprintf "jerk 0.99.0\\n"\n' > "_test_assets/$asset"
-          chmod +x "_test_assets/$asset"
-          hash=$(shasum -a 256 "_test_assets/$asset" | cut -d' ' -f1)
-          printf '%s  %s\n' "$hash" "$asset" > _test_assets/SHA256SUMS
-
-      - name: Run installer tests
-        run: FAKE_VERSION=0.99.0 sh scripts/test-install.sh _test_assets
-
-  ci:
-    if: always()
-    needs: [runner, lint, test, reproducible-wasm, test-installer, test-installer-macos]
-    runs-on: ${{ vars.CERT_LIGHT_RUNNER || vars.CERT_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 5
-    steps:
-      - name: Every required job passed or was skipped
-        env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: |
-          echo "$RESULTS"
-          for r in $RESULTS; do
-            case "$r" in success|skipped) ;; *) exit 1 ;; esac
+          cd artifacts/release
+          gh release upload "v$VERSION" jerk-* jerk.wasm SHA256SUMS#SHA256SUMS "../../install.sh#install.sh" --clobber --repo "$GITHUB_REPOSITORY"
+          uploaded=$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+          for name in jerk-* jerk.wasm SHA256SUMS install.sh; do
+            printf '%s\n' "$uploaded" | grep -qx "$name" || { echo "::error::$name is not on v$VERSION"; exit 1; }
           done
+
+      - run: node scripts/npm-publish.mjs
+
+      - name: Publish the draft release as latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "v$VERSION" --draft=false --latest --repo "$GITHUB_REPOSITORY"
+
+      - name: Install through the published install.sh
+        run: |
+          curl -fsSL https://github.com/ai-ecoverse/slicc-jerk/releases/latest/download/install.sh | INSTALL_DIR="$RUNNER_TEMP/bin" sh
+          test "$("$RUNNER_TEMP/bin/jerk" --version)" = "jerk $VERSION"
