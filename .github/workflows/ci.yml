@@ -48,7 +48,7 @@ jobs:
         Deny for a confirmed leak of a secret, a broken release asset or package, a crash or regression in a common command without a workaround, or a behaviour change without its test. Comment on and approve a narrow problem with a workaround.
 
   native-check:
-    if: github.event_name == 'merge_group'
+    if: github.event_name == 'merge_group' || github.event_name == 'pull_request'
     name: native-check (${{ matrix.os }})
     strategy:
       fail-fast: false
