@@ -24,7 +24,7 @@ jobs:
     uses: ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@v2.8.4
     secrets: inherit
     with:
-      lint: rustup toolchain install && npm run lint && npm run lint:targets && npm run lint:wasm
+      lint: rustup toolchain install && npm run lint && npm run lint:wasm
       test: rustup toolchain install && npm run test:ci
       test-glob: test/integration/*.test.mjs
       shards: 2

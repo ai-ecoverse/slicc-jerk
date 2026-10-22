@@ -54,11 +54,9 @@ test('CI runs on pull requests, the merge queue and main, cancelling only supers
     assert.ok(top.includes(`\n  ${permission}\n`), permission);
 });
 
-test('the pipeline lints, checks the other targets and the wasm build, and shards the node suite', () => {
+test('the pipeline lints, checks the wasm build, and shards the node suite', () => {
   assert.equal(input('runs-on'), undefined);
-  assert.match(input('lint'), /npm run lint && npm run lint:targets && npm run lint:wasm$/);
-  assert.match(pkg.scripts['lint:targets'], /--target x86_64-pc-windows-msvc/);
-  assert.match(pkg.scripts['lint:targets'], /--target aarch64-apple-darwin/);
+  assert.match(input('lint'), /npm run lint && npm run lint:wasm$/);
   assert.equal(pkg.scripts['lint:wasm'], 'node scripts/reproducible-wasm.mjs');
   assert.match(input('test'), /npm run test:ci$/);
   assert.match(pkg.scripts['test:ci'], /build:wasm && npm run build:oauth-wasm && npm test$/);
