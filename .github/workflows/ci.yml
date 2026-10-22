@@ -77,6 +77,19 @@ jobs:
       - run: |
           for target in $TARGETS; do cargo check --locked --workspace --target "$target"; done
 
+  native-check-result:
+    needs: native-check
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - env:
+          RESULT: ${{ needs.native-check.result }}
+        run: |
+          echo "native-check: $RESULT"
+          case "$RESULT" in success|skipped) ;; *) exit 1 ;; esac
+
   released:
     needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

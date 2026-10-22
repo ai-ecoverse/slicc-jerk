@@ -25,6 +25,7 @@ test('ci.yml is the one workflow, and the only caller of pipeline.yml at the dev
   assert.deepEqual(ci.split('\njobs:\n')[1].match(/^ {2}[a-z-]+:$/gm), [
     '  ci:',
     '  native-check:',
+    '  native-check-result:',
     '  released:',
     '  binaries:',
     '  assets:',
@@ -153,4 +154,15 @@ test('the merge queue checks the workspace for every Windows and macOS target, o
     /rustup toolchain install\n {10}for target in \$TARGETS; do rustup target add "\$target"; done/
   );
   assert.match(native, /cargo check --locked --workspace --target "\$target"/);
+});
+
+test('one required check stands for both native-check legs, passing when they pass or are skipped', () => {
+  const result = job('native-check-result');
+  assert.match(
+    result,
+    /^ {4}needs: native-check\n {4}if: always\(\)\n {4}runs-on: ubuntu-latest\n/
+  );
+  assert.doesNotMatch(result, /matrix|name:/);
+  assert.match(result, /RESULT: \$\{\{ needs\.native-check\.result \}\}\n/);
+  assert.match(result, /case "\$RESULT" in success\|skipped\) ;; \*\) exit 1 ;; esac/);
 });
