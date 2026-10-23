@@ -559,6 +559,8 @@ fn undeclared_oauth_placeholders(provider: &Provider, config: &OAuthConfig) -> V
     messages
 }
 
+pub const RESERVED: [&str; 2] = ["upgrade", "update"];
+
 pub fn validate(id: &str, provider: &Provider, source: &Source) -> Vec<Problem> {
     let mut messages = Vec::new();
     let is_mcp = id.starts_with("mcp:");
@@ -567,6 +569,11 @@ pub fn validate(id: &str, provider: &Provider, source: &Source) -> Vec<Problem> 
             "the id must be lower-case letters, digits and dashes, starting with a letter or digit, or mcp:<name>"
                 .to_string(),
         );
+    }
+    if RESERVED.contains(&id) {
+        messages.push(format!(
+            "{id} is a jerk command, so no provider can use it as its id"
+        ));
     }
     if provider.locked && source.layer != Layer::System {
         messages.push("locked only applies in system files".to_string());

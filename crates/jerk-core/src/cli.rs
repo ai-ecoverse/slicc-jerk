@@ -29,6 +29,7 @@ Usage:
   jerk tab list [--cdp P] [--json]
   jerk tab export (--tab ID | --url PATTERN) [--cdp P] > bundle
   jerk tab import [--tab ID | --url PATTERN] [--cdp P] < bundle
+  jerk upgrade [--check] [--force]    (alias: jerk update)
 
 Options:
   --config <file>  read this providers file after the others (or SLICC_JERK_CONFIG)
@@ -137,6 +138,7 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
         "config" => config_command(&rest[1..], env, explicit.as_deref(), io),
         "intercept" => intercept_command(&rest[1..], ctx, io),
         "tab" => tab_command(&rest[1..], ctx, io),
+        "upgrade" | "update" => crate::upgrade::run(first, &rest[1..], env, io),
         flag if flag.starts_with('-') => usage(&format!("unknown option {flag}"), io),
         provider => match rest.get(1).map(String::as_str) {
             Some(verb) if VERBS.contains(&verb) => {

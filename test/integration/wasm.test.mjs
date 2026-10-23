@@ -56,6 +56,14 @@ test('the kernel build keeps the exit codes', {
 }, () => {
   assert.equal(runWasm(['--nope']).code, 2);
   assert.equal(runWasm(['intercept']).code, 5);
+  for (const command of ['upgrade', 'update']) {
+    const res = runWasm([command, '--check']);
+    assert.equal(res.code, 5);
+    assert.equal(
+      res.text,
+      `jerk ${command}: not available in the kernel build; seven updates it\n`
+    );
+  }
   assert.equal(runWasm(['github', 'get']).code, 2);
 });
 

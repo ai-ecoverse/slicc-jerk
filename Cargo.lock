@@ -430,6 +430,7 @@ dependencies = [
  "getrandom 0.4.3",
  "jerk-oauth",
  "keyring-core",
+ "libc",
  "linux-keyutils-keyring-store",
  "openssl",
  "serde",
