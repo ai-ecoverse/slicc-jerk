@@ -27,6 +27,7 @@ pub mod state;
 pub mod tab;
 pub mod template;
 pub mod time;
+pub mod upgrade;
 pub mod which;
 
 pub fn version() -> &'static str {

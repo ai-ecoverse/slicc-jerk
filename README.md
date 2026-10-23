@@ -49,9 +49,12 @@ jerk intercept --from-file F.toml
 jerk tab list [--cdp P] [--json]
 jerk tab export (--tab ID | --url PATTERN) [--cdp P] > bundle
 jerk tab import [--tab ID | --url PATTERN] [--cdp P] < bundle
+jerk upgrade [--check] [--force]
 ```
 
 `--config <file>` (or `SLICC_JERK_CONFIG`) adds a providers file on top of the others. `-p k=v` sets a provider parameter, for example `-p host=github.example.com`.
+
+`jerk upgrade`, or `jerk update`, replaces a jerk from install.sh or the releases page with the latest release, in place. It fetches over https only, and the download must match the release's `SHA256SUMS` and answer `--version` with the release version before it's renamed over the old one. `--check` only reports whether a newer release exists. A binary or directory jerk can't write is left alone, a development build needs `--force`, and a copy installed with npm, cargo or `slicc install jerk` is left to that tool, with the command to run. The kernel build exits 5.
 
 `get` prints the token to a terminal, or with `--reveal`. In a pipe it prints a masked form such as `gho_…1234`, so it doubles as a status check. `--json` prints `provider`, `source`, `masked`, `expires_at` and `scopes`, plus `token` only with `--reveal`; `--refresh` prints a status line, never the token. For an env token, `--scope` checks the JWT's `scp` or `scope` claim when it has one (the signature isn't verified), otherwise the provider's `scopes` command.
 

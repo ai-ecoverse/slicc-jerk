@@ -1,6 +1,8 @@
 use std::io::Write;
 
 fn main() {
+    #[cfg(windows)]
+    jerk_core::upgrade::remove_parked();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut out = std::io::stdout().lock();
     let mut err = std::io::stderr().lock();

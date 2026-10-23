@@ -10,6 +10,55 @@ fn agent() -> &'static ureq::Agent {
     })
 }
 
+pub struct Fetched {
+    pub status: u16,
+    pub location: Option<String>,
+    pub body: Vec<u8>,
+}
+
+pub fn fetch(
+    url: &str,
+    headers: &[(&str, &str)],
+    cap: u64,
+    timeout: std::time::Duration,
+) -> Result<Fetched, String> {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    let agent = AGENT.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .max_redirects(0)
+            .build()
+            .new_agent()
+    });
+    let mut request = agent.get(url);
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    let response = request
+        .config()
+        .timeout_global(Some(timeout))
+        .build()
+        .call()
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
+    let status: u16 = response.status().into();
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+    let body = response
+        .into_body()
+        .with_config()
+        .limit(cap)
+        .read_to_vec()
+        .map_err(|e| format!("cannot read response: {e}"))?;
+    Ok(Fetched {
+        status,
+        location,
+        body,
+    })
+}
+
 pub fn post(url: &str, body: &str) -> Result<String, String> {
     let response = agent()
         .post(url)
