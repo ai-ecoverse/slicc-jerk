@@ -167,7 +167,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -729,7 +729,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -898,9 +898,9 @@ dependencies = [
 
 [[package]]
 name = "slicc-cdp-client"
-version = "1.30.11"
+version = "1.30.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2f741ef0ed4d7d38e3597aab898b28faf2f257c844565a88b2e3dd9b8f0395c"
+checksum = "b2ef4b3731552f42aedcbe85cb6e0bf30cdb99ae4775017a997dc59600ff97f6"
 dependencies = [
  "native-tls",
  "openssl",
@@ -971,7 +971,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
