@@ -186,7 +186,9 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
       cookies: [...cookies],
       setCookies: [],
       storage: structuredClone(storage),
-      scripts: new Map(),
+      calls: [],
+      navigations: [],
+      redirects: {},
     };
     let nextTarget = 1;
     const server = createServer((req, res) => {
@@ -233,6 +235,7 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
         const { id, method, params = {}, sessionId } = msg;
         const reply = (result) => send({ id, result, ...(sessionId ? { sessionId } : {}) });
         const target = sessionId ? page(sessions.get(sessionId)) : null;
+        state.calls.push(method);
         switch (method) {
           case 'Target.getTargets':
             return reply({ targetInfos: state.pages });
@@ -265,6 +268,14 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
                 },
               });
             }
+            if (params.expression.includes('setItem')) {
+              const value = runInNewContext(params.expression, {
+                location: { origin: origin(target.url), href: target.url },
+                localStorage: store(target.url, 'localStorage'),
+                sessionStorage: store(target.url, 'sessionStorage'),
+              });
+              return reply({ result: { value: JSON.parse(JSON.stringify(value)) } });
+            }
             return reply({ result: { value: 'complete' } });
           }
           case 'Network.getCookies':
@@ -272,23 +283,9 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
           case 'Network.setCookies':
             state.setCookies.push(...params.cookies);
             return reply({});
-          case 'Page.addScriptToEvaluateOnNewDocument': {
-            const identifier = String(state.scripts.size + 1);
-            state.scripts.set(identifier, params.source);
-            return reply({ identifier });
-          }
-          case 'Page.removeScriptToEvaluateOnNewDocument':
-            state.scripts.delete(params.identifier);
-            return reply({});
           case 'Page.navigate': {
-            target.url = state.redirect ?? params.url;
-            for (const source of state.scripts.values()) {
-              runInNewContext(source, {
-                location: { origin: origin(target.url) },
-                localStorage: store(target.url, 'localStorage'),
-                sessionStorage: store(target.url, 'sessionStorage'),
-              });
-            }
+            state.navigations.push(params.url);
+            target.url = state.redirects[params.url] ?? state.redirect ?? params.url;
             reply({ frameId: 'F1' });
             send({
               method: 'Page.frameNavigated',

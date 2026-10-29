@@ -43,6 +43,9 @@ const signedIn = () => ({
   },
 });
 
+const persistent = (browser) =>
+  browser.state.calls.filter((m) => /^Page\.addScriptToEvaluateOn|^Runtime\.addBinding/.test(m));
+
 test('tab export and import carry cookies and storage into a new tab in another browser', async () => {
   const sb = sandbox();
   const from = await stubBrowser(signedIn());
@@ -97,7 +100,8 @@ test('tab export and import carry cookies and storage into a new tab in another 
         domain: '.example.test',
       },
     ]);
-    assert.equal(to.state.scripts.size, 0);
+    assert.deepEqual(to.state.navigations, [`${appOrigin}/`, app]);
+    assert.deepEqual(persistent(to), []);
   } finally {
     await from.close();
     await to.close();
@@ -134,8 +138,34 @@ test('tab import fails when the tab lands on another origin before storage is wr
     const exported = await sb.jerkAsync(['tab', 'export', '--url', 'inbox', '--cdp', from.wsUrl]);
     const imported = await sb.jerkAsync(['tab', 'import', '--cdp', to.wsUrl], {}, exported.stdout);
     assert.equal(imported.status, 1, imported.stderr);
-    assert.match(imported.stderr, /ended up on https:\/\/login\.example\.test\/sso/);
+    assert.match(
+      imported.stderr,
+      /ended up on https:\/\/login\.example\.test\/sso, so the storage for https:\/\/app\.example\.test was not written/
+    );
     assert.equal(to.state.storage[appOrigin], undefined);
+    assert.deepEqual(to.state.navigations, [`${appOrigin}/`]);
+    assert.deepEqual(persistent(to), []);
+  } finally {
+    await from.close();
+    await to.close();
+  }
+});
+
+test('tab import keeps the storage it wrote when the bundle URL then lands on another origin', async () => {
+  const sb = sandbox();
+  const from = await stubBrowser(signedIn());
+  const to = await stubBrowser({});
+  to.state.redirects[app] = 'https://login.example.test/sso';
+  try {
+    const exported = await sb.jerkAsync(['tab', 'export', '--url', 'inbox', '--cdp', from.wsUrl]);
+    const imported = await sb.jerkAsync(['tab', 'import', '--cdp', to.wsUrl], {}, exported.stdout);
+    assert.equal(imported.status, 0, imported.stderr);
+    assert.match(imported.stderr, /the tab ended up on https:\/\/login\.example\.test\/sso\n$/);
+    assert.deepEqual(to.state.storage[appOrigin], {
+      localStorage: { auth: 'fake-local-token' },
+      sessionStorage: { step: '2' },
+    });
+    assert.deepEqual(to.state.navigations, [`${appOrigin}/`, app]);
   } finally {
     await from.close();
     await to.close();
@@ -165,6 +195,13 @@ test('tab export refuses ambiguous or missing tabs, and import refuses a non-bun
     const junk = await sb.jerkAsync(['tab', 'import', '--cdp', from.wsUrl], {}, 'not base64!\n');
     assert.equal(junk.status, 2);
     assert.match(junk.stderr, /not a jerk tab bundle/);
+    const script = Buffer.from(
+      JSON.stringify({ kind: 'jerk-tab', v: 1, url: app, origin: 'javascript:alert(1)' })
+    ).toString('base64');
+    const foreign = await sb.jerkAsync(['tab', 'import', '--cdp', from.wsUrl], {}, `${script}\n`);
+    assert.equal(foreign.status, 2);
+    assert.match(foreign.stderr, /not a jerk tab bundle/);
+    assert.equal(from.state.calls.includes('Page.navigate'), false);
   } finally {
     await from.close();
   }
