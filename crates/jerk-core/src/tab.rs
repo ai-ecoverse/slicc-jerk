@@ -513,6 +513,8 @@ pub(crate) fn restore(
     })
 }
 
+const STORAGE_PATHS: [&str; 2] = ["/robots.txt", "/"];
+
 fn restore_in(
     cdp: &mut Cdp,
     session: &str,
@@ -528,8 +530,14 @@ fn restore_in(
         .collect();
     let cookies_set = set_cookies(cdp, session, &params);
     if !(bundle.local_storage.is_empty() && bundle.session_storage.is_empty()) {
-        navigate(cdp, session, &format!("{}/", bundle.origin))?;
-        let stored = evaluate(cdp, session, &storage_script(bundle))?;
+        let mut stored = Value::Null;
+        for path in STORAGE_PATHS {
+            navigate(cdp, session, &format!("{}{path}", bundle.origin))?;
+            stored = evaluate(cdp, session, &storage_script(bundle))?;
+            if stored.get("written").and_then(Value::as_bool) == Some(true) {
+                break;
+            }
+        }
         if stored.get("written").and_then(Value::as_bool) != Some(true) {
             return Ok((cookies_set, text(&stored, "href"), false));
         }

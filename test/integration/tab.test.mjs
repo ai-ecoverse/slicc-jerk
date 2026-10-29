@@ -100,7 +100,7 @@ test('tab export and import carry cookies and storage into a new tab in another 
         domain: '.example.test',
       },
     ]);
-    assert.deepEqual(to.state.navigations, [`${appOrigin}/`, app]);
+    assert.deepEqual(to.state.navigations, [`${appOrigin}/robots.txt`, app]);
     assert.deepEqual(persistent(to), []);
   } finally {
     await from.close();
@@ -143,7 +143,7 @@ test('tab import fails when the tab lands on another origin before storage is wr
       /ended up on https:\/\/login\.example\.test\/sso, so the storage for https:\/\/app\.example\.test was not written/
     );
     assert.equal(to.state.storage[appOrigin], undefined);
-    assert.deepEqual(to.state.navigations, [`${appOrigin}/`]);
+    assert.deepEqual(to.state.navigations, [`${appOrigin}/robots.txt`, `${appOrigin}/`]);
     assert.deepEqual(persistent(to), []);
   } finally {
     await from.close();
@@ -165,7 +165,50 @@ test('tab import keeps the storage it wrote when the bundle URL then lands on an
       localStorage: { auth: 'fake-local-token' },
       sessionStorage: { step: '2' },
     });
-    assert.deepEqual(to.state.navigations, [`${appOrigin}/`, app]);
+    assert.deepEqual(to.state.navigations, [`${appOrigin}/robots.txt`, app]);
+  } finally {
+    await from.close();
+    await to.close();
+  }
+});
+
+test('tab import writes the storage before the origin root can redirect a signed-out visitor', async () => {
+  const sb = sandbox();
+  const from = await stubBrowser(signedIn());
+  const to = await stubBrowser({});
+  to.state.scripted[`${appOrigin}/`] = 'https://login.example.test/sso';
+  try {
+    const exported = await sb.jerkAsync(['tab', 'export', '--url', 'inbox', '--cdp', from.wsUrl]);
+    const imported = await sb.jerkAsync(['tab', 'import', '--cdp', to.wsUrl], {}, exported.stdout);
+    assert.equal(imported.status, 0, imported.stderr);
+    assert.doesNotMatch(imported.stderr, /ended up on/);
+    assert.deepEqual(to.state.storage[appOrigin], {
+      localStorage: { auth: 'fake-local-token' },
+      sessionStorage: { step: '2' },
+    });
+    assert.deepEqual(to.state.navigations, [`${appOrigin}/robots.txt`, app]);
+    assert.deepEqual(persistent(to), []);
+  } finally {
+    await from.close();
+    await to.close();
+  }
+});
+
+test('tab import falls back to the origin root when robots.txt is an error page', async () => {
+  const sb = sandbox();
+  const from = await stubBrowser(signedIn());
+  const to = await stubBrowser({});
+  to.state.redirects[`${appOrigin}/robots.txt`] = 'chrome-error://chromewebdata/';
+  try {
+    const exported = await sb.jerkAsync(['tab', 'export', '--url', 'inbox', '--cdp', from.wsUrl]);
+    const imported = await sb.jerkAsync(['tab', 'import', '--cdp', to.wsUrl], {}, exported.stdout);
+    assert.equal(imported.status, 0, imported.stderr);
+    assert.deepEqual(to.state.storage[appOrigin], {
+      localStorage: { auth: 'fake-local-token' },
+      sessionStorage: { step: '2' },
+    });
+    assert.deepEqual(to.state.storage.null, { localStorage: {}, sessionStorage: {} });
+    assert.deepEqual(to.state.navigations, [`${appOrigin}/robots.txt`, `${appOrigin}/`, app]);
   } finally {
     await from.close();
     await to.close();
