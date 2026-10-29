@@ -352,6 +352,12 @@ fn evaluate(cdp: &mut Cdp, session: &str, expression: &str) -> Result<Value, Fai
         .unwrap_or(Value::Null))
 }
 
+fn web_origin(origin: &str) -> bool {
+    url::Url::parse(origin).is_ok_and(|u| {
+        matches!(u.scheme(), "http" | "https") && u.origin().ascii_serialization() == origin
+    })
+}
+
 pub(crate) fn encode(bundle: &Bundle) -> String {
     let text = serde_json::to_string(bundle).unwrap_or_default();
     STANDARD.encode(text)
@@ -368,7 +374,7 @@ pub(crate) fn decode(text: &str) -> Result<Bundle, Failure> {
     let not_a_bundle = || fail(Exit::Usage, "stdin is not a jerk tab bundle");
     let bytes = STANDARD.decode(compact).map_err(|_| not_a_bundle())?;
     let bundle: Bundle = serde_json::from_slice(&bytes).map_err(|_| not_a_bundle())?;
-    if bundle.kind != KIND {
+    if bundle.kind != KIND || !web_origin(&bundle.origin) {
         return Err(not_a_bundle());
     }
     if bundle.v != 1 {
@@ -465,7 +471,7 @@ pub(crate) fn storage_script(bundle: &Bundle) -> String {
         "sessionStorage": bundle.session_storage,
     });
     format!(
-        "(() => {{ const b = {data}; if (location.origin !== b.origin) return; const put = (s, v) => {{ try {{ for (const [k, x] of Object.entries(v)) s.setItem(k, x); }} catch (e) {{}} }}; put(localStorage, b.localStorage); put(sessionStorage, b.sessionStorage); }})()"
+        "(() => {{ const b = {data}; if (location.origin !== b.origin) return {{ href: location.href, written: false }}; const put = (s, v) => {{ try {{ for (const [k, x] of Object.entries(v)) s.setItem(k, x); }} catch (e) {{}} }}; put(localStorage, b.localStorage); put(sessionStorage, b.sessionStorage); return {{ href: location.href, written: true }}; }})()"
     )
 }
 
@@ -474,6 +480,7 @@ pub(crate) struct Restored {
     pub target_id: String,
     pub cookies_set: usize,
     pub landed: String,
+    pub written: bool,
 }
 
 pub(crate) fn restore(
@@ -497,15 +504,20 @@ pub(crate) fn restore(
     let session = cdp::attach(cdp, &target_id).map_err(cdp_error)?;
     let outcome = restore_in(cdp, &session, bundle);
     cdp::detach(cdp, &session);
-    let (cookies_set, landed) = outcome?;
+    let (cookies_set, landed, written) = outcome?;
     Ok(Restored {
         target_id,
         cookies_set,
         landed,
+        written,
     })
 }
 
-fn restore_in(cdp: &mut Cdp, session: &str, bundle: &Bundle) -> Result<(usize, String), Failure> {
+fn restore_in(
+    cdp: &mut Cdp,
+    session: &str,
+    bundle: &Bundle,
+) -> Result<(usize, String, bool), Failure> {
     cdp.call("Page.enable", json!({}), Some(session))
         .map_err(cdp_error)?;
     let params: Vec<Value> = bundle
@@ -515,39 +527,26 @@ fn restore_in(cdp: &mut Cdp, session: &str, bundle: &Bundle) -> Result<(usize, S
         .filter(|param| !cdp_client::shield::cookie_refused(cdp.guard(), param))
         .collect();
     let cookies_set = set_cookies(cdp, session, &params);
-    let script = if bundle.local_storage.is_empty() && bundle.session_storage.is_empty() {
-        None
-    } else {
-        let added = cdp
-            .call(
-                "Page.addScriptToEvaluateOnNewDocument",
-                json!({ "source": storage_script(bundle) }),
-                Some(session),
-            )
-            .map_err(cdp_error)?;
-        added
-            .get("identifier")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    };
-    let from = cdp.events().len();
-    let navigated = cdp
-        .call("Page.navigate", json!({ "url": bundle.url }), Some(session))
-        .map_err(cdp_error)
-        .and_then(|_| cdp.wait_load_since(session, from).map_err(cdp_error));
-    if let Some(identifier) = script {
-        let _ = cdp.call(
-            "Page.removeScriptToEvaluateOnNewDocument",
-            json!({ "identifier": identifier }),
-            Some(session),
-        );
+    if !(bundle.local_storage.is_empty() && bundle.session_storage.is_empty()) {
+        navigate(cdp, session, &format!("{}/", bundle.origin))?;
+        let stored = evaluate(cdp, session, &storage_script(bundle))?;
+        if stored.get("written").and_then(Value::as_bool) != Some(true) {
+            return Ok((cookies_set, text(&stored, "href"), false));
+        }
     }
-    navigated?;
+    navigate(cdp, session, &bundle.url)?;
     let landed = evaluate(cdp, session, "location.href")?
         .as_str()
         .unwrap_or("")
         .to_string();
-    Ok((cookies_set, landed))
+    Ok((cookies_set, landed, true))
+}
+
+fn navigate(cdp: &mut Cdp, session: &str, url: &str) -> Result<(), Failure> {
+    let from = cdp.events().len();
+    cdp.call("Page.navigate", json!({ "url": url }), Some(session))
+        .map_err(cdp_error)?;
+    cdp.wait_load_since(session, from).map_err(cdp_error)
 }
 
 fn set_cookies(cdp: &mut Cdp, session: &str, params: &[Value]) -> usize {
@@ -605,21 +604,20 @@ fn import(flags: &Flags, ctx: &mut Ctx<'_>, open: Opener, io: &mut Io<'_>) -> Re
             "jerk tab: {skipped} of the cookies could not be set"
         );
     }
+    if !restored.written {
+        return Err(fail(
+            Exit::Error,
+            format!(
+                "the tab ended up on {}, so the storage for {} was not written",
+                restored.landed, bundle.origin
+            ),
+        ));
+    }
     let landed_origin = url::Url::parse(&restored.landed)
         .map(|u| u.origin().ascii_serialization())
         .unwrap_or_default();
-    if landed_origin == bundle.origin {
-        return Ok(());
-    }
-    if bundle.local_storage.is_empty() && bundle.session_storage.is_empty() {
+    if landed_origin != bundle.origin {
         let _ = writeln!(io.err, "jerk tab: the tab ended up on {}", restored.landed);
-        return Ok(());
     }
-    Err(fail(
-        Exit::Error,
-        format!(
-            "the tab ended up on {}, so the storage for {} was not written",
-            restored.landed, bundle.origin
-        ),
-    ))
+    Ok(())
 }
