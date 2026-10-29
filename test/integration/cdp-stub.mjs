@@ -189,6 +189,7 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
       calls: [],
       navigations: [],
       redirects: {},
+      scripted: {},
     };
     let nextTarget = 1;
     const server = createServer((req, res) => {
@@ -293,6 +294,7 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
               params: { frame: { id: 'F1', url: target.url } },
             });
             send({ method: 'Page.loadEventFired', sessionId, params: {} });
+            target.url = state.scripted[target.url] ?? target.url;
             return;
           }
           default:
