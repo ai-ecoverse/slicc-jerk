@@ -191,7 +191,10 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
       redirects: {},
       scripted: {},
     };
+    const documents = new Map();
     let nextTarget = 1;
+    let nextContext = 1;
+    let nextLoader = 1;
     const server = createServer((req, res) => {
       if (req.url === '/json/version') {
         const { port } = server.address();
@@ -211,6 +214,22 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
         return 'null';
       }
     };
+    const securityOrigin = (url) => (origin(url) === 'null' ? '://' : origin(url));
+    const commit = (target, url, unreachableUrl) => {
+      target.url = url;
+      documents.set(target.targetId, { loaderId: `L${nextLoader++}`, unreachableUrl });
+    };
+    const targetInfo = (target) => ({
+      ...target,
+      url: documents.get(target.targetId)?.unreachableUrl ?? target.url,
+    });
+    const frame = (target) => ({
+      id: target.targetId,
+      url: target.url,
+      securityOrigin: securityOrigin(target.url),
+      loaderId: 'L0',
+      ...documents.get(target.targetId),
+    });
     const store = (url, kind) => {
       const key = origin(url);
       state.storage[key] ??= { localStorage: {}, sessionStorage: {} };
@@ -239,9 +258,11 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
         state.calls.push(method);
         switch (method) {
           case 'Target.getTargets':
-            return reply({ targetInfos: state.pages });
-          case 'Target.getTargetInfo':
-            return reply({ targetInfo: page(params.targetId) ?? { targetId: params.targetId } });
+            return reply({ targetInfos: state.pages.map(targetInfo) });
+          case 'Target.getTargetInfo': {
+            const found = page(params.targetId);
+            return reply({ targetInfo: found ? targetInfo(found) : { targetId: params.targetId } });
+          }
           case 'Target.createTarget': {
             const created = { targetId: `NEW${nextTarget++}`, type: 'page', url: 'about:blank' };
             state.pages.push(created);
@@ -251,6 +272,25 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
             const sid = `S${nextSession++}`;
             sessions.set(sid, params.targetId);
             return reply({ sessionId: sid });
+          }
+          case 'Page.getFrameTree':
+            return reply({ frameTree: { frame: frame(target) } });
+          case 'Runtime.enable': {
+            const contextId = nextContext++;
+            send({
+              method: 'Runtime.executionContextCreated',
+              sessionId,
+              params: {
+                context: {
+                  id: contextId,
+                  uniqueId: `C${contextId}`,
+                  origin: securityOrigin(target.url),
+                  name: '',
+                  auxData: { frameId: target.targetId, isDefault: true },
+                },
+              },
+            });
+            return reply({});
           }
           case 'Runtime.evaluate': {
             if (params.expression === 'location.href')
@@ -286,15 +326,12 @@ export function stubBrowser({ pages = [], cookies = [], storage = {} }) {
             return reply({});
           case 'Page.navigate': {
             state.navigations.push(params.url);
-            target.url = state.redirects[params.url] ?? state.redirect ?? params.url;
-            reply({ frameId: 'F1' });
-            send({
-              method: 'Page.frameNavigated',
-              sessionId,
-              params: { frame: { id: 'F1', url: target.url } },
-            });
+            const landed = state.redirects[params.url] ?? state.redirect ?? params.url;
+            commit(target, landed, landed.startsWith('chrome-error:') ? params.url : undefined);
+            reply({ frameId: target.targetId });
+            send({ method: 'Page.frameNavigated', sessionId, params: { frame: frame(target) } });
             send({ method: 'Page.loadEventFired', sessionId, params: {} });
-            target.url = state.scripted[target.url] ?? target.url;
+            if (state.scripted[target.url]) commit(target, state.scripted[target.url]);
             return;
           }
           default:
