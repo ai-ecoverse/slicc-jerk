@@ -35,6 +35,22 @@ impl Os {
 pub struct Env {
     pub os: Os,
     pub vars: BTreeMap<String, String>,
+    pub uid: Option<u32>,
+}
+
+#[cfg(target_os = "wasi")]
+fn process_uid() -> Option<u32> {
+    effective_uid(&std::fs::read_to_string("/proc/self/status").ok()?)
+}
+
+#[cfg(not(target_os = "wasi"))]
+fn process_uid() -> Option<u32> {
+    None
+}
+
+pub fn effective_uid(status: &str) -> Option<u32> {
+    let ids = status.lines().find_map(|l| l.strip_prefix("Uid:"))?;
+    ids.split_whitespace().nth(1)?.parse().ok()
 }
 
 impl Env {
@@ -42,6 +58,7 @@ impl Env {
         Env {
             os: Os::current(),
             vars: std::env::vars().collect(),
+            uid: process_uid(),
         }
     }
 

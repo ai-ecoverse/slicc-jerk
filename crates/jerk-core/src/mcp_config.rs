@@ -1,5 +1,5 @@
 use crate::config::{Entry, Layer, Provider, Source};
-use crate::paths::Env;
+use crate::paths::{Env, Os};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -39,13 +39,20 @@ struct McpJson {
     mcp_servers: Option<BTreeMap<String, McpServerEntry>>,
 }
 
+pub const AGENT_CONFIG_DIR: &str = "/etc/slicc/agent";
+
 pub fn pi_dir(env: &Env) -> PathBuf {
-    env.var("PI_AGENT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let home = env.home_dir();
-            home.join(".pi").join("agent")
-        })
+    let kernel = env.os == Os::Wasi;
+    let named = kernel
+        .then(|| env.var("PI_CODING_AGENT_DIR"))
+        .flatten()
+        .filter(|dir| !dir.is_empty())
+        .or_else(|| env.var("PI_AGENT_DIR"));
+    match named {
+        Some(dir) => PathBuf::from(dir),
+        None if kernel && env.uid == Some(0) => PathBuf::from(AGENT_CONFIG_DIR),
+        None => env.home_dir().join(".pi").join("agent"),
+    }
 }
 
 pub fn mcp_json_path(env: &Env) -> PathBuf {
