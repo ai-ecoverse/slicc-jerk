@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { sandbox } from './helpers.mjs';
 
@@ -110,6 +112,88 @@ test('with policies, get mints through cf before trying wrangler', () => {
   assert.ok(mint, JSON.stringify(sb.calls()));
   assert.ok(mint.args.includes('--policies'));
   assert.ok(mint.args.includes('--name'));
+});
+
+function policyReader(sb, exit = 0) {
+  const seen = join(sb.dir, 'seen.json');
+  sb.script(
+    'cf',
+    `if (args[0] === '--version') { process.stdout.write('1.0.0-beta.16\\n'); process.exit(0); }
+const at = args[args.indexOf('--policies') + 1];
+const text = at.startsWith('@') ? fs.readFileSync(at.slice(1), 'utf8') : null;
+fs.writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ at, text }));
+process.stdout.write(JSON.stringify({ value: ${JSON.stringify(CF_TOKEN)} }));
+process.exit(${exit});`
+  );
+  return seen;
+}
+
+function leftovers(sb) {
+  return existsSync(sb.stateDir)
+    ? readdirSync(sb.stateDir).filter((name) => name.startsWith('param-'))
+    : [];
+}
+
+const POLICIES = '[{"effect":"allow","resources":{"a":"*"},"note":"50% (x) & <y>|^!"}]';
+
+test('policies reach cf in a private file and not on the command line', () => {
+  const sb = sandbox();
+  const seen = policyReader(sb);
+  const got = sb.jerk(['cloudflare', 'get', '--reveal', '-p', `policies=${POLICIES}`]);
+  assert.equal(got.status, 0, got.stderr);
+  assert.equal(got.stdout, `${CF_TOKEN}\n`);
+  const { at, text } = JSON.parse(readFileSync(seen, 'utf8'));
+  assert.equal(text, POLICIES);
+  assert.ok(sb.calls().every((c) => c.args.every((arg) => !arg.includes('"'))));
+  assert.ok(!existsSync(at.slice(1)));
+  assert.deepEqual(leftovers(sb), []);
+});
+
+test('a failing cf leaves no policy file and the chain moves on', () => {
+  const sb = sandbox();
+  const seen = policyReader(sb, 1);
+  wrangler(sb);
+  const got = sb.jerk(['cloudflare', 'get', '--reveal', '-p', `policies=${POLICIES}`]);
+  assert.equal(got.status, 0, got.stderr);
+  assert.equal(got.stdout, `${WR_TOKEN}\n`);
+  assert.equal(JSON.parse(readFileSync(seen, 'utf8')).text, POLICIES);
+  assert.deepEqual(leftovers(sb), []);
+});
+
+test('a policies value that names a file reaches cf as it is', () => {
+  const sb = sandbox();
+  const seen = policyReader(sb);
+  const file = join(sb.dir, 'policies.json');
+  writeFileSync(file, POLICIES);
+  const got = sb.jerk(['cloudflare', 'get', '--reveal', '-p', `policies=@${file}`]);
+  assert.equal(got.status, 0, got.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(seen, 'utf8')), { at: `@${file}`, text: POLICIES });
+});
+
+test('empty policies pass no flag and write no file', () => {
+  const sb = sandbox();
+  cf(sb, { mint: true });
+  wrangler(sb);
+  const got = sb.jerk(['cloudflare', 'get', '--reveal']);
+  assert.equal(got.status, 0, got.stderr);
+  assert.equal(got.stdout, `${WR_TOKEN}\n`);
+  const mint = sb.calls().find((c) => c.name === 'cf' && c.args[2] === 'create');
+  assert.ok(!mint.args.includes('--policies'));
+  assert.deepEqual(leftovers(sb), []);
+});
+
+test('an unwritable state directory fails the cf step and the chain moves on', () => {
+  const sb = sandbox();
+  policyReader(sb);
+  wrangler(sb);
+  const state = join(sb.dir, 'state-file');
+  writeFileSync(state, '');
+  const got = sb.jerk(['cloudflare', 'get', '--reveal', '-p', `policies=${POLICIES}`], {
+    SLICC_JERK_STATE_DIR: state,
+  });
+  assert.equal(got.status, 0, got.stderr);
+  assert.equal(got.stdout, `${WR_TOKEN}\n`);
+  assert.ok(!sb.calls().some((c) => c.name === 'cf' && c.args[0] === 'accounts'));
 });
 
 test('an old wrangler beside cf still signs in with cf', () => {

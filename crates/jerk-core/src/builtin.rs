@@ -69,6 +69,7 @@ params = { name = "jerk", policies = "" }
 requires = "cf"
 run = ["cf", "accounts", "tokens", "create", "--quiet", "--name", "{name}", "--policies", "{policies}"]
 parse = "json:/value"
+at_file = ["policies"]
 
 [[providers.cloudflare.get]]
 requires = "wrangler"

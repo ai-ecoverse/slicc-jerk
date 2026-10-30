@@ -1,6 +1,34 @@
 use crate::paths::Env;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+pub struct ParamFile(PathBuf);
+
+impl ParamFile {
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ParamFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+pub fn param_file(env: &Env, id: &str, text: &str) -> std::io::Result<ParamFile> {
+    std::fs::create_dir_all(env.state_dir())?;
+    let path = env.state_dir().join(format!("param-{id}"));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    let param = ParamFile(path);
+    restrict(param.path())?;
+    file.write_all(text.as_bytes())?;
+    Ok(param)
+}
 
 fn file(env: &Env) -> PathBuf {
     env.state_dir().join("minted.json")
@@ -35,13 +63,13 @@ fn write_at(env: &Env, path: PathBuf, doc: &Value) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn restrict(path: &std::path::Path) -> std::io::Result<()> {
+fn restrict(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
 }
 
 #[cfg(not(unix))]
-fn restrict(_: &std::path::Path) -> std::io::Result<()> {
+fn restrict(_: &Path) -> std::io::Result<()> {
     Ok(())
 }
 

@@ -209,6 +209,48 @@ get = { requires = ${JSON.stringify(path)}, run = [${JSON.stringify(path)}, "tok
   assert.equal(res.stdout.trim(), 'tok-1');
 });
 
+test('a param passed by file reaches a script launcher', windows, () => {
+  const sb = sandbox();
+  sb.script(
+    'cf',
+    `const at = args[args.indexOf('--policies') + 1];
+process.stdout.write(JSON.stringify({ value: fs.readFileSync(at.slice(1), 'utf8') }));`
+  );
+  const policies = '[{"effect":"allow","note":"50% (x) & <y>|^!"}]';
+  const res = sb.jerk(['cloudflare', 'get', '--reveal', '-p', `policies=${policies}`]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), policies);
+  assert.ok(sb.calls().every((call) => !call.args.includes(policies)));
+});
+
+test('a param not passed by file stays refused beside one that is', windows, () => {
+  const sb = sandbox();
+  sb.script('cf', `process.stdout.write(JSON.stringify({ value: 'tok-1' }));`);
+  sb.script('wrangler', `process.stdout.write(JSON.stringify({ token: 'tok-2' }));`);
+  const res = sb.jerk([
+    'cloudflare',
+    'get',
+    '--reveal',
+    '-p',
+    'name=left&right',
+    '-p',
+    'policies=[{"effect":"allow"}]',
+  ]);
+  assert.equal(res.status, 1, res.stderr);
+  assert.ok(!`${res.stdout}${res.stderr}`.includes('left&right'));
+  assert.ok(!res.stdout.includes('tok-'));
+  assert.ok(sb.calls().every((call) => call.args[0] !== 'accounts'));
+});
+
+test('a file value with unsafe characters stays refused', windows, () => {
+  const sb = sandbox();
+  sb.script('cf', `process.stdout.write(JSON.stringify({ value: 'tok-1' }));`);
+  const res = sb.jerk(['cloudflare', 'get', '--reveal', '-p', 'policies=@left"right.json']);
+  assert.equal(res.status, 1, res.stderr);
+  assert.ok(!res.stdout.includes('tok-1'));
+  assert.ok(sb.calls().every((call) => call.args[0] !== 'accounts'));
+});
+
 test('a program named like a script launcher runs unchanged off Windows', {
   skip: !windows.skip,
 }, () => {

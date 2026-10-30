@@ -5,7 +5,7 @@ use crate::oauth;
 use crate::output::{choose, Shown};
 use crate::run::{Opts, Outcome, REFUSED};
 use crate::template::{render_args, render_text, Vars};
-use crate::{extract, mask, source, state, time, which};
+use crate::{extract, fnox, mask, source, state, time, which};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -140,6 +140,27 @@ fn program_for(
     }
 }
 
+fn param_files(
+    verb: &Verb,
+    vars: &Vars,
+    ctx: &Ctx<'_>,
+) -> std::io::Result<(Vars, Vec<state::ParamFile>)> {
+    let mut rendered = vars.clone();
+    let mut files = Vec::new();
+    for name in &verb.at_file {
+        let value = vars.get(name).map(String::as_str).unwrap_or("");
+        if value.is_empty() || value.starts_with('@') {
+            continue;
+        }
+        let mut id = [0u8; 16];
+        (ctx.random)(&mut id);
+        let file = state::param_file(ctx.env, &fnox::hex(&id), value)?;
+        rendered.insert(name.clone(), format!("@{}", file.path().display()));
+        files.push(file);
+    }
+    Ok((rendered, files))
+}
+
 pub fn run_verb(
     entry: &Entry,
     name: &str,
@@ -167,7 +188,14 @@ pub fn run_verb_env(
     let run: &[String] = verb.run.as_deref().unwrap_or(&[]);
     let path = program_for(entry, command, ctx, io)?;
     check_version_for(entry, command, verb, ctx, io)?;
-    let args = render_args(run.get(1..).unwrap_or(&[]), vars);
+    let (vars, _files) = match param_files(verb, vars, ctx) {
+        Ok(staged) => staged,
+        Err(e) => {
+            let _ = writeln!(io.err, "jerk: {}: cannot write a param file: {e}", entry.id);
+            return Err(Exit::Unavailable);
+        }
+    };
+    let args = render_args(run.get(1..).unwrap_or(&[]), &vars);
     let linked = interactive && ctx.via_link;
     let interactive = interactive && !ctx.via_link;
     let fallback = if linked {
