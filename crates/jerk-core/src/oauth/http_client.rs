@@ -1,13 +1,52 @@
+use crate::reach::{Reach, REFUSED};
 use std::sync::OnceLock;
+use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
+use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
 
-fn agent() -> &'static ureq::Agent {
-    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
-    AGENT.get_or_init(|| {
-        ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .build()
-            .new_agent()
-    })
+#[derive(Debug)]
+struct Confined(Reach);
+
+impl Resolver for Confined {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        let found = DefaultResolver::default().resolve(uri, config, timeout)?;
+        let mut kept = self.empty();
+        for addr in found.iter().filter(|addr| self.0.allows(addr.ip())) {
+            kept.push(*addr);
+        }
+        if kept.is_empty() {
+            return Err(ureq::Error::Io(std::io::Error::other(REFUSED)));
+        }
+        Ok(kept)
+    }
+}
+
+fn confined(reach: Reach) -> ureq::Agent {
+    let config = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .proxy(None)
+        .build();
+    ureq::Agent::with_parts(config, DefaultConnector::default(), Confined(reach))
+}
+
+fn agent(reach: Option<Reach>) -> &'static ureq::Agent {
+    static OPEN: OnceLock<ureq::Agent> = OnceLock::new();
+    static PUBLIC: OnceLock<ureq::Agent> = OnceLock::new();
+    static LOOPBACK: OnceLock<ureq::Agent> = OnceLock::new();
+    match reach {
+        None => OPEN.get_or_init(|| {
+            ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .build()
+                .new_agent()
+        }),
+        Some(Reach::Public) => PUBLIC.get_or_init(|| confined(Reach::Public)),
+        Some(Reach::Loopback) => LOOPBACK.get_or_init(|| confined(Reach::Loopback)),
+    }
 }
 
 pub struct Fetched {
@@ -59,8 +98,8 @@ pub fn fetch(
     })
 }
 
-pub fn post(url: &str, body: &str) -> Result<String, String> {
-    let response = agent()
+pub fn post(reach: Option<Reach>, url: &str, body: &str) -> Result<String, String> {
+    let response = agent(reach)
         .post(url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .header("Accept", "application/json")
@@ -72,8 +111,8 @@ pub fn post(url: &str, body: &str) -> Result<String, String> {
         .map_err(|e| format!("cannot read response: {e}"))
 }
 
-pub fn get(url: &str) -> Result<String, String> {
-    let response = agent()
+pub fn get(reach: Option<Reach>, url: &str) -> Result<String, String> {
+    let response = agent(reach)
         .get(url)
         .header("Accept", "application/json")
         .call()
@@ -84,8 +123,8 @@ pub fn get(url: &str) -> Result<String, String> {
         .map_err(|e| format!("cannot read response: {e}"))
 }
 
-pub fn post_json(url: &str, body: &str) -> Result<String, String> {
-    let response = agent()
+pub fn post_json(reach: Option<Reach>, url: &str, body: &str) -> Result<String, String> {
+    let response = agent(reach)
         .post(url)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
@@ -97,8 +136,8 @@ pub fn post_json(url: &str, body: &str) -> Result<String, String> {
         .map_err(|e| format!("cannot read response: {e}"))
 }
 
-pub fn mcp_probe(url: &str, body: &str) -> crate::oauth::McpProbeResult {
-    let response = match agent()
+pub fn mcp_probe(reach: Option<Reach>, url: &str, body: &str) -> crate::oauth::McpProbeResult {
+    let response = match agent(reach)
         .post(url)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json, text/event-stream")

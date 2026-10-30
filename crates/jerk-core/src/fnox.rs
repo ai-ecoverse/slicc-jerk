@@ -87,6 +87,10 @@ pub fn lease(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>)
             }
             Err(code) => return code,
         },
+        None if entry.is_mcp() => match crate::mcp::credentials(entry, ctx, io) {
+            Ok((creds, expires_at)) => (creds, None, expires_at),
+            Err(code) => return code,
+        },
         None => match fetch(entry, &vars, ctx, io) {
             Ok(token) => (token.credentials(entry), None, token.expires_at),
             Err(code) => return code,

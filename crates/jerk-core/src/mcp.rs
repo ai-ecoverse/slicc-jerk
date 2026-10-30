@@ -2,8 +2,18 @@ use crate::cli::{usage, Ctx, Io};
 use crate::config::Entry;
 use crate::exit::Exit;
 use crate::mcp_config::{info_from_entry, McpProviderInfo};
+use crate::oauth::OAuthHost;
+use crate::reach::{Reach, REFUSED};
+use std::collections::BTreeMap;
 #[allow(unused_imports)]
 use std::io::Write;
+
+struct McpToken {
+    value: String,
+    source: &'static str,
+    expires_at: Option<u64>,
+    scope: Option<String>,
+}
 
 pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     let flags = match crate::dispatch::parse_flags(args, &["--scope"], &["--reveal", "--json"], 0) {
@@ -14,37 +24,81 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
         Some(i) => i,
         None => return err(io, &entry.id, "missing url"),
     };
-    if let Some(value) = entry.provider.env.iter().find_map(|n| ctx.env.var(n)) {
-        return emit_token(value, "env", None, None, &flags, entry, io);
+    match token(entry, &info, flags.value("--scope"), ctx, io) {
+        Ok(t) => emit_token(
+            &t.value,
+            t.source,
+            t.expires_at.map(crate::time::rfc3339).as_deref(),
+            t.scope.as_deref(),
+            &flags,
+            entry,
+            io,
+        ),
+        Err(code) => code,
     }
-    let host = ctx.oauth;
+}
+
+pub fn credentials(
+    entry: &Entry,
+    ctx: &mut Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<(BTreeMap<String, String>, Option<u64>), Exit> {
+    let Some(info) = info_from_entry(entry) else {
+        return Err(err(io, &entry.id, "missing url"));
+    };
+    let t = token(entry, &info, None, ctx, io)?;
+    let names = match entry.provider.env.as_slice() {
+        [] => vec!["MCP_TOKEN".to_string()],
+        names => names.to_vec(),
+    };
+    let creds = names.into_iter().map(|n| (n, t.value.clone())).collect();
+    Ok((creds, t.expires_at))
+}
+
+fn confined(info: &McpProviderInfo, ctx: &Ctx<'_>) -> Option<Box<dyn OAuthHost>> {
+    ctx.via_link
+        .then(|| ctx.oauth.confine(Reach::of_start(&info.url)))
+}
+
+fn token(
+    entry: &Entry,
+    info: &McpProviderInfo,
+    requested: Option<&str>,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<McpToken, Exit> {
+    if let Some(value) = entry.provider.env.iter().find_map(|n| ctx.env.var(n)) {
+        return Ok(McpToken {
+            value: value.to_string(),
+            source: "env",
+            expires_at: None,
+            scope: None,
+        });
+    }
+    let held = confined(info, ctx);
+    let host = held.as_deref().unwrap_or(ctx.oauth);
     let grants = host.grants(entry.provider.store.as_deref());
-    let account = grant_account(&info);
+    let account = grant_account(info);
     let grant = match grants.get(&entry.id, &account) {
         Some(g) => g,
-        None => return sign_in(io, &entry.id),
+        None => return Err(sign_in(io, &entry.id)),
     };
-    let requested = flags.value("--scope");
     if let Some(at) = &grant.access_token {
         let fresh = grant
             .expires_at
             .map(|exp| ctx.now + 300 < exp)
             .unwrap_or(true);
         if fresh {
-            if requested
-                .filter(|req| !jerk_oauth::scopes::scopes_satisfied(grant.scope.as_deref(), req))
-                .is_some()
-            {
-                return scope_hint(io, &entry.id, requested.unwrap());
-            }
-            return emit_token(
-                at,
-                "oauth",
-                grant.expires_at.map(crate::time::rfc3339).as_deref(),
-                grant.scope.as_deref(),
-                &flags,
-                entry,
+            return covered(
+                McpToken {
+                    value: at.clone(),
+                    source: "oauth",
+                    expires_at: grant.expires_at,
+                    scope: grant.scope.clone(),
+                },
+                requested,
                 io,
+                &entry.id,
             );
         }
     }
@@ -54,13 +108,10 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
             "jerk: {}: token expired; run jerk {} create",
             entry.id, entry.id
         );
-        return Exit::SignIn;
+        return Err(Exit::SignIn);
     }
-    let (_prm, as_meta) = match discover_oauth(&info, host, io, &entry.id) {
-        Ok(r) => r,
-        Err(code) => return code,
-    };
-    let client_id = load_client_id(&info, ctx.env, host).unwrap_or_default();
+    let (_prm, as_meta) = discover_oauth(info, host, io, &entry.id)?;
+    let client_id = load_client_id(info, ctx.env, host).unwrap_or_default();
     let mut body = vec![
         ("grant_type".into(), "refresh_token".into()),
         ("refresh_token".into(), grant.refresh_token.clone()),
@@ -83,7 +134,7 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
                     access_token: Some(tr.access_token.clone()),
                     expires_at,
                     scope: scope_val.clone(),
-                    fields: std::collections::BTreeMap::new(),
+                    fields: BTreeMap::new(),
                 };
                 if let Err(e) = grants.store(&updated) {
                     let _ = writeln!(
@@ -92,31 +143,41 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
                         entry.id
                     );
                 }
-                if requested
-                    .filter(|req| !jerk_oauth::scopes::scopes_satisfied(scope_val.as_deref(), req))
-                    .is_some()
-                {
-                    return scope_hint(io, &entry.id, requested.unwrap());
-                }
-                emit_token(
-                    &tr.access_token,
-                    "oauth",
-                    expires_at.map(crate::time::rfc3339).as_deref(),
-                    scope_val.as_deref(),
-                    &flags,
-                    entry,
+                covered(
+                    McpToken {
+                        value: tr.access_token.clone(),
+                        source: "oauth",
+                        expires_at,
+                        scope: scope_val,
+                    },
+                    requested,
                     io,
+                    &entry.id,
                 )
             }
             Err(e) => {
                 let _ = writeln!(io.err, "jerk: {}: refresh failed: {e}", entry.id);
-                Exit::SignIn
+                Err(Exit::SignIn)
             }
         },
         Err(e) => {
             let _ = writeln!(io.err, "jerk: {}: refresh request failed: {e}", entry.id);
-            Exit::SignIn
+            Err(Exit::SignIn)
         }
+    }
+}
+
+fn covered(
+    token: McpToken,
+    requested: Option<&str>,
+    io: &mut Io<'_>,
+    id: &str,
+) -> Result<McpToken, Exit> {
+    match requested {
+        Some(req) if !jerk_oauth::scopes::scopes_satisfied(token.scope.as_deref(), req) => {
+            Err(scope_hint(io, id, req))
+        }
+        _ => Ok(token),
     }
 }
 
@@ -691,19 +752,54 @@ fn load_client_id(
     Some(cid)
 }
 
-fn discover_oauth(
-    info: &McpProviderInfo,
-    host: &dyn crate::oauth::OAuthHost,
+type Discovered = (
+    Option<jerk_oauth::discovery::ProtectedResourceMetadata>,
+    jerk_oauth::discovery::AuthorizationServerMetadata,
+);
+
+fn reachable(
+    host: &dyn OAuthHost,
+    url: &str,
+    what: &str,
     io: &mut Io<'_>,
     id: &str,
-) -> Result<
-    (
-        Option<jerk_oauth::discovery::ProtectedResourceMetadata>,
-        jerk_oauth::discovery::AuthorizationServerMetadata,
-    ),
-    Exit,
-> {
+) -> Result<(), Exit> {
+    host.reachable(url).map_err(|e| {
+        let _ = writeln!(io.err, "jerk: {id}: {what}: {e}");
+        Exit::Usage
+    })
+}
+
+fn discover_oauth(
+    info: &McpProviderInfo,
+    host: &dyn OAuthHost,
+    io: &mut Io<'_>,
+    id: &str,
+) -> Result<Discovered, Exit> {
+    reachable(host, &info.url, "server URL", io, id)?;
+    let (prm, meta) = discover(info, host, io, id)?;
+    reachable(
+        host,
+        &meta.authorization_endpoint,
+        "authorization endpoint",
+        io,
+        id,
+    )?;
+    reachable(host, &meta.token_endpoint, "token endpoint", io, id)?;
+    if let Some(endpoint) = &meta.registration_endpoint {
+        reachable(host, endpoint, "registration endpoint", io, id)?;
+    }
+    Ok((prm, meta))
+}
+
+fn discover(
+    info: &McpProviderInfo,
+    host: &dyn OAuthHost,
+    io: &mut Io<'_>,
+    id: &str,
+) -> Result<Discovered, Exit> {
     if let Some(ref amu) = info.auth_server_metadata_url {
+        reachable(host, amu, "authorization server metadata", io, id)?;
         let as_meta = fetch_as_metadata(amu, host, io, id)?;
         return Ok((None, as_meta));
     }
@@ -730,6 +826,7 @@ fn discover_oauth(
         let _ = writeln!(io.err, "jerk: {id}: authorization server URL: {e}");
         Exit::Error
     })?;
+    reachable(host, &as_url, "authorization server URL", io, id)?;
     let as_meta = discover_as(&as_url, host, io, id)?;
     Ok((prm, as_meta))
 }
@@ -817,6 +914,10 @@ fn discover_as(
                     let _ = writeln!(io.err, "jerk: {id}: AS metadata at {url}: {e}");
                 }
             },
+            Err(e) if e.contains(REFUSED) => {
+                let _ = writeln!(io.err, "jerk: {id}: {url}: {e}");
+                return Err(Exit::Usage);
+            }
             Err(_) => continue,
         }
     }

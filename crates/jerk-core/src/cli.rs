@@ -74,7 +74,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
     let env = Env::from_process();
     let stdin = std::io::stdin();
     #[cfg(not(target_os = "wasi"))]
-    let oauth_host = crate::oauth::DefaultOAuthHost;
+    let oauth_host = crate::oauth::DefaultOAuthHost::default();
     #[cfg(target_os = "wasi")]
     let oauth_host = crate::oauth::NoOAuthHost;
     #[cfg(target_os = "wasi")]
