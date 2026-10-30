@@ -176,6 +176,7 @@ pub fn get(
                     let msg = reply
                         .get("message")
                         .and_then(Value::as_str)
+                        .filter(|_| !(is_mcp(&entry.id) && exit == 3))
                         .unwrap_or("not signed in");
                     let _ = writeln!(io.err, "jerk: {}: {msg}", entry.id);
                     hint_create(&entry.id, io);
@@ -387,6 +388,9 @@ fn finish_create(
             .and_then(Value::as_str)
             .unwrap_or("failed");
         let _ = writeln!(io.err, "jerk: {provider}: {msg}");
+        if is_mcp(provider) {
+            hint_create(provider, io);
+        }
         return exit_from(exit);
     }
     let user = reply.get("user").and_then(Value::as_str);
@@ -465,7 +469,18 @@ pub fn drop_cmd(
     }
 }
 
+fn is_mcp(provider: &str) -> bool {
+    provider.starts_with("mcp:")
+}
+
 fn hint_create(provider: &str, io: &mut Io<'_>) {
+    if is_mcp(provider) {
+        let _ = writeln!(
+            io.err,
+            "jerk: {provider}: sign-in happens in Settings › MCP servers, where it is sealed"
+        );
+        return;
+    }
     let _ = writeln!(
         io.err,
         "jerk: {provider}: sign in with jerk {provider} create"
