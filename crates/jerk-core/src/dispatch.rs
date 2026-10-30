@@ -3,7 +3,7 @@ use crate::config::{parse_duration, parse_version, Entry, Verb, VerbChain};
 use crate::exit::Exit;
 use crate::oauth;
 use crate::output::{choose, Shown};
-use crate::run::{Opts, Outcome};
+use crate::run::{Opts, Outcome, REFUSED};
 use crate::template::{render_args, render_text, Vars};
 use crate::{extract, mask, source, state, time, which};
 use serde_json::json;
@@ -203,6 +203,10 @@ pub fn run_verb_env(
         Outcome::Failed(e) => {
             let _ = writeln!(io.err, "jerk: {}: cannot run {cli}: {e}", entry.id);
             Err(Exit::Unavailable)
+        }
+        Outcome::Refused => {
+            let _ = writeln!(io.err, "jerk: {}: {cli}: {REFUSED}", entry.id);
+            Err(Exit::Refused)
         }
     }
 }
@@ -503,6 +507,10 @@ fn run_chain<T>(
         );
         match result {
             Ok(value) => return Ok(value),
+            Err(Exit::Refused) => {
+                let _ = io.err.write_all(&err);
+                return Err(Exit::Refused);
+            }
             Err(_) => tried.push((step_name(entry, verb), reason(entry, verb, &err))),
         }
     }

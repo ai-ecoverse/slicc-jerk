@@ -3,6 +3,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+const LAUNCHER_REFUSED: &[char] = &['%', '&', '|', '<', '>', '^', '"', '!', '(', ')'];
+pub const REFUSED: &str = "a .cmd or .bat launcher cannot take a character in its arguments";
+
 pub struct Opts<'a> {
     pub interactive: bool,
     pub capture: bool,
@@ -22,6 +25,7 @@ pub enum Outcome {
     },
     TimedOut,
     Failed(String),
+    Refused,
 }
 
 pub trait Runner {
@@ -29,6 +33,19 @@ pub trait Runner {
 }
 
 pub struct Process;
+
+fn is_launcher(program: &Path) -> bool {
+    let name = program.to_string_lossy().to_ascii_lowercase();
+    let name = name.trim_end_matches(['.', ' ']);
+    name.ends_with(".cmd") || name.ends_with(".bat")
+}
+
+pub fn launcher_refuses(program: &Path, args: &[String]) -> bool {
+    is_launcher(program)
+        && args
+            .iter()
+            .any(|arg| arg.contains(|c: char| c.is_control() || LAUNCHER_REFUSED.contains(&c)))
+}
 
 fn drain_lines(
     pipe: impl Read + Send + 'static,
@@ -74,6 +91,9 @@ fn drain_echo(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<S
 
 impl Runner for Process {
     fn run(&self, program: &Path, args: &[String], opts: &Opts<'_>) -> Outcome {
+        if launcher_refuses(program, args) {
+            return Outcome::Refused;
+        }
         let mut command = Command::new(program);
         command.args(args);
         for name in opts.remove_env {
