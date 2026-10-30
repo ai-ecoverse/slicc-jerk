@@ -1441,7 +1441,7 @@ fn oauth_create_cmd(
                 exists: &'a dyn Fn(&std::path::Path) -> bool,
             }
             impl oauth::CdpOpener for Opener<'_> {
-                fn open(&self) -> Result<oauth::CdpResult, String> {
+                fn open(&self) -> Result<oauth::CdpResult, oauth::OAuthError> {
                     let ws_url = crate::browser_select::resolve_cdp_url(
                         self.cdp_url,
                         self.seven_origin,
@@ -1449,9 +1449,13 @@ fn oauth_create_cmd(
                         self.runner,
                         self.exists,
                         &mut std::io::sink(),
-                    )
-                    .map_err(|e| e.message)?;
-                    let cdp = cdp_client::cdp::Cdp::connect(&ws_url)?;
+                    )?;
+                    let cdp = cdp_client::cdp::Cdp::connect(&ws_url).map_err(|message| {
+                        oauth::OAuthError {
+                            exit: Exit::Unavailable,
+                            message,
+                        }
+                    })?;
                     Ok(oauth::CdpResult(cdp))
                 }
             }

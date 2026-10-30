@@ -94,6 +94,29 @@ create = { run = ["${launcher}", "login"], interactive = true, link = true }
   );
 });
 
+test('a refused step ends the chain', () => {
+  const sb = sandbox();
+  sb.script(launcher, 'process.exit(1);');
+  sb.script('second', `process.stdout.write('tok-1');`);
+  sb.writeUser(`[providers.demo]
+env = ["DEMO_TOKEN"]
+params = { value = "" }
+
+[[providers.demo.get]]
+requires = "${launcher}"
+run = ["${launcher}", "{value}"]
+
+[[providers.demo.get]]
+requires = "second"
+run = ["second", "token"]
+`);
+  const res = sb.jerk(['demo', 'get', '--reveal', '-p', 'value=left&right']);
+  assert.equal(res.status, 1, res.stderr);
+  assert.ok(!res.stdout.includes('tok-1'));
+  assert.ok(!`${res.stdout}${res.stderr}`.includes('left&right'));
+  assert.deepEqual(sb.calls(), []);
+});
+
 test('a refused version check ends the chain', { skip: process.platform === 'win32' }, () => {
   const sb = sandbox();
   sb.script('first', 'process.exit(0);');
