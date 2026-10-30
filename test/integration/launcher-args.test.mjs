@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { sandbox } from './helpers.mjs';
@@ -211,15 +211,18 @@ get = { requires = ${JSON.stringify(path)}, run = [${JSON.stringify(path)}, "tok
 
 test('a param passed by file reaches a script launcher', windows, () => {
   const sb = sandbox();
+  const seen = join(sb.dir, 'seen');
   sb.script(
     'cf',
     `const at = args[args.indexOf('--policies') + 1];
-process.stdout.write(JSON.stringify({ value: fs.readFileSync(at.slice(1), 'utf8') }));`
+fs.copyFileSync(at.slice(1), ${JSON.stringify(seen)});
+process.stdout.write(JSON.stringify({ value: 'tok-1' }));`
   );
   const policies = '[{"effect":"allow","note":"50% (x) & <y>|^!"}]';
   const res = sb.jerk(['cloudflare', 'get', '--reveal', '-p', `policies=${policies}`]);
   assert.equal(res.status, 0, res.stderr);
-  assert.equal(res.stdout.trim(), policies);
+  assert.equal(res.stdout.trim(), 'tok-1');
+  assert.equal(readFileSync(seen, 'utf8'), policies);
   assert.ok(sb.calls().every((call) => !call.args.includes(policies)));
 });
 
@@ -254,7 +257,10 @@ test('a file value with unsafe characters stays refused', windows, () => {
 test('a state directory a launcher cannot take skips the step and says so', windows, () => {
   const sb = sandbox();
   sb.script('cf', `process.stdout.write(JSON.stringify({ value: 'tok-1' }));`);
-  sb.script('wrangler', `process.stdout.write(JSON.stringify({ token: 'tok-2' }));`);
+  sb.script(
+    'wrangler',
+    `process.stdout.write(args[0] === '--version' ? '4.151.0' : JSON.stringify({ token: 'tok-2' }));`
+  );
   const state = join(sb.dir, 'left&right');
   const res = sb.jerk(['cloudflare', 'get', '--reveal', '-p', 'policies=[{"effect":"allow"}]'], {
     SLICC_JERK_STATE_DIR: state,
