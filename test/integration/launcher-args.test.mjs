@@ -204,6 +204,9 @@ get = { requires = ${JSON.stringify(path)}, run = [${JSON.stringify(path)}, "tok
     assert.equal(res.status, 0, `${dir}: ${res.stderr}`);
     assert.equal(res.stdout.trim(), 'tok-1');
   }
+  const res = run(`\\\\?\\${copy('alias (x86)', 'tool.cmd')}`);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'tok-1');
 });
 
 test('a program named like a script launcher runs unchanged off Windows', {
