@@ -127,3 +127,46 @@ test('only MCP hints move to Settings', { skip }, async () => {
     kernel.terminate();
   }
 });
+
+test('root reads the agent file that Settings writes', { skip }, async () => {
+  const placeholder = 'fnox_proxy_111111111111111111111111';
+  const { sealed, seen } = vault((req) =>
+    req.jop === 'list' ? { exit: 0, rows: [] } : { exit: 0, placeholder }
+  );
+  const kernel = await seven(sealed);
+  await kernel.writeFile(
+    '/etc/slicc/agent/mcp.json',
+    JSON.stringify({ mcpServers: { settings: { url: 'https://settings.example.test/mcp' } } })
+  );
+  await kernel.users.add({ name: 'cone', umask: 0o022 });
+  await kernel.writeFile(
+    '/home/cone/.pi/agent/mcp.json',
+    JSON.stringify({ mcpServers: { mine: { url: 'https://mine.example.test/mcp' } } })
+  );
+  await kernel.chmod('/home/cone/.pi/agent/mcp.json', 0o644);
+  try {
+    const list = await kernel.run(['jerk', 'list']);
+    assert.equal(list.status, 0, list.stderr);
+    assert.match(list.stdout, /\nmcp:settings\s/);
+    const get = await kernel.run(['jerk', 'mcp:settings', 'get']);
+    assert.equal(get.status, 0, get.stderr);
+    assert.equal(get.stdout, `${placeholder}\n`);
+    assert.equal(seen.at(-1).provider, 'mcp:settings');
+
+    await kernel.writeFile(
+      '/tmp/agent/mcp.json',
+      JSON.stringify({ mcpServers: { bb: { url: server } } })
+    );
+    const named = await kernel.run(['jerk', 'mcp:bb', 'get'], {
+      env: { PI_CODING_AGENT_DIR: '/tmp/agent' },
+    });
+    assert.equal(named.status, 0, named.stderr);
+
+    const cone = await kernel.run(['jerk', 'list'], { user: 'cone' });
+    assert.equal(cone.status, 0, cone.stderr);
+    assert.match(cone.stdout, /\nmcp:mine\s/);
+    assert.doesNotMatch(cone.stdout, /mcp:settings/);
+  } finally {
+    kernel.terminate();
+  }
+});
