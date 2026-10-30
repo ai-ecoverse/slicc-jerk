@@ -158,10 +158,11 @@ test('a refused version check ends the chain', windows, () => {
 
 test('an allowed launcher path reaches the version check', windows, () => {
   const sb = sandbox();
-  sb.script('first', `process.stdout.write('first 2.0.0');`);
+  sb.script('first', `process.stdout.write(args[0] === '--version' ? 'first 2.0.0' : 'tok-1');`);
   sb.script('second', `process.stdout.write('tok-2');`);
   const res = versioned(sb, 'left&right');
   assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'tok-1');
   assert.ok(!res.stderr.includes(REFUSED), res.stderr);
   assert.deepEqual(
     sb.calls().map((call) => call.args[0]),
