@@ -350,7 +350,8 @@ Over the link, an `mcp:` lease is confined by address whenever it has to refresh
 - **Tokens at rest:** CLI providers' tokens stay in the CLI's own store, except a token a `create` with `keep = true` prints once or a key pasted into an `ask` create. jerk's own OAuth grants live in the OS keyring, or a 0600 file only when the config says so.
 - **URLs:** OAuth and discovery URLs must be https, except http on loopback, with no userinfo. A captured redirect must match `redirect_uri` exactly.
 - **The link:** a lease seven asks for over the link can't be pointed at the machine's own network; see [In SLICC](#in-slicc).
-- **Child processes:** provider CLIs run from argument lists, never a shell, and without the provider's token variables.
+- **Child processes:** provider CLIs run from argument lists, never a shell, and without the provider's token variables, except that on Windows a `.cmd` or `.bat` launcher runs through cmd.exe (see the next bullet).
+- **Windows launchers:** before 1.3.5, values sent over the link could reach a `.cmd` or `.bat` launcher through cmd.exe, which could expand or run them. Fixed in 1.3.5 (2026-10-30): on Windows, before spawning a `.cmd` or `.bat`, jerk refuses `% & | ^ < > ! " ( )` and control characters in arguments, and `% " ! ^`, control characters and `::` in the launcher path. Not covered: a launcher that re-parses its own arguments, a native program that starts cmd.exe itself, and inherited environment values. Upgrade to 1.3.5 or later.
 
 ## `@ai-ecoverse/jerk-oauth`
 
