@@ -8,6 +8,8 @@ const LAUNCHER_REFUSED: &[char] = &['%', '&', '|', '<', '>', '^', '"', '!', '(',
 const PATH_REFUSED: &[char] = &['%', '"', '!', '^'];
 pub const REFUSED: &str =
     "a .cmd or .bat launcher cannot take a character in its path or arguments";
+pub const FILE_REFUSED: &str = "a value starting with @ cannot be used over the link";
+pub const UNPASSABLE: &str = "the state directory cannot be passed to a .cmd or .bat launcher";
 
 pub struct Opts<'a> {
     pub interactive: bool,

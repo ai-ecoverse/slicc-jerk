@@ -1,6 +1,57 @@
 use crate::paths::Env;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+pub const NOT_PRIVATE: &str = "the state directory is not private";
+
+pub struct ParamFile(PathBuf);
+
+impl ParamFile {
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ParamFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(unix)]
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
+    let meta = std::fs::symlink_metadata(dir)?;
+    let mine = meta.uid() == unsafe { libc::geteuid() };
+    if meta.is_dir() && mine && meta.mode() & 0o022 == 0 {
+        return Ok(());
+    }
+    Err(std::io::Error::other(NOT_PRIVATE))
+}
+
+#[cfg(not(unix))]
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
+pub fn param_file(env: &Env, id: &str, text: &str) -> std::io::Result<ParamFile> {
+    let dir: PathBuf = env.state_dir().components().collect();
+    private_dir(&dir)?;
+    let path = dir.join(format!("param-{id}"));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(&path)?;
+    let param = ParamFile(path);
+    file.write_all(text.as_bytes())?;
+    Ok(param)
+}
 
 fn file(env: &Env) -> PathBuf {
     env.state_dir().join("minted.json")
@@ -35,13 +86,13 @@ fn write_at(env: &Env, path: PathBuf, doc: &Value) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn restrict(path: &std::path::Path) -> std::io::Result<()> {
+fn restrict(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
 }
 
 #[cfg(not(unix))]
-fn restrict(_: &std::path::Path) -> std::io::Result<()> {
+fn restrict(_: &Path) -> std::io::Result<()> {
     Ok(())
 }
 

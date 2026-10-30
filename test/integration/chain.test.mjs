@@ -219,12 +219,23 @@ min_version = "new"
 oauth = true
 run = ["b"]
 
+[[providers.bad.get]]
+requires = "c"
+run = ["c"]
+at_file = ["nope"]
+
+[[providers.bad.get]]
+read = { file = "/nope" }
+at_file = ["nope"]
+
 [[providers.bad.list]]
 oauth = true
 `);
   const res = sb.jerk(['config', 'check']);
   assert.equal(res.status, 2);
   for (const message of [
+    'get[2]: "nope" is not a provider param (needed by at_file)',
+    'get[3]: at_file only applies to run',
     'get[0]: min_version "new" must look like 11.6.3',
     'get[0]: unknown placeholder {nope}',
     'get[1]: oauth = true cannot have run',

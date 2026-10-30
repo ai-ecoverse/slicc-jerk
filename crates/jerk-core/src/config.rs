@@ -111,6 +111,8 @@ pub struct Verb {
     pub needs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unless: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub at_file: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -704,6 +706,13 @@ fn validate_verb(
             ));
         }
     }
+    for name in &verb.at_file {
+        if !provider.params.contains_key(name) {
+            messages.push(format!(
+                "{label}: {name:?} is not a provider param (needed by at_file)"
+            ));
+        }
+    }
     if !verb.needs.is_empty() && !verb.unless.is_empty() {
         let overlap = verb
             .needs
@@ -737,6 +746,9 @@ fn validate_verb(
     if let Some(read) = &verb.read {
         if name != "get" {
             messages.push(format!("{label}: read only applies to get"));
+        }
+        if !verb.at_file.is_empty() {
+            messages.push(format!("{label}: at_file only applies to run"));
         }
         validate_read(&label, read, messages);
     }
