@@ -351,6 +351,16 @@ fn finish_create(
     sleep: &dyn Fn(u64),
     io: &mut Io<'_>,
 ) -> Exit {
+    if let Some(code) = refusal(reply) {
+        let _ = writeln!(
+            io.err,
+            "jerk: {provider}: seven refused the request: {code}"
+        );
+        if is_mcp(provider) {
+            hint_create(provider, io);
+        }
+        return Exit::Error;
+    }
     let exit = reply.get("exit").and_then(Value::as_i64).unwrap_or(0);
     if exit == 0 && is_host {
         let waiting = crate::sealed::Waiting {
@@ -369,6 +379,13 @@ fn finish_create(
                 return Exit::Error;
             }
         };
+        if let Some(code) = refusal(&sealed_reply) {
+            let _ = writeln!(
+                io.err,
+                "jerk: {provider}: signed in on the host, but seven refused sealing: {code}"
+            );
+            return Exit::Error;
+        }
         let code = sealed_reply
             .get("exit")
             .and_then(Value::as_i64)
@@ -450,6 +467,14 @@ pub fn drop_cmd(
     });
     match sealed.request(&body) {
         Ok(reply) => {
+            if let Some(code) = refusal(&reply) {
+                let _ = writeln!(
+                    io.err,
+                    "jerk: {}: seven refused the request: {code}",
+                    entry.id
+                );
+                return Exit::Error;
+            }
             let exit = reply.get("exit").and_then(Value::as_i64).unwrap_or(0);
             if exit != 0 {
                 let msg = reply
@@ -467,6 +492,14 @@ pub fn drop_cmd(
             Exit::Error
         }
     }
+}
+
+fn refusal(reply: &Value) -> Option<&str> {
+    let code = reply.get("error")?.get("code").and_then(Value::as_str);
+    Some(
+        code.filter(|c| c.bytes().all(|b| b.is_ascii_alphanumeric()))
+            .unwrap_or("unknown"),
+    )
 }
 
 fn is_mcp(provider: &str) -> bool {

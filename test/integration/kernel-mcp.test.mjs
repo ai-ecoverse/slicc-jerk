@@ -170,3 +170,58 @@ test('root reads the agent file that Settings writes', { skip }, async () => {
     kernel.terminate();
   }
 });
+
+test('a request the vault refuses is a failure, not a sign-in', { skip }, async () => {
+  const leak = 'fake-value-in-an-error-message';
+  const refused = { v: 1, error: { code: 'EINVAL', message: leak } };
+  const kernel = await seven(async () => refused);
+  try {
+    const mcp = await jerk(kernel, 'mcp:bb', 'create');
+    assert.equal(mcp.status, 1, mcp.stderr);
+    assert.equal(mcp.stdout, '');
+    assert.equal(
+      mcp.stderr,
+      `jerk: mcp:bb: seven refused the request: EINVAL\njerk: mcp:bb: ${settings}\n`
+    );
+    const demo = await jerk(kernel, 'demo', 'create');
+    assert.equal(demo.status, 1, demo.stderr);
+    assert.equal(demo.stdout, '');
+    assert.equal(demo.stderr, 'jerk: demo: seven refused the request: EINVAL\n');
+  } finally {
+    kernel.terminate();
+  }
+});
+
+test('a refused seal is a failure, not a sign-in', { skip }, async () => {
+  const leak = 'fake-value-in-an-error-message';
+  const { sealed } = vault(() => ({ exit: 0 }));
+  const kernel = await seven((req) =>
+    req.kind === 'jerk-seal' ? { v: 1, error: { code: 'EINVAL', message: leak } } : sealed(req)
+  );
+  try {
+    const res = await jerk(kernel, 'mcp:bb', 'create');
+    assert.equal(res.status, 1, res.stderr);
+    assert.equal(res.stdout, '');
+    assert.equal(
+      res.stderr,
+      'jerk: mcp:bb: signed in on the host, but seven refused sealing: EINVAL\n'
+    );
+  } finally {
+    kernel.terminate();
+  }
+});
+
+test('a refused drop is a failure, not a drop', { skip }, async () => {
+  const kernel = await seven(async () => ({
+    v: 1,
+    error: { code: 'EINVAL', message: 'fake-value-in-an-error-message' },
+  }));
+  try {
+    const res = await jerk(kernel, 'mcp:bb', 'drop', '--yes');
+    assert.equal(res.status, 1, res.stderr);
+    assert.equal(res.stdout, '');
+    assert.equal(res.stderr, 'jerk: mcp:bb: seven refused the request: EINVAL\n');
+  } finally {
+    kernel.terminate();
+  }
+});
