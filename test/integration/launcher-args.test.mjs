@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { sandbox } from './helpers.mjs';
 
+const REFUSED = 'cannot take a character';
+
 const windows = { skip: process.platform !== 'win32' };
 const launcher = 'demo';
 const place = (sb, name, path) =>
@@ -124,11 +126,8 @@ run = ["second", "token"]
   assert.deepEqual(sb.calls(), []);
 });
 
-test('a refused version check ends the chain', windows, () => {
-  const sb = sandbox();
-  sb.script('first', 'process.exit(0);');
-  sb.script('second', `process.stdout.write('tok-1');`);
-  const odd = join(sb.dir, 'left&right');
+const versioned = (sb, dir) => {
+  const odd = join(sb.dir, dir);
   mkdirSync(odd);
   const path = join(odd, 'first.cmd');
   place(sb, 'first', path);
@@ -144,9 +143,31 @@ min_version = "1.0.0"
 requires = "second"
 run = ["second", "token"]
 `);
-  const res = sb.jerk(['demo', 'get', '--reveal']);
+  return sb.jerk(['demo', 'get', '--reveal']);
+};
+
+test('a refused version check ends the chain', windows, () => {
+  const sb = sandbox();
+  sb.script('first', 'process.exit(0);');
+  sb.script('second', `process.stdout.write('tok-1');`);
+  const res = versioned(sb, 'left^right');
   assert.equal(res.status, 1, res.stderr);
+  assert.ok(res.stderr.includes(REFUSED), res.stderr);
   assert.deepEqual(sb.calls(), []);
+});
+
+test('an allowed launcher path reaches the version check', windows, () => {
+  const sb = sandbox();
+  sb.script('first', `process.stdout.write(args[0] === '--version' ? 'first 2.0.0' : 'tok-1');`);
+  sb.script('second', `process.stdout.write('tok-2');`);
+  const res = versioned(sb, 'left&right');
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'tok-1');
+  assert.ok(!res.stderr.includes(REFUSED), res.stderr);
+  assert.deepEqual(
+    sb.calls().map((call) => call.args[0]),
+    ['--version', 'token']
+  );
 });
 
 test('unsafe characters in a launcher path are refused', windows, () => {
@@ -168,16 +189,22 @@ get = { requires = ${JSON.stringify(path)}, run = [${JSON.stringify(path)}, "tok
   for (const [dir, file] of [
     ['left%right', 'tool.cmd'],
     ['left!right', 'tool.bat'],
-    ['left(right)', 'tool.cmd'],
+    ['left^right', 'tool.cmd'],
     ['plain', 'tool.cmd::$DATA'],
   ]) {
     const path = copy(dir, file);
     const res = run(path);
     assert.equal(res.status, 1, `${dir}/${file}`);
+    assert.ok(res.stderr.includes(REFUSED), `${dir}/${file}`);
     assert.ok(!`${res.stdout}${res.stderr}`.includes(path));
     assert.deepEqual(sb.calls(), []);
   }
-  const res = run(copy('with space', 'tool.cmd'));
+  for (const dir of ['with space', 'dir (x86)', 'left&right', 'a,b', 'a;b', 'a=b']) {
+    const res = run(copy(dir, 'tool.cmd'));
+    assert.equal(res.status, 0, `${dir}: ${res.stderr}`);
+    assert.equal(res.stdout.trim(), 'tok-1');
+  }
+  const res = run(`\\\\?\\${copy('alias (x86)', 'tool.cmd')}`);
   assert.equal(res.status, 0, res.stderr);
   assert.equal(res.stdout.trim(), 'tok-1');
 });
