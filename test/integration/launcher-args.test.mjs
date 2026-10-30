@@ -171,8 +171,10 @@ get = { requires = ${JSON.stringify(path)}, run = [${JSON.stringify(path)}, "tok
     ['left(right)', 'tool.cmd'],
     ['plain', 'tool.cmd::$DATA'],
   ]) {
-    const res = run(copy(dir, file));
+    const path = copy(dir, file);
+    const res = run(path);
     assert.equal(res.status, 1, `${dir}/${file}`);
+    assert.ok(!`${res.stdout}${res.stderr}`.includes(path));
     assert.deepEqual(sb.calls(), []);
   }
   const res = run(copy('with space', 'tool.cmd'));

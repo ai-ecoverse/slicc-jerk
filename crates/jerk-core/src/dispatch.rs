@@ -216,10 +216,7 @@ pub fn run_verb_env(
             let _ = writeln!(io.err, "jerk: {}: cannot run {cli}: {e}", entry.id);
             Err(Exit::Unavailable)
         }
-        Outcome::Refused => {
-            let _ = writeln!(io.err, "jerk: {}: {cli}: {REFUSED}", entry.id);
-            Err(Exit::Refused)
-        }
+        Outcome::Refused => Err(refused(entry, Exit::Refused, io)),
     }
 }
 
