@@ -3,12 +3,12 @@ use crate::config::{parse_duration, parse_version, Entry, Lookup, Verb, VerbChai
 use crate::exit::Exit;
 use crate::oauth;
 use crate::output::{choose, Shown};
-use crate::run::{Opts, Outcome, FILE_REFUSED, REFUSED};
+use crate::run::{launcher_refuses, Opts, Outcome, FILE_REFUSED, REFUSED, UNPASSABLE};
 use crate::template::{render_args, render_text, Vars};
 use crate::{extract, fnox, mask, source, state, time, which};
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -160,6 +160,7 @@ fn param_file(value: &str, ctx: &Ctx<'_>) -> std::io::Result<state::ParamFile> {
 
 fn param_files(
     entry: &Entry,
+    program: &Path,
     verb: &Verb,
     vars: &Vars,
     ctx: &Ctx<'_>,
@@ -180,7 +181,12 @@ fn param_files(
             let _ = writeln!(io.err, "jerk: {}: cannot write a param file: {e}", entry.id);
             Exit::Unavailable
         })?;
-        rendered.insert(name.clone(), format!("@{}", file.path().display()));
+        let reference = format!("@{}", file.path().display());
+        if launcher_refuses(ctx.env.os, program, std::slice::from_ref(&reference)) {
+            let _ = writeln!(io.err, "jerk: {}: {UNPASSABLE}", entry.id);
+            return Err(Exit::Unavailable);
+        }
+        rendered.insert(name.clone(), reference);
         files.push(file);
     }
     Ok((rendered, files))
@@ -213,7 +219,7 @@ pub fn run_verb_env(
     let run: &[String] = verb.run.as_deref().unwrap_or(&[]);
     let path = program_for(entry, command, ctx, io)?;
     check_version_for(entry, command, verb, ctx, io)?;
-    let (vars, _files) = param_files(entry, verb, vars, ctx, io)?;
+    let (vars, _files) = param_files(entry, &path, verb, vars, ctx, io)?;
     let args = render_args(run.get(1..).unwrap_or(&[]), &vars);
     let linked = interactive && ctx.via_link;
     let interactive = interactive && !ctx.via_link;
@@ -519,6 +525,20 @@ fn unavailable(
     Ok(checked.is_none().then(|| reason(entry, verb, &err)))
 }
 
+fn note_skipped(entry: &Entry, tried: &[(String, String)], io: &mut Io<'_>) {
+    for (step, why) in tried {
+        for reason in [state::NOT_PRIVATE, UNPASSABLE] {
+            if why.ends_with(reason) {
+                let _ = writeln!(
+                    io.err,
+                    "jerk: {}: skipped the {step} step: {reason}",
+                    entry.id
+                );
+            }
+        }
+    }
+}
+
 fn report(entry: &Entry, name: &str, tried: &[(String, String)], io: &mut Io<'_>) {
     let _ = writeln!(io.err, "jerk: {}: no {name} step worked:", entry.id);
     for (step, why) in tried {
@@ -566,7 +586,10 @@ fn run_chain<T>(
             },
         );
         match result {
-            Ok(value) => return Ok(value),
+            Ok(value) => {
+                note_skipped(entry, &tried, io);
+                return Ok(value);
+            }
             Err(Exit::Refused) => {
                 let _ = io.err.write_all(&err);
                 return Err(Exit::Refused);

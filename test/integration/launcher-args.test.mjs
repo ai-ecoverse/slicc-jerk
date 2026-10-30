@@ -251,6 +251,21 @@ test('a file value with unsafe characters stays refused', windows, () => {
   assert.ok(sb.calls().every((call) => call.args[0] !== 'accounts'));
 });
 
+test('a state directory a launcher cannot take skips the step and says so', windows, () => {
+  const sb = sandbox();
+  sb.script('cf', `process.stdout.write(JSON.stringify({ value: 'tok-1' }));`);
+  sb.script('wrangler', `process.stdout.write(JSON.stringify({ token: 'tok-2' }));`);
+  const state = join(sb.dir, 'left&right');
+  const res = sb.jerk(['cloudflare', 'get', '--reveal', '-p', 'policies=[{"effect":"allow"}]'], {
+    SLICC_JERK_STATE_DIR: state,
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'tok-2');
+  assert.match(res.stderr, /skipped the cf step/);
+  assert.ok(!res.stderr.includes(state));
+  assert.ok(sb.calls().every((call) => call.args[0] !== 'accounts'));
+});
+
 test('a program named like a script launcher runs unchanged off Windows', {
   skip: !windows.skip,
 }, () => {

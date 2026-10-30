@@ -3,6 +3,8 @@ use serde_json::{json, Value};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+pub const NOT_PRIVATE: &str = "the state directory is not private";
+
 pub struct ParamFile(PathBuf);
 
 impl ParamFile {
@@ -29,7 +31,7 @@ fn private_dir(dir: &Path) -> std::io::Result<()> {
     if meta.is_dir() && mine && meta.mode() & 0o022 == 0 {
         return Ok(());
     }
-    Err(std::io::Error::other("the state directory is not private"))
+    Err(std::io::Error::other(NOT_PRIVATE))
 }
 
 #[cfg(not(unix))]

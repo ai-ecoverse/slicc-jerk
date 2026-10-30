@@ -170,7 +170,7 @@ Commands are argument lists, never shell strings, and the CLI runs without the p
 | `oauth` | `true` for a `get`, `create` or `drop` step that uses the provider's `[oauth]` block; such a step has no other field except `needs` / `unless` |
 | `needs` | param names that must be non-empty for this step to be available |
 | `unless` | param names that must be empty for this step to be available |
-| `at_file` | param names a `run` step passes as `@<path>` to a private file holding the value, removed when the step ends; an empty value, or one already starting with `@`, is passed as it is, except that a `@` value is refused over the link. On macOS and Linux the step fails if the state directory is a symlink, isn't yours, or is group- or world-writable |
+| `at_file` | param names a `run` step passes as `@<path>` to a private file holding the value, removed when the step ends; an empty value, or one already starting with `@`, is passed as it is, except that a `@` value is refused over the link. On macOS and Linux the step fails if the state directory is a symlink, isn't yours, or is group- or world-writable, and on Windows if a `.cmd` or `.bat` launcher can't take the file's path. jerk says so on stderr when a later step wins |
 
 </details>
 

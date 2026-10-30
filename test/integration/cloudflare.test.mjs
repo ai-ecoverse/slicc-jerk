@@ -219,6 +219,50 @@ test('a state directory jerk makes and the policy file in it are private', unix,
   assert.equal(statSync(sb.stateDir).mode & 0o777, 0o700);
 });
 
+test('a state directory jerk makes stays private under a loose umask', unix, () => {
+  const sb = sandbox();
+  policyReader(sb);
+  const before = process.umask(0o002);
+  try {
+    const got = sb.jerk(['cloudflare', 'get', '--reveal', '-p', `policies=${POLICIES}`]);
+    assert.equal(got.status, 0, got.stderr);
+    assert.equal(got.stderr, '');
+  } finally {
+    process.umask(before);
+  }
+  assert.equal(statSync(sb.stateDir).mode & 0o777, 0o700);
+});
+
+test('a skipped cf step says why when a later step wins', unix, () => {
+  const sb = sandbox();
+  policyReader(sb);
+  wrangler(sb);
+  const state = join(sb.dir, 'shared');
+  mkdirSync(state);
+  chmodSync(state, 0o775);
+  const got = sb.jerk(['cloudflare', 'get', '--reveal', '-p', `policies=${POLICIES}`], {
+    SLICC_JERK_STATE_DIR: state,
+  });
+  assert.equal(got.status, 0, got.stderr);
+  assert.equal(got.stdout, `${WR_TOKEN}\n`);
+  assert.equal(got.stderr, `jerk: cloudflare: skipped the cf step: ${NOT_PRIVATE}\n`);
+  assert.equal(statSync(state).mode & 0o777, 0o775);
+});
+
+test('a chain with no step left names the reason once', unix, () => {
+  const sb = sandbox();
+  policyReader(sb);
+  const state = join(sb.dir, 'shared');
+  mkdirSync(state);
+  chmodSync(state, 0o775);
+  const got = sb.jerk(['cloudflare', 'get', '--reveal', '-p', `policies=${POLICIES}`], {
+    SLICC_JERK_STATE_DIR: state,
+  });
+  assert.equal(got.status, 3, got.stderr);
+  assert.equal(got.stderr.split(NOT_PRIVATE).length, 2, got.stderr);
+  assert.ok(!got.stderr.includes('skipped the cf step'), got.stderr);
+});
+
 test('an existing state directory that only its owner can write is used', unix, () => {
   const sb = sandbox();
   const seen = policyReader(sb);
