@@ -3,7 +3,7 @@ use crate::config::{parse_duration, parse_version, Entry, Lookup, Verb, VerbChai
 use crate::exit::Exit;
 use crate::oauth;
 use crate::output::{choose, Shown};
-use crate::run::{Opts, Outcome, REFUSED};
+use crate::run::{Opts, Outcome, FILE_REFUSED, REFUSED};
 use crate::template::{render_args, render_text, Vars};
 use crate::{extract, fnox, mask, source, state, time, which};
 use serde_json::json;
@@ -121,6 +121,15 @@ fn refused(entry: &Entry, code: Exit, io: &mut Io<'_>) -> Exit {
     code
 }
 
+fn refused_after(entry: &Entry, code: Exit, held: &[u8], io: &mut Io<'_>) -> Exit {
+    let why = match String::from_utf8_lossy(held).contains(FILE_REFUSED) {
+        true => FILE_REFUSED,
+        false => REFUSED,
+    };
+    let _ = writeln!(io.err, "jerk: {}: {why}", entry.id);
+    code
+}
+
 fn program_for(
     entry: &Entry,
     command: &str,
@@ -140,21 +149,37 @@ fn program_for(
     }
 }
 
+fn param_file(value: &str, ctx: &Ctx<'_>) -> std::io::Result<state::ParamFile> {
+    let mut id = [0u8; 16];
+    (ctx.random)(&mut id);
+    if id == [0u8; 16] {
+        return Err(std::io::Error::other("no random bytes for its name"));
+    }
+    state::param_file(ctx.env, &fnox::hex(&id), value)
+}
+
 fn param_files(
+    entry: &Entry,
     verb: &Verb,
     vars: &Vars,
     ctx: &Ctx<'_>,
-) -> std::io::Result<(Vars, Vec<state::ParamFile>)> {
+    io: &mut Io<'_>,
+) -> Result<(Vars, Vec<state::ParamFile>), Exit> {
     let mut rendered = vars.clone();
     let mut files = Vec::new();
     for name in &verb.at_file {
         let value = vars.get(name).map(String::as_str).unwrap_or("");
+        if value.starts_with('@') && ctx.via_link {
+            let _ = writeln!(io.err, "jerk: {}: {FILE_REFUSED}", entry.id);
+            return Err(Exit::Refused);
+        }
         if value.is_empty() || value.starts_with('@') {
             continue;
         }
-        let mut id = [0u8; 16];
-        (ctx.random)(&mut id);
-        let file = state::param_file(ctx.env, &fnox::hex(&id), value)?;
+        let file = param_file(value, ctx).map_err(|e| {
+            let _ = writeln!(io.err, "jerk: {}: cannot write a param file: {e}", entry.id);
+            Exit::Unavailable
+        })?;
         rendered.insert(name.clone(), format!("@{}", file.path().display()));
         files.push(file);
     }
@@ -188,13 +213,7 @@ pub fn run_verb_env(
     let run: &[String] = verb.run.as_deref().unwrap_or(&[]);
     let path = program_for(entry, command, ctx, io)?;
     check_version_for(entry, command, verb, ctx, io)?;
-    let (vars, _files) = match param_files(verb, vars, ctx) {
-        Ok(staged) => staged,
-        Err(e) => {
-            let _ = writeln!(io.err, "jerk: {}: cannot write a param file: {e}", entry.id);
-            return Err(Exit::Unavailable);
-        }
-    };
+    let (vars, _files) = param_files(entry, verb, vars, ctx, io)?;
     let args = render_args(run.get(1..).unwrap_or(&[]), &vars);
     let linked = interactive && ctx.via_link;
     let interactive = interactive && !ctx.via_link;
@@ -1319,14 +1338,15 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         .ok()
         .filter(|v| v.parse.is_some() || v.ask.is_some())
     {
+        let mut held = Vec::new();
         let mut quiet = Io {
             out: &mut std::io::sink(),
-            err: &mut std::io::sink(),
+            err: &mut held,
         };
         let signed_in = match verb.ask {
             Some(_) => match optional(fetch(entry, &vars, ctx, &mut quiet)) {
                 Ok(found) => found.is_some(),
-                Err(code) => return refused(entry, code, io),
+                Err(code) => return refused_after(entry, code, &held, io),
             },
             None => kept(entry, &vars, ctx).is_some(),
         };
@@ -1341,13 +1361,14 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         return mint(entry, verb, &vars, &flags, ctx, io);
     }
     if !flags.has("--force") && entry.provider.get.is_some() {
+        let mut held = Vec::new();
         let mut quiet = Io {
             out: &mut std::io::sink(),
-            err: &mut std::io::sink(),
+            err: &mut held,
         };
         let found = match optional(fetch(entry, &vars, ctx, &mut quiet)) {
             Ok(found) => found,
-            Err(code) => return refused(entry, code, io),
+            Err(code) => return refused_after(entry, code, &held, io),
         };
         if let Some(token) = found {
             let covered = match requested_scope(&flags) {
@@ -1355,7 +1376,7 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
                     Ok(scopes) => {
                         jerk_oauth::scopes::scopes_satisfied(scopes.as_deref(), requested)
                     }
-                    Err(code) => return refused(entry, code, io),
+                    Err(code) => return refused_after(entry, code, &held, io),
                 },
                 None => true,
             };

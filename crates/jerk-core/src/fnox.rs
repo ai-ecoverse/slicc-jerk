@@ -23,7 +23,7 @@ pub const ENCRYPTING: [&str; 9] = [
 const DEFAULT_DURATION: u64 = 3600;
 
 pub fn os_random(buf: &mut [u8]) {
-    let _ = getrandom::fill(buf);
+    getrandom::fill(buf).unwrap_or_else(|_| buf.fill(0));
 }
 
 pub fn hex(bytes: &[u8]) -> String {

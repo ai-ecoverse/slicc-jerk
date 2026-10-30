@@ -1,7 +1,7 @@
 use crate::cli::{Ctx, Io};
 use crate::config::Entry;
 use crate::exit::Exit;
-use crate::run::REFUSED;
+use crate::run::{FILE_REFUSED, REFUSED};
 use serde_json::{json, Value};
 use std::io::Write;
 
@@ -225,7 +225,9 @@ pub fn run(entry: &Entry, verb: &str, args: &[String], ctx: &mut Ctx<'_>, io: &m
                 Vec::new()
             };
             let message = match code {
-                Exit::Refused => format!("{}: {REFUSED}", entry.id),
+                Exit::Refused => last
+                    .filter(|line| line.ends_with(FILE_REFUSED))
+                    .unwrap_or_else(|| format!("{}: {REFUSED}", entry.id)),
                 _ => last_line(&text)
                     .or(last)
                     .unwrap_or_else(|| fallback.to_string()),
