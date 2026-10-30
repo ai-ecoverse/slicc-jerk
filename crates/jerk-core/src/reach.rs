@@ -36,6 +36,7 @@ fn public_v4(ip: Ipv4Addr) -> bool {
         || a >= 240
         || (a == 100 && (64..128).contains(&b))
         || (a == 192 && b == 0 && c == 0)
+        || (a == 192 && b == 88 && c == 99)
         || (a == 198 && (18..20).contains(&b));
     !(reserved
         || ip.is_private()

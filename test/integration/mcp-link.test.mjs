@@ -164,22 +164,27 @@ for (const name of ['127.0.0.1', 'localhost']) {
   });
 }
 
-test('a Teredo start URL is refused for a lease', async () => {
-  const stub = await idp({ expiresIn: 60 });
-  const { run, signIn } = host({
-    bb: {
-      url: `${teredo}/mcp`,
-      oauth: {
-        clientId: 'cid',
-        authServerMetadataUrl: `${stub.base}/.well-known/oauth-authorization-server`,
+for (const [name, start] of [
+  ['Teredo', teredo],
+  ['6to4 relay', 'https://192.88.99.1'],
+]) {
+  test(`a ${name} start URL is refused for a lease`, async () => {
+    const stub = await idp({ expiresIn: 60 });
+    const { run, signIn } = host({
+      bb: {
+        url: `${start}/mcp`,
+        oauth: {
+          clientId: 'cid',
+          authServerMetadataUrl: `${stub.base}/.well-known/oauth-authorization-server`,
+        },
       },
-    },
+    });
+    await signIn('mcp:bb');
+    const seen = stub.hits.length;
+    refused(await run(['mcp:bb', 'lease', '--via-link']), 'server URL');
+    assert.equal(stub.hits.length, seen);
   });
-  await signIn('mcp:bb');
-  const seen = stub.hits.length;
-  refused(await run(['mcp:bb', 'lease', '--via-link']), 'server URL');
-  assert.equal(stub.hits.length, seen);
-});
+}
 
 test('a public server cannot send a lease to a Teredo address', async () => {
   const stub = await idp({ expiresIn: 60 });
