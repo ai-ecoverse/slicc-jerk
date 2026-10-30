@@ -26,6 +26,7 @@ test('ci.yml is the one workflow, and the only caller of pipeline.yml at the dev
     '  ci:',
     '  native-check:',
     '  native-check-result:',
+    '  windows-launcher:',
     '  released:',
     '  binaries:',
     '  assets:',
@@ -165,4 +166,15 @@ test('one required check stands for both native-check legs, passing when they pa
   assert.doesNotMatch(result, /matrix|name:/);
   assert.match(result, /RESULT: \$\{\{ needs\.native-check\.result \}\}\n/);
   assert.match(result, /case "\$RESULT" in success\|skipped\) ;; \*\) exit 1 ;; esac/);
+});
+
+test('the Windows launcher tests run on pushes to main only, outside the required checks', () => {
+  const windows = job('windows-launcher');
+  assert.match(
+    windows,
+    /^ {4}if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'\n {4}runs-on: windows-latest\n/
+  );
+  assert.doesNotMatch(windows, /needs:/);
+  assert.match(windows, /\n {6}- run: node --test test\/integration\/launcher-args\.test\.mjs\n/);
+  assert.doesNotMatch(ci, /needs: \[?[^\n]*windows-launcher/);
 });
