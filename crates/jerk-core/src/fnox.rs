@@ -2,7 +2,7 @@ use crate::cli::{usage, Ctx, Io};
 use crate::config::{valid_env, Config, Entry, VerbChain};
 use crate::dispatch::{fetch, mint_token, parse_flags, pick, run_verb, vars, Flags};
 use crate::exit::Exit;
-use crate::run::{Opts, Outcome};
+use crate::run::{Opts, Outcome, REFUSED};
 use crate::{state, time, which};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -313,6 +313,10 @@ fn run_fnox(
         Outcome::Failed(e) => {
             let _ = writeln!(io.err, "jerk: cannot run fnox: {e}");
             Err(Exit::Unavailable)
+        }
+        Outcome::Refused => {
+            let _ = writeln!(io.err, "jerk: fnox: {REFUSED}");
+            Err(Exit::Refused)
         }
     }
 }

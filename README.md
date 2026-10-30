@@ -262,6 +262,7 @@ oauth = true
 - `get`, `list`, `scopes` and `user` also move on when a step fails: a non-zero exit, an empty or unparseable token, or a timeout.
 - `create` and `drop` run the first available step, and its result is final. jerk never starts a second sign-in.
 - When every `get` step fails, `get` exits 3 if some step ran, or 4 if none was available. The message lists each step and why it failed, but never a token or the CLI's output.
+- On Windows, jerk refuses unsafe characters in the path of, or an argument to, a `.cmd` or `.bat` launcher: it exits 1 without repeating the value, and no later step runs.
 - A token in any of the provider's `env` variables still wins over every step. `get --login`, `lease`, `sync`, `--via-link` and the "already signed in" check in `create` use the same chains.
 - An `[oauth]` block that no step names is used by `get` in place of any CLI steps, and by `create` and `drop` only when they have no command. Add `{ oauth = true }` to put it in a chain.
 - jerk's own OAuth grant is separate from the CLIs' sign-ins, so a chain can hold two different accounts. `jerk list` shows each step's CLI, such as `cf (missing), wrangler, oauth`.

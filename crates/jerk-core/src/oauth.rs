@@ -25,7 +25,7 @@ pub struct CdpResult(pub(crate) cdp_client::cdp::Cdp);
 pub enum CdpResult {}
 
 pub trait CdpOpener {
-    fn open(&self) -> Result<CdpResult, String>;
+    fn open(&self) -> Result<CdpResult, OAuthError>;
 }
 
 pub struct HttpPost<'a> {
@@ -365,10 +365,7 @@ pub fn oauth_create_with_vars(
                     exit: Exit::Unavailable,
                     message: "cannot bind the loopback port and no CDP browser available; pass --cdp or run slicc launch".into(),
                 })?;
-                let CdpResult(mut cdp_conn) = opener.open().map_err(|e| OAuthError {
-                    exit: Exit::Unavailable,
-                    message: e,
-                })?;
+                let CdpResult(mut cdp_conn) = opener.open()?;
                 intercept::run(
                     &mut cdp_conn,
                     &config,
@@ -412,10 +409,7 @@ pub fn oauth_create_with_vars(
                     message: "intercept mode needs a CDP browser; pass --cdp or run slicc launch"
                         .into(),
                 })?;
-                let CdpResult(mut cdp_conn) = opener.open().map_err(|e| OAuthError {
-                    exit: Exit::Unavailable,
-                    message: e,
-                })?;
+                let CdpResult(mut cdp_conn) = opener.open()?;
                 intercept::run(
                     &mut cdp_conn,
                     &config,

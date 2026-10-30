@@ -102,7 +102,7 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
         exists: &'a dyn Fn(&std::path::Path) -> bool,
     }
     impl oauth::CdpOpener for Opener<'_> {
-        fn open(&self) -> Result<oauth::CdpResult, String> {
+        fn open(&self) -> Result<oauth::CdpResult, oauth::OAuthError> {
             let ws_url = crate::browser_select::resolve_cdp_url(
                 self.cdp_url,
                 None,
@@ -110,9 +110,12 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                 self.runner,
                 self.exists,
                 &mut std::io::sink(),
-            )
-            .map_err(|e| e.message)?;
-            let cdp = cdp_client::cdp::Cdp::connect(&ws_url)?;
+            )?;
+            let unavailable = |message| oauth::OAuthError {
+                exit: Exit::Unavailable,
+                message,
+            };
+            let cdp = cdp_client::cdp::Cdp::connect(&ws_url).map_err(unavailable)?;
             Ok(oauth::CdpResult(cdp))
         }
     }
@@ -158,7 +161,7 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
             Ok(c) => c,
             Err(e) => {
                 let _ = writeln!(io.err, "jerk intercept: {e}");
-                return Exit::Unavailable;
+                return e.exit;
             }
         };
         let mut capture_config = config.clone();

@@ -1,6 +1,7 @@
 use crate::cli::{Ctx, Io};
 use crate::config::Entry;
 use crate::exit::Exit;
+use crate::run::REFUSED;
 use serde_json::{json, Value};
 use std::io::Write;
 
@@ -120,17 +121,20 @@ fn refuse(
                 out: &mut std::io::sink(),
                 err: &mut std::io::sink(),
             };
-            Some(
-                crate::dispatch::pick(
-                    entry,
-                    "create",
-                    chain,
-                    &entry.provider.params,
-                    ctx,
-                    &mut quiet,
-                )
-                .ok(),
-            )
+            let picked = crate::dispatch::pick(
+                entry,
+                "create",
+                chain,
+                &entry.provider.params,
+                ctx,
+                &mut quiet,
+            );
+            if matches!(picked, Err(Exit::Refused)) {
+                let message = format!("{}: {REFUSED}", entry.id);
+                let _ = writeln!(io.out, "{}", status(entry, message, &[]));
+                return Some(Exit::Refused);
+            }
+            Some(picked.ok())
         }
         _ => None,
     };
@@ -184,7 +188,7 @@ pub fn run(entry: &Entry, verb: &str, args: &[String], ctx: &mut Ctx<'_>, io: &m
     ctx.via_link = true;
     let mut out = Vec::new();
     let mut progress = Progress::new(io.out, verb == "create");
-    let code = {
+    let mut code = {
         let mut inner = Io {
             out: &mut out,
             err: &mut progress,
@@ -213,17 +217,20 @@ pub fn run(entry: &Entry, verb: &str, args: &[String], ctx: &mut Ctx<'_>, io: &m
         "lease" => status(entry, last.unwrap_or_else(|| fallback.to_string()), &[]),
         _ => {
             let extra = if verb == "create" && code == Exit::Ok {
-                crate::dispatch::details(entry, args, ctx)
+                crate::dispatch::details(entry, args, ctx).unwrap_or_else(|refused| {
+                    code = refused;
+                    Vec::new()
+                })
             } else {
                 Vec::new()
             };
-            status(
-                entry,
-                last_line(&text)
+            let message = match code {
+                Exit::Refused => format!("{}: {REFUSED}", entry.id),
+                _ => last_line(&text)
                     .or(last)
                     .unwrap_or_else(|| fallback.to_string()),
-                &extra,
-            )
+            };
+            status(entry, message, &extra)
         }
     };
     let _ = writeln!(io.out, "{doc}");

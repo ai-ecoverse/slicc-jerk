@@ -1,7 +1,12 @@
+use crate::paths::Os;
 use std::io::{BufRead, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+
+const LAUNCHER_REFUSED: &[char] = &['%', '&', '|', '<', '>', '^', '"', '!', '(', ')'];
+pub const REFUSED: &str =
+    "a .cmd or .bat launcher cannot take a character in its path or arguments";
 
 pub struct Opts<'a> {
     pub interactive: bool,
@@ -22,13 +27,41 @@ pub enum Outcome {
     },
     TimedOut,
     Failed(String),
+    Refused,
 }
 
 pub trait Runner {
     fn run(&self, program: &Path, args: &[String], opts: &Opts<'_>) -> Outcome;
 }
 
-pub struct Process;
+pub struct Process {
+    pub os: Os,
+}
+
+fn unsafe_text(text: &str) -> bool {
+    text.contains(|c: char| c.is_control() || LAUNCHER_REFUSED.contains(&c))
+}
+
+fn file_name(program: &str) -> &str {
+    program.rsplit(['/', '\\']).next().unwrap_or(program)
+}
+
+fn is_launcher(program: &str) -> bool {
+    file_name(program).split(':').any(|part| {
+        let part = part.trim_end_matches(['.', ' ']);
+        part.ends_with(".cmd") || part.ends_with(".bat")
+    })
+}
+
+pub fn launcher_refuses(os: Os, program: &Path, args: &[String]) -> bool {
+    let program = program.to_string_lossy().to_ascii_lowercase();
+    os == Os::Windows
+        && is_launcher(&program)
+        && (unsafe_text(&program)
+            || program.contains("::")
+            || file_name(&program).contains(':')
+            || args.iter().any(|arg| unsafe_text(arg)))
+}
 
 fn drain_lines(
     pipe: impl Read + Send + 'static,
@@ -74,6 +107,9 @@ fn drain_echo(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<S
 
 impl Runner for Process {
     fn run(&self, program: &Path, args: &[String], opts: &Opts<'_>) -> Outcome {
+        if launcher_refuses(self.os, program, args) {
+            return Outcome::Refused;
+        }
         let mut command = Command::new(program);
         command.args(args);
         for name in opts.remove_env {
