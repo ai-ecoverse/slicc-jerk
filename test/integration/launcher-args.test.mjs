@@ -168,7 +168,7 @@ get = { requires = ${JSON.stringify(path)}, run = [${JSON.stringify(path)}, "tok
   for (const [dir, file] of [
     ['left%right', 'tool.cmd'],
     ['left!right', 'tool.bat'],
-    ['left(right)', 'tool.cmd'],
+    ['left^right', 'tool.cmd'],
     ['plain', 'tool.cmd::$DATA'],
   ]) {
     const path = copy(dir, file);
@@ -177,9 +177,11 @@ get = { requires = ${JSON.stringify(path)}, run = [${JSON.stringify(path)}, "tok
     assert.ok(!`${res.stdout}${res.stderr}`.includes(path));
     assert.deepEqual(sb.calls(), []);
   }
-  const res = run(copy('with space', 'tool.cmd'));
-  assert.equal(res.status, 0, res.stderr);
-  assert.equal(res.stdout.trim(), 'tok-1');
+  for (const dir of ['with space', 'dir (x86)']) {
+    const res = run(copy(dir, 'tool.cmd'));
+    assert.equal(res.status, 0, `${dir}: ${res.stderr}`);
+    assert.equal(res.stdout.trim(), 'tok-1');
+  }
 });
 
 test('a program named like a script launcher runs unchanged off Windows', {

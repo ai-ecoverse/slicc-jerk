@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const LAUNCHER_REFUSED: &[char] = &['%', '&', '|', '<', '>', '^', '"', '!', '(', ')'];
+const PATH_REFUSED: &[char] = &['%', '"', '!', '^'];
 pub const REFUSED: &str =
     "a .cmd or .bat launcher cannot take a character in its path or arguments";
 
@@ -42,6 +43,10 @@ fn unsafe_text(text: &str) -> bool {
     text.contains(|c: char| c.is_control() || LAUNCHER_REFUSED.contains(&c))
 }
 
+fn unsafe_path(path: &str) -> bool {
+    path.contains(|c: char| c.is_control() || PATH_REFUSED.contains(&c))
+}
+
 fn file_name(program: &str) -> &str {
     program.rsplit(['/', '\\']).next().unwrap_or(program)
 }
@@ -57,7 +62,7 @@ pub fn launcher_refuses(os: Os, program: &Path, args: &[String]) -> bool {
     let program = program.to_string_lossy().to_ascii_lowercase();
     os == Os::Windows
         && is_launcher(&program)
-        && (unsafe_text(&program)
+        && (unsafe_path(&program)
             || program.contains("::")
             || file_name(&program).contains(':')
             || args.iter().any(|arg| unsafe_text(arg)))
