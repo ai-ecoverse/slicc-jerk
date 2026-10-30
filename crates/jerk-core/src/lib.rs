@@ -20,6 +20,7 @@ pub mod oauth;
 pub mod output;
 pub mod paste;
 pub mod paths;
+pub mod reach;
 pub mod run;
 pub mod sealed;
 pub mod source;

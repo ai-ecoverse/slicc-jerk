@@ -244,6 +244,12 @@ pub struct Entry {
     pub oauth_config: Option<OAuthConfig>,
 }
 
+impl Entry {
+    pub fn is_mcp(&self) -> bool {
+        self.provider.kind.as_deref() == Some("mcp") || self.id.starts_with("mcp:")
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     Error,

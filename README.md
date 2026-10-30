@@ -340,11 +340,14 @@ The npm package also carries `bin/jerk.wasm`, a `wasm32-wasip1` build that seven
 
 On the machine side, the slicc CLI runs jerk with `--via-link`. `create --via-link` prints progress and a final status as newline-delimited JSON and never prompts; it refuses `--force`, minted tokens and sign-ins that need a terminal. `lease --via-link` prints the lease, then a status. `drop --lease --via-link` prints a status; a CLI sign-out never runs over the link.
 
+Over the link, an `mcp:` lease is confined by address whenever it has to refresh a token. If the server's URL is on loopback, every hop must be loopback too. Otherwise every hop must be a public address: the ranges slicc always refuses are refused (loopback, private, link-local, unique-local, unspecified, multicast, CGNAT, documentation, Teredo and other special-use space), and NAT64 and 6to4 addresses count as the IPv4 address they embed. jerk checks the address each connection really uses, redirects included, ignores proxy settings, and refuses with exit 2. A URL-only lease names its token `MCP_TOKEN`.
+
 ## Security
 
 - **Printing tokens:** jerk prints a token only to a terminal or with `--reveal`, and never logs one. Errors never repeat tokens, codes, verifiers, `state`, config values or response bodies.
 - **Tokens at rest:** CLI providers' tokens stay in the CLI's own store, except a token a `create` with `keep = true` prints once or a key pasted into an `ask` create. jerk's own OAuth grants live in the OS keyring, or a 0600 file only when the config says so.
 - **URLs:** OAuth and discovery URLs must be https, except http on loopback, with no userinfo. A captured redirect must match `redirect_uri` exactly.
+- **The link:** a lease seven asks for over the link can't be pointed at the machine's own network; see [In SLICC](#in-slicc).
 - **Child processes:** provider CLIs run from argument lists, never a shell, and without the provider's token variables.
 
 ## `@ai-ecoverse/jerk-oauth`

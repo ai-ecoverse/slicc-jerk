@@ -73,6 +73,8 @@ pub trait OAuthHost: Send + Sync {
     fn http_post_json(&self, url: &str, body: &str) -> Result<String, String>;
     fn mcp_probe(&self, url: &str, body: &str) -> McpProbeResult;
     fn sleep(&self, secs: u64);
+    fn confine(&self, reach: crate::reach::Reach) -> Box<dyn OAuthHost>;
+    fn reachable(&self, url: &str) -> Result<(), String>;
 }
 
 pub struct McpProbeResult {
@@ -115,6 +117,12 @@ impl OAuthHost for NoOAuthHost {
         }
     }
     fn sleep(&self, _: u64) {}
+    fn confine(&self, _: crate::reach::Reach) -> Box<dyn OAuthHost> {
+        Box::new(NoOAuthHost)
+    }
+    fn reachable(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 pub(crate) fn accept_blocking(listener: &std::net::TcpListener) -> Option<std::net::TcpStream> {
