@@ -1,7 +1,7 @@
 use crate::exit::Exit;
 use crate::oauth::OAuthError;
 use crate::paths::Env;
-use crate::run::{Opts, Outcome, Runner};
+use crate::run::{Opts, Outcome, Runner, REFUSED};
 use crate::which;
 use std::io::Write;
 use std::path::Path;
@@ -36,6 +36,12 @@ pub fn resolve_cdp_url(
                 on_stderr: None,
             },
         );
+        if outcome == Outcome::Refused {
+            return Err(OAuthError {
+                exit: Exit::Refused,
+                message: REFUSED.into(),
+            });
+        }
         if let Outcome::Exited {
             code: 0, stdout, ..
         } = outcome

@@ -1,5 +1,5 @@
 use crate::cli::{usage, Ctx, Io};
-use crate::config::{parse_duration, parse_version, Entry, Verb, VerbChain};
+use crate::config::{parse_duration, parse_version, Entry, Lookup, Verb, VerbChain};
 use crate::exit::Exit;
 use crate::oauth;
 use crate::output::{choose, Shown};
@@ -107,6 +107,18 @@ fn step_requires<'a>(verb: &'a Verb, entry: &'a Entry) -> Option<&'a str> {
     verb.requires
         .as_deref()
         .or(entry.provider.requires.as_deref())
+}
+
+fn optional<T>(result: Result<T, Exit>) -> Result<Option<T>, Exit> {
+    match result {
+        Err(Exit::Refused) => Err(Exit::Refused),
+        other => Ok(other.ok()),
+    }
+}
+
+fn refused(entry: &Entry, code: Exit, io: &mut Io<'_>) -> Exit {
+    let _ = writeln!(io.err, "jerk: {}: {REFUSED}", entry.id);
+    code
 }
 
 fn program_for(
@@ -438,26 +450,29 @@ fn param_gate(verb: &Verb, vars: &Vars) -> Option<String> {
     None
 }
 
-fn unavailable(entry: &Entry, verb: &Verb, vars: &Vars, ctx: &Ctx<'_>) -> Option<String> {
+fn unavailable(
+    entry: &Entry,
+    verb: &Verb,
+    vars: &Vars,
+    ctx: &Ctx<'_>,
+) -> Result<Option<String>, Exit> {
     if let Some(why) = param_gate(verb, vars) {
-        return Some(why);
+        return Ok(Some(why));
     }
-    if verb.oauth {
-        return None;
+    if verb.oauth || verb.run.is_none() {
+        return Ok(None);
     }
-    verb.run.as_ref()?;
     let command = step_requires(verb, entry).unwrap_or_default();
     if which::find(command, ctx.env, ctx.exists).is_none() {
-        return Some("not on PATH".to_string());
+        return Ok(Some("not on PATH".to_string()));
     }
     let mut err = Vec::new();
     let mut quiet = Io {
         out: &mut std::io::sink(),
         err: &mut err,
     };
-    check_version_for(entry, command, verb, ctx, &mut quiet)
-        .err()
-        .map(|_| reason(entry, verb, &err))
+    let checked = optional(check_version_for(entry, command, verb, ctx, &mut quiet))?;
+    Ok(checked.is_none().then(|| reason(entry, verb, &err)))
 }
 
 fn report(entry: &Entry, name: &str, tried: &[(String, String)], io: &mut Io<'_>) {
@@ -488,7 +503,8 @@ fn run_chain<T>(
     let mut tried = Vec::new();
     let mut ran = false;
     for verb in chain.iter() {
-        if let Some(why) = unavailable(entry, verb, vars, ctx) {
+        let why = unavailable(entry, verb, vars, ctx).map_err(|code| refused(entry, code, io))?;
+        if let Some(why) = why {
             tried.push((step_name(entry, verb), why));
             continue;
         }
@@ -541,7 +557,7 @@ pub fn pick(
     }
     let mut tried = Vec::new();
     for verb in chain.iter() {
-        match unavailable(entry, verb, vars, ctx) {
+        match unavailable(entry, verb, vars, ctx).map_err(|code| refused(entry, code, io))? {
             None => {
                 return Ok(Verb {
                     min_version: None,
@@ -918,10 +934,12 @@ pub fn whoami(
     vars: &Vars,
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
-) -> Option<String> {
-    let chain = entry.provider.user.as_ref()?;
+) -> Result<Option<String>, Exit> {
+    let Some(chain) = entry.provider.user.as_ref() else {
+        return Ok(None);
+    };
     let scrub = token.source != "env";
-    run_chain(
+    optional(run_chain(
         entry,
         "user",
         chain,
@@ -939,15 +957,14 @@ pub fn whoami(
             };
             value.filter(|v| !v.is_empty()).ok_or(Exit::Error)
         },
-    )
-    .ok()
+    ))
 }
 
 pub fn details(
     entry: &Entry,
     args: &[String],
     ctx: &Ctx<'_>,
-) -> Vec<(&'static str, serde_json::Value)> {
+) -> Result<Vec<(&'static str, serde_json::Value)>, Exit> {
     let mut quiet = Io {
         out: &mut std::io::sink(),
         err: &mut std::io::sink(),
@@ -960,14 +977,15 @@ pub fn details(
     )
     .unwrap_or_default();
     let vars = vars(entry, &flags).unwrap_or_default();
-    let Ok(token) = fetch_from(entry, &vars, false, ctx, &mut quiet) else {
-        return Vec::new();
+    let Some(token) = optional(fetch_from(entry, &vars, false, ctx, &mut quiet))? else {
+        return Ok(Vec::new());
     };
     let scopes = token
         .scope
         .clone()
-        .or_else(|| granted(entry, &token, &vars, ctx, &mut quiet));
-    let user = whoami(entry, &token, &vars, ctx, &mut quiet);
+        .map(|scopes| Ok(Some(scopes)))
+        .unwrap_or_else(|| granted(entry, &token, &vars, ctx, &mut quiet))?;
+    let user = whoami(entry, &token, &vars, ctx, &mut quiet)?;
     let mut out = Vec::new();
     if let Some(user) = user {
         out.push(("user", json!(user)));
@@ -978,7 +996,7 @@ pub fn details(
     if let Some(at) = token.expires_at {
         out.push(("expires_at", json!(time::rfc3339(at))));
     }
-    out
+    Ok(out)
 }
 
 pub fn granted(
@@ -987,10 +1005,12 @@ pub fn granted(
     vars: &Vars,
     ctx: &Ctx<'_>,
     io: &mut Io<'_>,
-) -> Option<String> {
-    let chain = entry.provider.scopes.as_ref()?;
+) -> Result<Option<String>, Exit> {
+    let Some(chain) = entry.provider.scopes.as_ref() else {
+        return Ok(None);
+    };
     let scrub = token.source != "env";
-    run_chain(
+    optional(run_chain(
         entry,
         "scopes",
         chain,
@@ -1011,8 +1031,7 @@ pub fn granted(
             };
             scopes.ok_or(Exit::Error)
         },
-    )
-    .ok()
+    ))
 }
 
 pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
@@ -1051,7 +1070,10 @@ pub fn get(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -
         let scopes_now = if token.scope.is_some() {
             token.scope.clone()
         } else {
-            granted(entry, &token, &vars, ctx, io)
+            match granted(entry, &token, &vars, ctx, io) {
+                Ok(scopes) => scopes,
+                Err(code) => return code,
+            }
         };
         if jerk_oauth::scopes::scopes_satisfied(scopes_now.as_deref(), requested) {
             break (token, scopes_now);
@@ -1263,6 +1285,10 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
             err: &mut held,
         },
     );
+    if matches!(step, Err(Exit::Refused)) {
+        let _ = io.err.write_all(&held);
+        return Exit::Refused;
+    }
     if let Some(verb) = step
         .as_ref()
         .ok()
@@ -1273,7 +1299,10 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
             err: &mut std::io::sink(),
         };
         let signed_in = match verb.ask {
-            Some(_) => fetch(entry, &vars, ctx, &mut quiet).is_ok(),
+            Some(_) => match optional(fetch(entry, &vars, ctx, &mut quiet)) {
+                Ok(found) => found.is_some(),
+                Err(code) => return refused(entry, code, io),
+            },
             None => kept(entry, &vars, ctx).is_some(),
         };
         if verb.keep && !flags.has("--force") && signed_in {
@@ -1291,12 +1320,18 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
             out: &mut std::io::sink(),
             err: &mut std::io::sink(),
         };
-        if let Ok(token) = fetch(entry, &vars, ctx, &mut quiet) {
+        let found = match optional(fetch(entry, &vars, ctx, &mut quiet)) {
+            Ok(found) => found,
+            Err(code) => return refused(entry, code, io),
+        };
+        if let Some(token) = found {
             let covered = match requested_scope(&flags) {
-                Some(requested) => jerk_oauth::scopes::scopes_satisfied(
-                    granted(entry, &token, &vars, ctx, &mut quiet).as_deref(),
-                    requested,
-                ),
+                Some(requested) => match granted(entry, &token, &vars, ctx, &mut quiet) {
+                    Ok(scopes) => {
+                        jerk_oauth::scopes::scopes_satisfied(scopes.as_deref(), requested)
+                    }
+                    Err(code) => return refused(entry, code, io),
+                },
                 None => true,
             };
             if covered {
@@ -1524,22 +1559,8 @@ fn check_version_for(
     }
 }
 
-fn lookup_id(
-    entry: &Entry,
-    verb: &Verb,
-    token: &str,
-    vars: &Vars,
-    ctx: &Ctx<'_>,
-    io: &mut Io<'_>,
-) -> Option<String> {
-    let lookup = verb.lookup.as_ref()?;
-    let probe = Verb {
-        run: Some(lookup.run.clone()),
-        requires: verb.requires.clone(),
-        ..Verb::default()
-    };
-    let ran = run_verb(entry, "lookup", &probe, vars, false, ctx, io).ok()?;
-    let doc: serde_json::Value = serde_json::from_str(ran.stdout.trim()).ok()?;
+fn listed_id(lookup: &Lookup, stdout: &str, token: &str) -> Option<String> {
+    let doc: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
     let items = doc.pointer(&lookup.items)?.as_array()?;
     items
         .iter()
@@ -1549,6 +1570,26 @@ fn lookup_id(
                 .is_some_and(|p| !p.is_empty() && token.starts_with(p))
         })
         .find_map(|item| item.pointer(&lookup.id)?.as_str().map(String::from))
+}
+
+fn lookup_id(
+    entry: &Entry,
+    verb: &Verb,
+    token: &str,
+    vars: &Vars,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<Option<String>, Exit> {
+    let Some(lookup) = verb.lookup.as_ref() else {
+        return Ok(None);
+    };
+    let probe = Verb {
+        run: Some(lookup.run.clone()),
+        requires: verb.requires.clone(),
+        ..Verb::default()
+    };
+    let ran = optional(run_verb(entry, "lookup", &probe, vars, false, ctx, io))?;
+    Ok(ran.and_then(|ran| listed_id(lookup, &ran.stdout, token)))
 }
 
 pub fn mint_token(
@@ -1568,8 +1609,17 @@ pub fn mint_token(
         .id
         .as_deref()
         .and_then(|p| extract::json(&ran.stdout, p))
-        .and_then(|v| v.as_str().map(String::from))
-        .or_else(|| lookup_id(entry, verb, &token, vars, ctx, io));
+        .and_then(|v| v.as_str().map(String::from));
+    let id = match id {
+        Some(id) => Some(id),
+        None => lookup_id(entry, verb, &token, vars, ctx, io).inspect_err(|_| {
+            let _ = writeln!(
+                io.err,
+                "jerk: {}: a token was minted, but it is not shown; revoke it by hand",
+                entry.id
+            );
+        })?,
+    };
     if verb.keep {
         let _ = keep_minted(entry, verb, vars, &token, &ran.stdout, ctx, io);
     }

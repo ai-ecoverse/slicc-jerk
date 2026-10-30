@@ -4,7 +4,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const LAUNCHER_REFUSED: &[char] = &['%', '&', '|', '<', '>', '^', '"', '!', '(', ')'];
-pub const REFUSED: &str = "a .cmd or .bat launcher cannot take a character in its arguments";
+pub const REFUSED: &str =
+    "a .cmd or .bat launcher cannot take a character in its path or arguments";
 
 pub struct Opts<'a> {
     pub interactive: bool,
@@ -34,17 +35,28 @@ pub trait Runner {
 
 pub struct Process;
 
-fn is_launcher(program: &Path) -> bool {
-    let name = program.to_string_lossy().to_ascii_lowercase();
-    let name = name.trim_end_matches(['.', ' ']);
-    name.ends_with(".cmd") || name.ends_with(".bat")
+fn unsafe_text(text: &str) -> bool {
+    text.contains(|c: char| c.is_control() || LAUNCHER_REFUSED.contains(&c))
+}
+
+fn file_name(program: &str) -> &str {
+    program.rsplit(['/', '\\']).next().unwrap_or(program)
+}
+
+fn is_launcher(program: &str) -> bool {
+    file_name(program).split(':').any(|part| {
+        let part = part.trim_end_matches(['.', ' ']);
+        part.ends_with(".cmd") || part.ends_with(".bat")
+    })
 }
 
 pub fn launcher_refuses(program: &Path, args: &[String]) -> bool {
-    is_launcher(program)
-        && args
-            .iter()
-            .any(|arg| arg.contains(|c: char| c.is_control() || LAUNCHER_REFUSED.contains(&c)))
+    let program = program.to_string_lossy().to_ascii_lowercase();
+    is_launcher(&program)
+        && (unsafe_text(&program)
+            || program.contains("::")
+            || file_name(&program).contains(':')
+            || args.iter().any(|arg| unsafe_text(arg)))
 }
 
 fn drain_lines(
