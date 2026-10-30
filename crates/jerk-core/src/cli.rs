@@ -82,7 +82,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
     let mut ctx = Ctx {
         env: &env,
         exists: &which::is_file,
-        runner: &Process,
+        runner: &Process { os: env.os },
         now: crate::time::now(),
         stdin_terminal: stdin.is_terminal(),
         stdout_terminal: std::io::stdout().is_terminal(),

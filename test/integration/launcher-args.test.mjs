@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { sandbox } from './helpers.mjs';
 
-const launcher = process.platform === 'win32' ? 'demo' : 'demo.cmd';
+const windows = { skip: process.platform !== 'win32' };
+const launcher = 'demo';
+const place = (sb, name, path) =>
+  writeFileSync(path, `@"${process.execPath}" "${join(sb.dir, 'bin', `${name}.js`)}" %*\r\n`);
 const config = `[providers.demo]
 env = ["DEMO_TOKEN"]
 requires = "${launcher}"
@@ -13,22 +16,26 @@ get = { run = ["${launcher}", "token"] }
 create = { run = ["${launcher}", "{value}"], interactive = true, link = true }
 `;
 
-test('unsafe characters in a link value are refused before a script launcher starts', () => {
-  const sb = sandbox();
-  sb.script(launcher, 'process.exit(0);');
-  sb.writeUser(config);
-  const create = (value) => sb.jerk(['demo', 'create', '--via-link', '-p', `value=${value}`]);
-  for (const c of ['%', '&', '|', '<', '>', '^', '"', '!', '(', ')', '\n']) {
-    const value = `left${c}right`;
-    const res = create(value);
-    assert.equal(res.status, 1, JSON.stringify(value));
-    assert.ok(!`${res.stdout}${res.stderr}`.includes(value), JSON.stringify(value));
-    assert.ok(sb.calls().every((call) => !call.args.includes(value)));
+test(
+  'unsafe characters in a link value are refused before a script launcher starts',
+  windows,
+  () => {
+    const sb = sandbox();
+    sb.script(launcher, 'process.exit(0);');
+    sb.writeUser(config);
+    const create = (value) => sb.jerk(['demo', 'create', '--via-link', '-p', `value=${value}`]);
+    for (const c of ['%', '&', '|', '<', '>', '^', '"', '!', '(', ')', '\n']) {
+      const value = `left${c}right`;
+      const res = create(value);
+      assert.equal(res.status, 1, JSON.stringify(value));
+      assert.ok(!`${res.stdout}${res.stderr}`.includes(value), JSON.stringify(value));
+      assert.ok(sb.calls().every((call) => !call.args.includes(value)));
+    }
+    const res = create('my project');
+    assert.equal(res.status, 0, res.stdout);
+    assert.ok(sb.calls().some((call) => call.args.includes('my project')));
   }
-  const res = create('my project');
-  assert.equal(res.status, 0, res.stdout);
-  assert.ok(sb.calls().some((call) => call.args.includes('my project')));
-});
+);
 
 const checked = `[providers.demo]
 env = ["DEMO_TOKEN"]
@@ -38,7 +45,7 @@ get = { run = ["${launcher}", "token", "{value}"] }
 create = { run = ["${launcher}", "login"], interactive = true, link = true }
 `;
 
-test('a refused check stops the create', () => {
+test('a refused check stops the create', windows, () => {
   const sb = sandbox();
   sb.script(launcher, 'process.exit(1);');
   sb.writeUser(checked);
@@ -48,7 +55,7 @@ test('a refused check stops the create', () => {
   assert.deepEqual(sb.calls(), []);
 });
 
-test('a refused lookup stops the mint', () => {
+test('a refused lookup stops the mint', windows, () => {
   const sb = sandbox();
   sb.script(launcher, `process.stdout.write('tok-1');`);
   sb.writeUser(`[providers.demo]
@@ -68,7 +75,7 @@ create = { run = ["${launcher}", "mint"], parse = "text", lookup = { run = ["${l
   );
 });
 
-test('a refused detail fails the create', () => {
+test('a refused detail fails the create', windows, () => {
   const sb = sandbox();
   const signed = join(sb.dir, 'signed');
   sb.script(
@@ -94,7 +101,7 @@ create = { run = ["${launcher}", "login"], interactive = true, link = true }
   );
 });
 
-test('a refused step ends the chain', () => {
+test('a refused step ends the chain', windows, () => {
   const sb = sandbox();
   sb.script(launcher, 'process.exit(1);');
   sb.script('second', `process.stdout.write('tok-1');`);
@@ -117,14 +124,14 @@ run = ["second", "token"]
   assert.deepEqual(sb.calls(), []);
 });
 
-test('a refused version check ends the chain', { skip: process.platform === 'win32' }, () => {
+test('a refused version check ends the chain', windows, () => {
   const sb = sandbox();
   sb.script('first', 'process.exit(0);');
   sb.script('second', `process.stdout.write('tok-1');`);
   const odd = join(sb.dir, 'left&right');
   mkdirSync(odd);
   const path = join(odd, 'first.cmd');
-  copyFileSync(join(sb.dir, 'bin', 'first'), path);
+  place(sb, 'first', path);
   sb.writeUser(`[providers.demo]
 env = ["DEMO_TOKEN"]
 
@@ -142,15 +149,13 @@ run = ["second", "token"]
   assert.deepEqual(sb.calls(), []);
 });
 
-test('unsafe characters in a launcher path are refused', {
-  skip: process.platform === 'win32',
-}, () => {
+test('unsafe characters in a launcher path are refused', windows, () => {
   const sb = sandbox();
   sb.script('tool', `process.stdout.write('tok-1');`);
   const copy = (dir, file) => {
     mkdirSync(join(sb.dir, dir), { recursive: true });
     const path = join(sb.dir, dir, file);
-    copyFileSync(join(sb.dir, 'bin', 'tool'), path);
+    place(sb, 'tool', join(sb.dir, dir, file.split(':')[0]));
     return path;
   };
   const run = (path) => {
@@ -173,4 +178,22 @@ get = { requires = ${JSON.stringify(path)}, run = [${JSON.stringify(path)}, "tok
   const res = run(copy('with space', 'tool.cmd'));
   assert.equal(res.status, 0, res.stderr);
   assert.equal(res.stdout.trim(), 'tok-1');
+});
+
+test('a program named like a script launcher runs unchanged off Windows', {
+  skip: !windows.skip,
+}, () => {
+  const sb = sandbox();
+  sb.script('demo.cmd', 'process.exit(0);');
+  sb.writeUser(`[providers.demo]
+env = ["DEMO_TOKEN"]
+requires = "demo.cmd"
+params = { value = "" }
+get = { run = ["demo.cmd", "token"] }
+create = { run = ["demo.cmd", "{value}"], interactive = true, link = true }
+`);
+  const value = 'left&right%"(x)';
+  const res = sb.jerk(['demo', 'create', '--via-link', '-p', `value=${value}`]);
+  assert.equal(res.status, 0, res.stdout);
+  assert.ok(sb.calls().some((call) => call.args.includes(value)));
 });

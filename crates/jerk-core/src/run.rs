@@ -1,3 +1,4 @@
+use crate::paths::Os;
 use std::io::{BufRead, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -33,7 +34,9 @@ pub trait Runner {
     fn run(&self, program: &Path, args: &[String], opts: &Opts<'_>) -> Outcome;
 }
 
-pub struct Process;
+pub struct Process {
+    pub os: Os,
+}
 
 fn unsafe_text(text: &str) -> bool {
     text.contains(|c: char| c.is_control() || LAUNCHER_REFUSED.contains(&c))
@@ -50,9 +53,10 @@ fn is_launcher(program: &str) -> bool {
     })
 }
 
-pub fn launcher_refuses(program: &Path, args: &[String]) -> bool {
+pub fn launcher_refuses(os: Os, program: &Path, args: &[String]) -> bool {
     let program = program.to_string_lossy().to_ascii_lowercase();
-    is_launcher(&program)
+    os == Os::Windows
+        && is_launcher(&program)
         && (unsafe_text(&program)
             || program.contains("::")
             || file_name(&program).contains(':')
@@ -103,7 +107,7 @@ fn drain_echo(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<S
 
 impl Runner for Process {
     fn run(&self, program: &Path, args: &[String], opts: &Opts<'_>) -> Outcome {
-        if launcher_refuses(program, args) {
+        if launcher_refuses(self.os, program, args) {
             return Outcome::Refused;
         }
         let mut command = Command::new(program);
