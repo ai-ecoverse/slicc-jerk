@@ -157,6 +157,7 @@ pub fn drop_lease(entry: &Entry, flags: &Flags, ctx: &mut Ctx<'_>, io: &mut Io<'
             "jerk: {}: lease {lease_id} holds a token jerk did not mint; it lives on until it expires or the CLI signs out",
             entry.id
         );
+        ctx.revoked = Some(false);
         return Exit::Ok;
     };
     let mut lease_flags = Flags::default();
@@ -195,6 +196,7 @@ pub fn drop_lease(entry: &Entry, flags: &Flags, ctx: &mut Ctx<'_>, io: &mut Io<'
         "jerk: {}: revoked the token behind {lease_id}",
         entry.id
     );
+    ctx.revoked = Some(true);
     Exit::Ok
 }
 

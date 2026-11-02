@@ -68,6 +68,7 @@ pub struct Ctx<'a> {
     pub sealed: Option<&'a dyn crate::sealed::Sealed>,
     pub sleep: &'a dyn Fn(u64),
     pub seven_origin: Option<String>,
+    pub revoked: Option<bool>,
 }
 
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
@@ -96,6 +97,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
         sealed: None,
         sleep: &|secs| std::thread::sleep(std::time::Duration::from_secs(secs)),
         seven_origin: None,
+        revoked: None,
     };
     run_with(args, &mut ctx, &mut Io { out, err })
 }
