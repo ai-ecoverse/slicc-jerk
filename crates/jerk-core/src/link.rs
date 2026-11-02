@@ -221,6 +221,10 @@ pub fn run(entry: &Entry, verb: &str, args: &[String], ctx: &mut Ctx<'_>, io: &m
                     code = refused;
                     Vec::new()
                 })
+            } else if code == Exit::Ok {
+                ctx.revoked
+                    .map(|revoked| vec![("revoked", Value::Bool(revoked))])
+                    .unwrap_or_default()
             } else {
                 Vec::new()
             };

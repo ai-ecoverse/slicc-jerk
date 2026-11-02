@@ -76,3 +76,67 @@ test('a --via-link request for an unknown provider is still a link status', () =
   assert.equal(res.stderr, '');
   assert.deepEqual(JSON.parse(res.stdout), { provider: 'nope', message: 'unknown provider nope' });
 });
+
+function minter(sb, drop) {
+  sb.writeUser(
+    `[providers.mint]\nenv = ["MINT_TOKEN"]\nrequires = "mint"\nlease_via = "create"\nget = { run = ["mint", "token"] }\ncreate = { run = ["mint", "create"], parse = "json:/token", id = "json:/id" }\n${drop}`
+  );
+  sb.script(
+    'mint',
+    `if (args[0] === 'create') process.stdout.write(JSON.stringify({ token: 'fake-mint-token', id: 'tok-1' }));
+if (args[0] === 'revoke') process.exit(args[1] === 'tok-1' ? Number(process.env.MINT_REVOKE_EXIT || 0) : 9);`
+  );
+  const lease = sb.jerk(['mint', 'lease', '--via-link']);
+  assert.equal(lease.status, 0, lease.stdout + lease.stderr);
+  return ndjson(lease.stdout)[0].lease_id;
+}
+
+test('drop --lease --via-link reports revoked true after the drop verb ran', () => {
+  const sb = sandbox();
+  const id = minter(sb, 'drop = { run = ["mint", "revoke", "{id}"] }\n');
+  const drop = sb.jerk(['mint', 'drop', '--lease', '--via-link'], { FNOX_LEASE_ID: id });
+  assert.equal(drop.status, 0, drop.stdout + drop.stderr);
+  assert.equal(ndjson(drop.stdout).at(-1).revoked, true);
+  assert.ok(sb.calls().some((c) => c.args[0] === 'revoke'));
+  const plain = sb.jerk(['mint', 'drop', '--lease'], { FNOX_LEASE_ID: id });
+  assert.equal(plain.status, 0);
+  assert.equal(plain.stdout, '');
+});
+
+test('drop --lease --via-link reports revoked false when nothing upstream was revoked', () => {
+  const sb = sandbox();
+  const id = minter(sb, 'drop = { run = ["mint", "revoke", "{id}"] }\n');
+  const first = sb.jerk(['mint', 'drop', '--lease'], { FNOX_LEASE_ID: id });
+  assert.equal(first.status, 0, first.stderr);
+  const again = sb.jerk(['mint', 'drop', '--lease', '--via-link'], { FNOX_LEASE_ID: id });
+  assert.equal(again.status, 0, again.stdout);
+  assert.equal(ndjson(again.stdout).at(-1).revoked, false);
+  const unknown = sb.jerk(['mint', 'drop', '--lease', '--via-link'], { FNOX_LEASE_ID: 'jerk-x' });
+  assert.equal(ndjson(unknown.stdout).at(-1).revoked, false);
+  sb.script(
+    'gh',
+    `if (args[0] === 'auth' && args[1] === 'token') process.stdout.write(${JSON.stringify(`${TOKEN}\n`)});`
+  );
+  const read = ndjson(sb.jerk(['github', 'lease', '--via-link']).stdout)[0].lease_id;
+  const gh = sb.jerk(['github', 'drop', '--lease', '--via-link'], { FNOX_LEASE_ID: read });
+  assert.equal(gh.status, 0, gh.stdout);
+  assert.equal(ndjson(gh.stdout).at(-1).revoked, false);
+});
+
+test('drop --lease --via-link has no revoked field when the drop fails or is missing', () => {
+  const sb = sandbox();
+  const id = minter(sb, 'drop = { run = ["mint", "revoke", "{id}"] }\n');
+  const failed = sb.jerk(['mint', 'drop', '--lease', '--via-link'], {
+    FNOX_LEASE_ID: id,
+    MINT_REVOKE_EXIT: '1',
+  });
+  assert.notEqual(failed.status, 0);
+  assert.equal('revoked' in ndjson(failed.stdout).at(-1), false);
+  const retry = sb.jerk(['mint', 'drop', '--lease', '--via-link'], { FNOX_LEASE_ID: id });
+  assert.equal(ndjson(retry.stdout).at(-1).revoked, true);
+  const bare = sandbox();
+  const kept = minter(bare, '');
+  const missing = bare.jerk(['mint', 'drop', '--lease', '--via-link'], { FNOX_LEASE_ID: kept });
+  assert.equal(missing.status, 5, missing.stdout);
+  assert.equal('revoked' in ndjson(missing.stdout).at(-1), false);
+});
