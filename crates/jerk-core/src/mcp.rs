@@ -253,6 +253,7 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         io,
         &entry.id,
         ctx.env,
+        ctx.now,
     );
     if client_id.is_empty() {
         return Exit::Usage;
@@ -700,6 +701,7 @@ pub fn test_save_client_record(
     redirect_uris: &[String],
     authorization_server: &str,
     scope: Option<&str>,
+    confidential: bool,
     env: &crate::paths::Env,
 ) {
     save_client_record(
@@ -708,6 +710,7 @@ pub fn test_save_client_record(
         redirect_uris,
         authorization_server,
         scope,
+        confidential,
         env,
     )
 }
@@ -720,8 +723,17 @@ pub fn test_load_matching_client(
     redirect_uri: &str,
     authorization_server: &str,
     scope: Option<&str>,
+    now: u64,
 ) -> Option<(String, Option<String>)> {
-    load_matching_client(info, env, host, redirect_uri, authorization_server, scope)
+    load_matching_client(
+        info,
+        env,
+        host,
+        redirect_uri,
+        authorization_server,
+        scope,
+        now,
+    )
 }
 
 #[cfg(all(test, jerk_unit))]
@@ -734,8 +746,14 @@ pub fn test_resolve_client(
     io: &mut Io<'_>,
     id: &str,
     env: &crate::paths::Env,
+    now: u64,
 ) -> (String, Option<String>) {
-    resolve_client(info, as_meta, host, scope, redirect_uri, io, id, env)
+    resolve_client(info, as_meta, host, scope, redirect_uri, io, id, env, now)
+}
+
+#[cfg(all(test, jerk_unit))]
+pub fn test_secret_expires_at(raw: Option<u64>) -> Option<u64> {
+    secret_expires_at(raw)
 }
 
 #[cfg(all(test, jerk_unit))]
@@ -820,6 +838,7 @@ fn save_client_record(
     redirect_uris: &[String],
     authorization_server: &str,
     scope: Option<&str>,
+    confidential: bool,
     env: &crate::paths::Env,
 ) {
     let dir = env.state_dir().join("mcp-clients");
@@ -829,6 +848,7 @@ fn save_client_record(
         "redirect_uris": redirect_uris,
         "authorization_server": authorization_server,
         "registration": "dcr",
+        "confidential": confidential,
     });
     if let Some(s) = scope {
         data.as_object_mut()
@@ -837,6 +857,17 @@ fn save_client_record(
     }
     let path = client_cache_path(id, env);
     let _ = std::fs::write(&path, data.to_string());
+}
+
+fn remove_client_record(id: &str, env: &crate::paths::Env) {
+    let _ = std::fs::remove_file(client_cache_path(id, env));
+}
+
+fn secret_expires_at(raw: Option<u64>) -> Option<u64> {
+    match raw {
+        Some(0) | None => None,
+        Some(ts) => Some(ts),
+    }
 }
 
 fn save_client_id_only(id: &str, client_id: &str, env: &crate::paths::Env) {
@@ -874,6 +905,7 @@ fn load_matching_client(
     redirect_uri: &str,
     authorization_server: &str,
     scope: Option<&str>,
+    now: u64,
 ) -> Option<(String, Option<String>)> {
     let path = client_cache_path(&info.id, env);
     let text = std::fs::read_to_string(path).ok()?;
@@ -895,13 +927,24 @@ fn load_matching_client(
     if scope_key(stored_scope) != scope_key(scope) {
         return None;
     }
-    let secret = host
-        .grants(None)
-        .get(&format!("{}:client", info.id), "dcr")
-        .and_then(|g| {
-            let tied = g.fields.get("client_id").map(String::as_str) == Some(cid.as_str());
-            tied.then(|| g.access_token.clone()).flatten()
-        });
+    let confidential = map
+        .get("confidential")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let grant = host.grants(None).get(&format!("{}:client", info.id), "dcr");
+    let tied = grant
+        .as_ref()
+        .filter(|g| g.fields.get("client_id").map(String::as_str) == Some(cid.as_str()));
+    if tied
+        .and_then(|g| g.expires_at)
+        .is_some_and(|exp| now >= exp)
+    {
+        return None;
+    }
+    let secret = tied.and_then(|g| g.access_token.clone());
+    if confidential && secret.is_none() {
+        return None;
+    }
     Some((cid, secret))
 }
 
@@ -1146,6 +1189,7 @@ fn resolve_client(
     io: &mut Io<'_>,
     id: &str,
     env: &crate::paths::Env,
+    now: u64,
 ) -> (String, Option<String>) {
     let iss_supported = as_meta.authorization_response_iss_parameter_supported;
     if info.client_registration.as_deref() == Some("cimd")
@@ -1166,6 +1210,7 @@ fn resolve_client(
             redirect_uri,
             &as_meta.issuer,
             scope.as_deref(),
+            now,
         ) {
             return matched;
         }
@@ -1178,31 +1223,45 @@ fn resolve_client(
                 Ok(ci) => {
                     let _ = writeln!(io.err, "jerk: {id}: registered client {}", ci.client_id);
                     let uris = [redirect_uri.to_string()];
-                    save_client_record(
-                        id,
-                        &ci.client_id,
-                        &uris,
-                        &as_meta.issuer,
-                        scope.as_deref(),
-                        env,
-                    );
                     let grants = host.grants(None);
                     let client_grant = format!("{id}:client");
                     if let Some(ref secret) = ci.client_secret {
                         let mut fields = std::collections::BTreeMap::new();
                         fields.insert("client_id".into(), ci.client_id.clone());
                         let cg = crate::grants::Grant {
-                            provider: client_grant,
+                            provider: client_grant.clone(),
                             user: "dcr".into(),
                             refresh_token: String::new(),
                             access_token: Some(secret.clone()),
-                            expires_at: None,
+                            expires_at: secret_expires_at(ci.client_secret_expires_at),
                             scope: None,
                             fields,
                         };
-                        let _ = grants.store(&cg);
+                        if let Err(e) = grants.store(&cg) {
+                            let _ = writeln!(io.err, "jerk: {id}: cannot store client secret: {e}");
+                            remove_client_record(id, env);
+                        } else {
+                            save_client_record(
+                                id,
+                                &ci.client_id,
+                                &uris,
+                                &as_meta.issuer,
+                                scope.as_deref(),
+                                true,
+                                env,
+                            );
+                        }
                     } else {
                         let _ = grants.remove(&client_grant, "dcr");
+                        save_client_record(
+                            id,
+                            &ci.client_id,
+                            &uris,
+                            &as_meta.issuer,
+                            scope.as_deref(),
+                            false,
+                            env,
+                        );
                     }
                     return (ci.client_id, ci.client_secret);
                 }
