@@ -470,7 +470,7 @@ fn complete_auth(
                     return err(io, &entry.id, &format!("cannot store grant: {e}"));
                 }
                 let uris = [redirect_uri.to_string()];
-                save_client_record(&entry.id, client_id, &uris, ctx.env);
+                save_client_record(&entry.id, client_id, &uris, &as_meta.issuer, scope, ctx.env);
                 let _ = writeln!(io.out, "{}: signed in", entry.id);
                 Exit::Ok
             }
@@ -700,9 +700,18 @@ pub fn test_save_client_record(
     id: &str,
     client_id: &str,
     redirect_uris: &[String],
+    authorization_server: &str,
+    scope: Option<&str>,
     env: &crate::paths::Env,
 ) {
-    save_client_record(id, client_id, redirect_uris, env)
+    save_client_record(
+        id,
+        client_id,
+        redirect_uris,
+        authorization_server,
+        scope,
+        env,
+    )
 }
 
 #[cfg(all(test, jerk_unit))]
@@ -711,8 +720,10 @@ pub fn test_load_matching_client(
     env: &crate::paths::Env,
     host: &dyn crate::oauth::OAuthHost,
     redirect_uri: &str,
+    authorization_server: &str,
+    scope: Option<&str>,
 ) -> Option<(String, Option<String>)> {
-    load_matching_client(info, env, host, redirect_uri)
+    load_matching_client(info, env, host, redirect_uri, authorization_server, scope)
 }
 
 #[cfg(all(test, jerk_unit))]
@@ -809,14 +820,22 @@ fn save_client_record(
     id: &str,
     client_id: &str,
     redirect_uris: &[String],
+    authorization_server: &str,
+    scope: Option<&str>,
     env: &crate::paths::Env,
 ) {
     let dir = env.state_dir().join("mcp-clients");
     let _ = std::fs::create_dir_all(&dir);
-    let data = serde_json::json!({
+    let mut data = serde_json::json!({
         "client_id": client_id,
         "redirect_uris": redirect_uris,
+        "authorization_server": authorization_server,
     });
+    if let Some(s) = scope {
+        data.as_object_mut()
+            .unwrap()
+            .insert("scope".into(), serde_json::Value::String(s.into()));
+    }
     let path = client_cache_path(id, env);
     let _ = std::fs::write(&path, data.to_string());
 }
@@ -837,11 +856,17 @@ fn load_client_id(
     Some(cid)
 }
 
+fn scope_key(scope: Option<&str>) -> Option<&str> {
+    scope.map(str::trim).filter(|s| !s.is_empty())
+}
+
 fn load_matching_client(
     info: &McpProviderInfo,
     env: &crate::paths::Env,
     host: &dyn crate::oauth::OAuthHost,
     redirect_uri: &str,
+    authorization_server: &str,
+    scope: Option<&str>,
 ) -> Option<(String, Option<String>)> {
     let path = client_cache_path(&info.id, env);
     let text = std::fs::read_to_string(path).ok()?;
@@ -850,6 +875,14 @@ fn load_matching_client(
     let uris = map.get("redirect_uris")?.as_array()?;
     let stored: Vec<&str> = uris.iter().filter_map(|v| v.as_str()).collect();
     if stored.len() != 1 || stored[0] != redirect_uri {
+        return None;
+    }
+    let stored_as = map.get("authorization_server")?.as_str()?;
+    if stored_as != authorization_server {
+        return None;
+    }
+    let stored_scope = map.get("scope").and_then(|v| v.as_str());
+    if scope_key(stored_scope) != scope_key(scope) {
         return None;
     }
     let secret = host
@@ -1112,7 +1145,14 @@ fn resolve_client(
         return (cimd_url.to_string(), None);
     }
     if as_meta.registration_endpoint.is_some() && info.client_id.is_none() {
-        if let Some(matched) = load_matching_client(info, env, host, redirect_uri) {
+        if let Some(matched) = load_matching_client(
+            info,
+            env,
+            host,
+            redirect_uri,
+            &as_meta.issuer,
+            scope.as_deref(),
+        ) {
             return matched;
         }
         let reg_ep = as_meta.registration_endpoint.as_deref().unwrap();
@@ -1124,7 +1164,14 @@ fn resolve_client(
                 Ok(ci) => {
                     let _ = writeln!(io.err, "jerk: {id}: registered client {}", ci.client_id);
                     let uris = [redirect_uri.to_string()];
-                    save_client_record(id, &ci.client_id, &uris, env);
+                    save_client_record(
+                        id,
+                        &ci.client_id,
+                        &uris,
+                        &as_meta.issuer,
+                        scope.as_deref(),
+                        env,
+                    );
                     if let Some(ref secret) = ci.client_secret {
                         let grants = host.grants(None);
                         let cg = crate::grants::Grant {

@@ -148,6 +148,7 @@ test('DCR registers the same redirect_uri authorize and token exchange use', asy
   const stored = JSON.parse(readFileSync(cache, 'utf8'));
   assert.equal(stored.client_id, stub.seen.register.client_id);
   assert.deepEqual(stored.redirect_uris, stub.seen.register.redirect_uris);
+  assert.equal(stored.authorization_server, stub.base);
 });
 
 test('callbackPort is the registered and authorized redirect port', async () => {
@@ -183,6 +184,7 @@ test('a stored client with different redirect_uris is not reused', async () => {
     JSON.stringify({
       client_id: 'stale-client-a',
       redirect_uris: ['http://127.0.0.1:1/callback'],
+      authorization_server: stub.base,
     })
   );
   const res = await run(['mcp:ch', 'create']);
@@ -224,7 +226,11 @@ test('a matching stored client is reused without a second registration', async (
   mkdirSync(clients, { recursive: true });
   writeFileSync(
     join(clients, 'mcp_ch.json'),
-    JSON.stringify({ client_id: 'kept-client', redirect_uris: [redirect] })
+    JSON.stringify({
+      client_id: 'kept-client',
+      redirect_uris: [redirect],
+      authorization_server: stub.base,
+    })
   );
   const res = await run(['mcp:ch', 'create']);
   assert.equal(res.status, 0, res.stdout + res.stderr);
@@ -233,6 +239,62 @@ test('a matching stored client is reused without a second registration', async (
   assert.equal(authorize().redirect_uri, redirect);
   assert.equal(stub.seen.token.client_id, 'kept-client');
   assert.equal(stub.seen.token.redirect_uri, redirect);
+});
+
+test('a stored client for a different authorization server is not reused', async () => {
+  const stub = await dcrStub();
+  const port = await freePort();
+  const redirect = `http://127.0.0.1:${port}/callback`;
+  const { run, sb, authorize } = host({
+    ch: {
+      url: `${stub.base}/mcp`,
+      type: 'http',
+      oauth: { callbackPort: port },
+    },
+  });
+  const clients = join(sb.stateDir, 'mcp-clients');
+  mkdirSync(clients, { recursive: true });
+  writeFileSync(
+    join(clients, 'mcp_ch.json'),
+    JSON.stringify({
+      client_id: 'other-as-client',
+      redirect_uris: [redirect],
+      authorization_server: 'http://127.0.0.1:1',
+    })
+  );
+  const res = await run(['mcp:ch', 'create']);
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.equal(stub.seen.clients, 1);
+  assert.notEqual(authorize().client_id, 'other-as-client');
+  assert.equal(authorize().client_id, stub.seen.register.client_id);
+});
+
+test('a stored client with a different registration scope is not reused', async () => {
+  const stub = await dcrStub();
+  const port = await freePort();
+  const redirect = `http://127.0.0.1:${port}/callback`;
+  const { run, sb, authorize } = host({
+    ch: {
+      url: `${stub.base}/mcp`,
+      type: 'http',
+      oauth: { callbackPort: port, scope: 'mcp.write' },
+    },
+  });
+  const clients = join(sb.stateDir, 'mcp-clients');
+  mkdirSync(clients, { recursive: true });
+  writeFileSync(
+    join(clients, 'mcp_ch.json'),
+    JSON.stringify({
+      client_id: 'narrow-scope-client',
+      redirect_uris: [redirect],
+      authorization_server: stub.base,
+      scope: 'mcp.read',
+    })
+  );
+  const res = await run(['mcp:ch', 'create']);
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.equal(stub.seen.clients, 1);
+  assert.notEqual(authorize().client_id, 'narrow-scope-client');
 });
 
 test('callbackUrl localhost form stays byte-identical through register authorize and token', async () => {
@@ -264,7 +326,7 @@ test('a timed-out create exits and frees the callback port', async () => {
         oauth: { callbackPort: port },
       },
     },
-    `/* do not complete the callback */`
+    `void 0;`
   );
   const started = Date.now();
   const res = await run(['mcp:ch', 'create'], { SLICC_JERK_MCP_CALLBACK_SECS: '2' });
