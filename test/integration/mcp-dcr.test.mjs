@@ -29,7 +29,25 @@ function portFree(port) {
   });
 }
 
-async function dcrStub(seed = {}) {
+function clientGrantPath(stateDir) {
+  const grants = join(stateDir, 'grants');
+  mkdirSync(grants, { recursive: true });
+  const key = 'mcp:ch:client\0dcr';
+  let h = 0xcbf29ce484222325n;
+  for (const c of key) {
+    h ^= BigInt(c.charCodeAt(0));
+    h = BigInt.asUintN(128, h * 0x0100000001b3n);
+  }
+  const bytes = Buffer.alloc(16);
+  let x = h;
+  for (let i = 0; i < 16; i++) {
+    bytes[i] = Number(x & 0xffn);
+    x >>= 8n;
+  }
+  return join(grants, `${bytes.toString('hex')}.json`);
+}
+
+async function dcrStub(seed = {}, opts = {}) {
   const clients = new Map(Object.entries(seed));
   const seen = { register: null, token: null, clients: 0 };
   const server = createServer((req, res) => {
@@ -66,7 +84,14 @@ async function dcrStub(seed = {}) {
         }
         clients.set(client_id, redirect_uris[0]);
         seen.register = { client_id, redirect_uris };
-        send(201, { client_id });
+        const payload = { client_id };
+        if (opts.clientSecret !== undefined) {
+          payload.client_secret = opts.clientSecret;
+        }
+        if (opts.clientSecretExpiresAt !== undefined) {
+          payload.client_secret_expires_at = opts.clientSecretExpiresAt;
+        }
+        send(201, payload);
       });
       return;
     }
@@ -298,22 +323,8 @@ test('a reused client does not send another clients stored secret', async () => 
       registration: 'dcr',
     })
   );
-  const grants = join(sb.stateDir, 'grants');
-  mkdirSync(grants, { recursive: true });
-  const key = 'mcp:ch:client\0dcr';
-  let h = 0xcbf29ce484222325n;
-  for (const c of key) {
-    h ^= BigInt(c.charCodeAt(0));
-    h = BigInt.asUintN(128, h * 0x0100000001b3n);
-  }
-  const bytes = Buffer.alloc(16);
-  let x = h;
-  for (let i = 0; i < 16; i++) {
-    bytes[i] = Number(x & 0xffn);
-    x >>= 8n;
-  }
   writeFileSync(
-    join(grants, `${bytes.toString('hex')}.json`),
+    clientGrantPath(sb.stateDir),
     JSON.stringify({
       provider: 'mcp:ch:client',
       user: 'dcr',
@@ -443,4 +454,53 @@ test('a second create does not hang when the callback port is already taken', as
   const res = await run(['mcp:ch', 'create'], { SLICC_JERK_MCP_CALLBACK_SECS: '2' });
   assert.notEqual(res.status, 0, res.stdout + res.stderr);
   assert.match(res.stderr, /cannot bind loopback/);
+});
+
+test('create re-registers when a confidential client secret has already expired', async () => {
+  const port = await freePort();
+  const stub = await dcrStub({}, { clientSecret: 'expired-secret', clientSecretExpiresAt: 1 });
+  const { run, sb, authorize } = host({
+    ch: {
+      url: `${stub.base}/mcp`,
+      type: 'http',
+      oauth: { callbackPort: port },
+    },
+  });
+  const first = await run(['mcp:ch', 'create']);
+  assert.equal(first.status, 0, first.stdout + first.stderr);
+  assert.equal(stub.seen.clients, 1);
+  assert.equal(stub.seen.token.client_secret, 'expired-secret');
+  const cache = join(sb.stateDir, 'mcp-clients', 'mcp_ch.json');
+  const stored = JSON.parse(readFileSync(cache, 'utf8'));
+  assert.equal(stored.confidential, true);
+  const grant = JSON.parse(readFileSync(clientGrantPath(sb.stateDir), 'utf8'));
+  assert.equal(grant.grant.expires_at, 1);
+  const second = await run(['mcp:ch', 'create']);
+  assert.equal(second.status, 0, second.stdout + second.stderr);
+  assert.equal(stub.seen.clients, 2);
+  assert.notEqual(authorize().client_id, stored.client_id);
+  assert.equal(authorize().client_id, stub.seen.register.client_id);
+});
+
+test('create does not keep a DCR cache when the confidential secret cannot be stored', async () => {
+  const port = await freePort();
+  const stub = await dcrStub({}, { clientSecret: 'unstoreable-secret' });
+  const { run, sb } = host({
+    ch: {
+      url: `${stub.base}/mcp`,
+      type: 'http',
+      oauth: { callbackPort: port },
+    },
+  });
+  mkdirSync(clientGrantPath(sb.stateDir), { recursive: true });
+  const res = await run(['mcp:ch', 'create']);
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.match(res.stderr, /cannot store client secret/);
+  assert.equal(stub.seen.clients, 1);
+  assert.equal(stub.seen.token.client_secret, 'unstoreable-secret');
+  const cache = join(sb.stateDir, 'mcp-clients', 'mcp_ch.json');
+  assert.equal(existsSync(cache), false);
+  const again = await run(['mcp:ch', 'create']);
+  assert.equal(again.status, 0, again.stdout + again.stderr);
+  assert.equal(stub.seen.clients, 2);
 });
