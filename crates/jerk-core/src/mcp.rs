@@ -469,8 +469,6 @@ fn complete_auth(
                 if let Err(e) = grants.store(&grant) {
                     return err(io, &entry.id, &format!("cannot store grant: {e}"));
                 }
-                let uris = [redirect_uri.to_string()];
-                save_client_record(&entry.id, client_id, &uris, &as_meta.issuer, scope, ctx.env);
                 let _ = writeln!(io.out, "{}: signed in", entry.id);
                 Exit::Ok
             }
@@ -830,12 +828,21 @@ fn save_client_record(
         "client_id": client_id,
         "redirect_uris": redirect_uris,
         "authorization_server": authorization_server,
+        "registration": "dcr",
     });
     if let Some(s) = scope {
         data.as_object_mut()
             .unwrap()
             .insert("scope".into(), serde_json::Value::String(s.into()));
     }
+    let path = client_cache_path(id, env);
+    let _ = std::fs::write(&path, data.to_string());
+}
+
+fn save_client_id_only(id: &str, client_id: &str, env: &crate::paths::Env) {
+    let dir = env.state_dir().join("mcp-clients");
+    let _ = std::fs::create_dir_all(&dir);
+    let data = serde_json::json!({ "client_id": client_id });
     let path = client_cache_path(id, env);
     let _ = std::fs::write(&path, data.to_string());
 }
@@ -877,6 +884,9 @@ fn load_matching_client(
     if stored.len() != 1 || stored[0] != redirect_uri {
         return None;
     }
+    if map.get("registration").and_then(|v| v.as_str()) != Some("dcr") {
+        return None;
+    }
     let stored_as = map.get("authorization_server")?.as_str()?;
     if stored_as != authorization_server {
         return None;
@@ -888,7 +898,10 @@ fn load_matching_client(
     let secret = host
         .grants(None)
         .get(&format!("{}:client", info.id), "dcr")
-        .and_then(|g| g.access_token);
+        .and_then(|g| {
+            let tied = g.fields.get("client_id").map(String::as_str) == Some(cid.as_str());
+            tied.then(|| g.access_token.clone()).flatten()
+        });
     Some((cid, secret))
 }
 
@@ -1142,6 +1155,7 @@ fn resolve_client(
             && info.client_registration.is_none())
     {
         let cimd_url = "https://mcpcat.sliccy.ai/oauth/client.json";
+        save_client_id_only(id, cimd_url, env);
         return (cimd_url.to_string(), None);
     }
     if as_meta.registration_endpoint.is_some() && info.client_id.is_none() {
@@ -1172,18 +1186,23 @@ fn resolve_client(
                         scope.as_deref(),
                         env,
                     );
+                    let grants = host.grants(None);
+                    let client_grant = format!("{id}:client");
                     if let Some(ref secret) = ci.client_secret {
-                        let grants = host.grants(None);
+                        let mut fields = std::collections::BTreeMap::new();
+                        fields.insert("client_id".into(), ci.client_id.clone());
                         let cg = crate::grants::Grant {
-                            provider: format!("{id}:client"),
+                            provider: client_grant,
                             user: "dcr".into(),
                             refresh_token: String::new(),
                             access_token: Some(secret.clone()),
                             expires_at: None,
                             scope: None,
-                            fields: std::collections::BTreeMap::new(),
+                            fields,
                         };
                         let _ = grants.store(&cg);
+                    } else {
+                        let _ = grants.remove(&client_grant, "dcr");
                     }
                     return (ci.client_id, ci.client_secret);
                 }
