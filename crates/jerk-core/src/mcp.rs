@@ -240,8 +240,20 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
                 .map(|p| p.scopes_supported.join(" "))
                 .filter(|s| !s.is_empty())
         });
-    let (client_id, client_secret) =
-        resolve_client(&info, &as_meta, host, &scope, io, &entry.id, ctx.env);
+    let (listener, redirect_uri) = match bind_callback(&info) {
+        Ok(pair) => pair,
+        Err(e) => return err(io, &entry.id, &e),
+    };
+    let (client_id, client_secret) = resolve_client(
+        &info,
+        &as_meta,
+        host,
+        &scope,
+        &redirect_uri,
+        io,
+        &entry.id,
+        ctx.env,
+    );
     if client_id.is_empty() {
         return Exit::Usage;
     }
@@ -255,21 +267,6 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use base64::Engine;
         URL_SAFE_NO_PAD.encode(r16)
-    };
-    let configured_port = compute_redirect_port(&info);
-    let listener = match std::net::TcpListener::bind(format!("127.0.0.1:{}", configured_port)) {
-        Ok(l) => l,
-        Err(e) => return err(io, &entry.id, &format!("cannot bind loopback: {e}")),
-    };
-    let _ = listener.set_nonblocking(true);
-    let actual_port = listener
-        .local_addr()
-        .map(|a| a.port())
-        .unwrap_or(configured_port);
-    let redirect_uri = if let Some(ref cu) = info.callback_url {
-        cu.clone()
-    } else {
-        format!("http://127.0.0.1:{actual_port}/callback")
     };
     let authorize_url = build_authorize_url(
         &as_meta.authorization_endpoint,
@@ -312,8 +309,8 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
     if let Err(e) = host.browser().open_url(&authorize_url) {
         return err(io, &entry.id, &format!("cannot open browser: {e}"));
     }
-    let callback_secs = if cfg!(all(test, jerk_unit)) { 3 } else { 120 };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(callback_secs);
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(callback_timeout_secs());
     let callback_url = match wait_for_callback(&listener, deadline) {
         Ok(u) => u,
         Err(e) => return err(io, &entry.id, &e),
@@ -472,7 +469,8 @@ fn complete_auth(
                 if let Err(e) = grants.store(&grant) {
                     return err(io, &entry.id, &format!("cannot store grant: {e}"));
                 }
-                save_client_id(&entry.id, client_id, ctx.env);
+                let uris = [redirect_uri.to_string()];
+                save_client_record(&entry.id, client_id, &uris, ctx.env);
                 let _ = writeln!(io.out, "{}: signed in", entry.id);
                 Exit::Ok
             }
@@ -690,6 +688,57 @@ pub fn test_compute_redirect_port(info: &McpProviderInfo) -> u16 {
     compute_redirect_port(info)
 }
 
+#[cfg(all(test, jerk_unit))]
+pub fn test_bind_callback(
+    info: &McpProviderInfo,
+) -> Result<(std::net::TcpListener, String), String> {
+    bind_callback(info)
+}
+
+#[cfg(all(test, jerk_unit))]
+pub fn test_save_client_record(
+    id: &str,
+    client_id: &str,
+    redirect_uris: &[String],
+    env: &crate::paths::Env,
+) {
+    save_client_record(id, client_id, redirect_uris, env)
+}
+
+#[cfg(all(test, jerk_unit))]
+pub fn test_load_matching_client(
+    info: &McpProviderInfo,
+    env: &crate::paths::Env,
+    host: &dyn crate::oauth::OAuthHost,
+    redirect_uri: &str,
+) -> Option<(String, Option<String>)> {
+    load_matching_client(info, env, host, redirect_uri)
+}
+
+#[cfg(all(test, jerk_unit))]
+pub fn test_resolve_client(
+    info: &McpProviderInfo,
+    as_meta: &jerk_oauth::discovery::AuthorizationServerMetadata,
+    host: &dyn crate::oauth::OAuthHost,
+    scope: &Option<String>,
+    redirect_uri: &str,
+    io: &mut Io<'_>,
+    id: &str,
+    env: &crate::paths::Env,
+) -> (String, Option<String>) {
+    resolve_client(info, as_meta, host, scope, redirect_uri, io, id, env)
+}
+
+#[cfg(all(test, jerk_unit))]
+pub fn test_callback_timeout_secs() -> u64 {
+    callback_timeout_secs()
+}
+
+#[cfg(all(test, jerk_unit))]
+pub fn test_redirect_uri_for(info: &McpProviderInfo, actual_port: u16) -> String {
+    redirect_uri_for(info, actual_port)
+}
+
 fn compute_redirect_port(info: &McpProviderInfo) -> u16 {
     if let Some(ref cu) = info.callback_url {
         if let Ok(u) = url::Url::parse(cu) {
@@ -699,6 +748,34 @@ fn compute_redirect_port(info: &McpProviderInfo) -> u16 {
         }
     }
     info.callback_port.unwrap_or(0)
+}
+
+fn redirect_uri_for(info: &McpProviderInfo, actual_port: u16) -> String {
+    if let Some(ref cu) = info.callback_url {
+        return cu.clone();
+    }
+    format!("http://127.0.0.1:{actual_port}/callback")
+}
+
+fn bind_callback(info: &McpProviderInfo) -> Result<(std::net::TcpListener, String), String> {
+    let configured_port = compute_redirect_port(info);
+    let listener = std::net::TcpListener::bind(format!("127.0.0.1:{configured_port}"))
+        .map_err(|e| format!("cannot bind loopback: {e}"))?;
+    let _ = listener.set_nonblocking(true);
+    let actual_port = listener
+        .local_addr()
+        .map(|a| a.port())
+        .unwrap_or(configured_port);
+    Ok((listener, redirect_uri_for(info, actual_port)))
+}
+
+fn callback_timeout_secs() -> u64 {
+    if let Ok(raw) = std::env::var("SLICC_JERK_MCP_CALLBACK_SECS") {
+        if let Ok(secs) = raw.parse::<u64>() {
+            return secs.max(1);
+        }
+    }
+    120
 }
 
 fn client_cache_path(id: &str, env: &crate::paths::Env) -> std::path::PathBuf {
@@ -728,10 +805,18 @@ fn client_cache_path(id: &str, env: &crate::paths::Env) -> std::path::PathBuf {
         .join(format!("{safe}.json"))
 }
 
-fn save_client_id(id: &str, client_id: &str, env: &crate::paths::Env) {
+fn save_client_record(
+    id: &str,
+    client_id: &str,
+    redirect_uris: &[String],
+    env: &crate::paths::Env,
+) {
     let dir = env.state_dir().join("mcp-clients");
     let _ = std::fs::create_dir_all(&dir);
-    let data = serde_json::json!({ "client_id": client_id });
+    let data = serde_json::json!({
+        "client_id": client_id,
+        "redirect_uris": redirect_uris,
+    });
     let path = client_cache_path(id, env);
     let _ = std::fs::write(&path, data.to_string());
 }
@@ -750,6 +835,28 @@ fn load_client_id(
     let cid = map.get("client_id")?.as_str()?.to_string();
     let _ = host;
     Some(cid)
+}
+
+fn load_matching_client(
+    info: &McpProviderInfo,
+    env: &crate::paths::Env,
+    host: &dyn crate::oauth::OAuthHost,
+    redirect_uri: &str,
+) -> Option<(String, Option<String>)> {
+    let path = client_cache_path(&info.id, env);
+    let text = std::fs::read_to_string(path).ok()?;
+    let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&text).ok()?;
+    let cid = map.get("client_id")?.as_str()?.to_string();
+    let uris = map.get("redirect_uris")?.as_array()?;
+    let stored: Vec<&str> = uris.iter().filter_map(|v| v.as_str()).collect();
+    if stored.len() != 1 || stored[0] != redirect_uri {
+        return None;
+    }
+    let secret = host
+        .grants(None)
+        .get(&format!("{}:client", info.id), "dcr")
+        .and_then(|g| g.access_token);
+    Some((cid, secret))
 }
 
 type Discovered = (
@@ -983,11 +1090,13 @@ fn try_discover_as(
     Ok(None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_client(
     info: &McpProviderInfo,
     as_meta: &jerk_oauth::discovery::AuthorizationServerMetadata,
     host: &dyn crate::oauth::OAuthHost,
     scope: &Option<String>,
+    redirect_uri: &str,
     io: &mut Io<'_>,
     id: &str,
     env: &crate::paths::Env,
@@ -1003,21 +1112,19 @@ fn resolve_client(
         return (cimd_url.to_string(), None);
     }
     if as_meta.registration_endpoint.is_some() && info.client_id.is_none() {
+        if let Some(matched) = load_matching_client(info, env, host, redirect_uri) {
+            return matched;
+        }
         let reg_ep = as_meta.registration_endpoint.as_deref().unwrap();
         let client_name = info.client_name.as_deref().unwrap_or("mcpcat");
-        let redirect_uri = if let Some(ref cu) = info.callback_url {
-            cu.clone()
-        } else {
-            let port = info.callback_port.unwrap_or(0);
-            format!("http://127.0.0.1:{port}/callback")
-        };
         let body =
-            jerk_oauth::registration::build_dcr_body(&redirect_uri, client_name, scope.as_deref());
+            jerk_oauth::registration::build_dcr_body(redirect_uri, client_name, scope.as_deref());
         match host.http_post_json(reg_ep, &body) {
             Ok(resp) => match jerk_oauth::registration::parse_dcr_response(&resp) {
                 Ok(ci) => {
                     let _ = writeln!(io.err, "jerk: {id}: registered client {}", ci.client_id);
-                    save_client_id(id, &ci.client_id, env);
+                    let uris = [redirect_uri.to_string()];
+                    save_client_record(id, &ci.client_id, &uris, env);
                     if let Some(ref secret) = ci.client_secret {
                         let grants = host.grants(None);
                         let cg = crate::grants::Grant {
