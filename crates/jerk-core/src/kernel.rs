@@ -55,11 +55,7 @@ pub fn list(
     let host_providers = host_list(sealed).unwrap_or_default();
 
     let mut all = kernel_providers;
-    for hp in host_providers {
-        if !all.iter().any(|r| r.provider == hp.provider) {
-            all.push(hp);
-        }
-    }
+    all.extend(host_providers);
 
     if json {
         let items: Vec<Value> = all
@@ -415,7 +411,8 @@ pub fn create(
         }
     }
 
-    let is_host = entry.oauth_config.is_none();
+    let is_host =
+        entry.oauth_config.is_none() || entry.source.layer == crate::config::Layer::BuiltIn;
     let body = if is_host {
         let mut req = json!({
             "v": 1,

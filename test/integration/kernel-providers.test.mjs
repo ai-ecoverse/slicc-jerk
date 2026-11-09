@@ -8,11 +8,21 @@ const skip = !existsSync(wasm) && 'run npm run build:wasm first';
 const placeholder = 'fnox_proxy_111111111111111111111111';
 const fake = 'fake-gh-token-never-print-me';
 
-async function seven({ stored = false, refused = false, removed = false } = {}) {
+async function seven({ stored = false, refused = false, removed = false, host = false } = {}) {
   const seen = [];
   const kernel = await createNodeKernel({
     sealed: async (req) => {
       seen.push(req);
+      if (host && req.jop === 'list')
+        return {
+          v: 1,
+          exit: 0,
+          rows: [
+            { provider: 'github', env: ['GH_TOKEN'], device: 'fixture' },
+            { provider: 'linkedin', env: ['LINKEDIN_ACCESS_TOKEN'], device: 'fixture' },
+          ],
+        };
+      if (host && req.jop === 'create') return { v: 1, exit: 4, message: 'stub host unavailable' };
       if (req.op === 'placeholder' && stored)
         return { v: 1, placeholder, state: removed ? 'removed' : 'active' };
       if (req.op === 'seal') {
@@ -81,6 +91,52 @@ test('kernel builtins use the kernel gh and seal its output, also with --reveal'
       source: 'sealed',
       placeholder,
     });
+  } finally {
+    kernel.terminate();
+  }
+});
+
+test('builtin OAuth create preserves linked-host routing and params', { skip }, async () => {
+  const { kernel, seen } = await seven({ host: true });
+  try {
+    const res = await kernel.run([
+      'jerk',
+      'linkedin',
+      'create',
+      '-p',
+      'client_id=fake-client',
+      '-p',
+      'client_secret=fake-secret',
+    ]);
+    assert.equal(res.status, 4, res.stderr);
+    const request = seen.find((req) => req.jop === 'create');
+    assert.equal(request.kind, 'jerk');
+    assert.equal(request.provider, 'linkedin');
+    assert.deepEqual(request.params, { client_id: 'fake-client', client_secret: 'fake-secret' });
+    assert.equal(
+      seen.some((req) => req.kind === 'oauth'),
+      false
+    );
+  } finally {
+    kernel.terminate();
+  }
+});
+
+test('kernel catalog retains host availability for duplicate providers', { skip }, async () => {
+  const { kernel } = await seven({ host: true });
+  try {
+    const res = await kernel.run(['jerk', 'list', '--json']);
+    assert.equal(res.status, 0, res.stderr);
+    const rows = JSON.parse(res.stdout).filter((row) => row.provider === 'github');
+    assert.deepEqual(
+      rows.map((row) => [row.source, row.cli]),
+      [
+        ['seven', 'gh'],
+        ['host:fixture', 'host'],
+      ]
+    );
+    const text = await kernel.run(['jerk', 'list']);
+    assert.match(text.stdout, /host:fixture/);
   } finally {
     kernel.terminate();
   }
