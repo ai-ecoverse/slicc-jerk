@@ -530,3 +530,87 @@ fn exit_from(code: i64) -> Exit {
         _ => Exit::Error,
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placed {
+    pub name: String,
+    pub placeholder: String,
+    pub state: String,
+}
+
+fn placed(name: &str, reply: &Value) -> Option<Placed> {
+    let placeholder = reply.get("placeholder").and_then(Value::as_str)?;
+    Some(Placed {
+        name: name.to_string(),
+        placeholder: placeholder.to_string(),
+        state: reply
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    })
+}
+
+fn vault_error<'a>(reply: &'a Value, value: &str) -> Option<(&'a str, &'a str)> {
+    let error = reply.get("error")?;
+    let code = error.get("code").and_then(Value::as_str).unwrap_or("");
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .filter(|m| !m.is_empty() && (value.is_empty() || !m.contains(value)))
+        .unwrap_or(code);
+    Some((code, message))
+}
+
+pub fn place(
+    provider: &str,
+    name: &str,
+    value: &str,
+    sealed: &dyn Sealed,
+    io: &mut Io<'_>,
+) -> Result<Placed, Exit> {
+    let body = json!({ "v": 1, "op": "seal", "name": name, "value": value });
+    let reply = match sealed.request(&body) {
+        Ok(reply) => reply,
+        Err(e) => {
+            let _ = writeln!(io.err, "jerk: {provider}: cannot reach seven's vault: {e}");
+            return Err(Exit::Unavailable);
+        }
+    };
+    match vault_error(&reply, value) {
+        None => placed(name, &reply).ok_or_else(|| {
+            let _ = writeln!(
+                io.err,
+                "jerk: {provider}: seven's vault sealed {name} but sent no placeholder"
+            );
+            Exit::Error
+        }),
+        Some(("EEXIST", _)) => {
+            let body = json!({ "v": 1, "op": "placeholder", "name": name });
+            let existing = sealed.request(&body).ok();
+            match existing.as_ref().and_then(|r| placed(name, r)) {
+                Some(found) => {
+                    let _ = writeln!(
+                        io.err,
+                        "jerk: {provider}: seven's vault already holds {name}, which only root can replace; using it"
+                    );
+                    Ok(found)
+                }
+                None => {
+                    let _ = writeln!(
+                        io.err,
+                        "jerk: {provider}: seven's vault already holds {name}, which only root can replace"
+                    );
+                    Err(Exit::Error)
+                }
+            }
+        }
+        Some((_, message)) => {
+            let _ = writeln!(
+                io.err,
+                "jerk: {provider}: seven's vault did not seal {name}: {message}"
+            );
+            Err(Exit::Error)
+        }
+    }
+}
