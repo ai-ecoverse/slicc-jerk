@@ -137,18 +137,53 @@ pub fn get(
         Err(e) => return crate::cli::usage(&e, io),
     };
     let user = crate::dispatch::grant_user(&vars);
+    let cached = ctx
+        .oauth
+        .grants(entry.provider.store.as_deref())
+        .get(&entry.id, user);
     let has_env = entry
         .provider
         .env
         .iter()
         .any(|name| ctx.env.var(name).is_some());
-    if !has_env
-        && ctx
-            .oauth
-            .grants(entry.provider.store.as_deref())
-            .get(&entry.id, user)
-            .is_none()
-    {
+    if !has_env {
+        for name in &entry.provider.env {
+            let Ok(record) = DevSealed.request(&json!({"v": 1, "op": "placeholder", "name": name}))
+            else {
+                continue;
+            };
+            if record["state"] == "removed" {
+                continue;
+            }
+            let Some(value) = record["placeholder"]
+                .as_str()
+                .filter(|value| placeholder(value))
+            else {
+                continue;
+            };
+            let same = cached.as_ref().and_then(|g| g.access_token.as_deref()) == Some(value);
+            if same
+                && cached
+                    .as_ref()
+                    .and_then(|g| g.expires_at)
+                    .is_some_and(|expiry| ctx.now.saturating_add(300) >= expiry)
+            {
+                continue;
+            }
+            let source = if same { "oauth" } else { "sealed" };
+            if flags.has("--json") {
+                let _ = writeln!(
+                    io.out,
+                    "{}",
+                    json!({"provider": entry.id, "source": source, "placeholder": value})
+                );
+            } else {
+                let _ = writeln!(io.out, "{value}");
+            }
+            return Exit::Ok;
+        }
+    }
+    if !has_env && cached.is_none() {
         let waiting = crate::sealed::Waiting {
             inner: &DevSealed,
             sleep: ctx.sleep,

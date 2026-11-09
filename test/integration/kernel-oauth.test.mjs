@@ -34,20 +34,27 @@ async function seven(mode, options = {}) {
   const posts = [];
   const seals = [];
   const requests = [];
+  const records = new Map(Object.entries(options.records ?? {}));
   let polls = 0;
   const kernel = await createNodeKernel({
     ...(options.browser ? { cdp: bridge(options.browser.wsUrl) } : {}),
     sealed: async (req) => {
       requests.push(req);
       if (options.sealed) return options.sealed(req);
-      if (req.kind === 'unseal') return { v: 1, exit: options.dropDenied ? 1 : 0 };
+      if (req.kind === 'unseal') {
+        if (!options.dropDenied) records.clear();
+        return { v: 1, exit: options.dropDenied ? 1 : 0 };
+      }
       if (req.jop === 'status') return { v: 1, exit: 3 };
-      if (req.op === 'placeholder') return { v: 1, error: { code: 'ENOENT' } };
+      if (req.op === 'placeholder')
+        return records.has(req.name)
+          ? { v: 1, ...records.get(req.name) }
+          : { v: 1, error: { code: 'ENOENT' } };
       assert.equal(req.op, 'seal');
       seals.push(req);
-      return options.refused
-        ? { v: 1, error: { code: 'EEXIST', message: fake } }
-        : { v: 1, placeholder, state: 'inert' };
+      if (options.refused) return { v: 1, error: { code: 'EEXIST', message: fake } };
+      records.set(req.name, { placeholder, state: 'inert' });
+      return { v: 1, placeholder, state: 'inert' };
     },
     network: {
       transport: {
@@ -65,13 +72,13 @@ async function seven(mode, options = {}) {
               device_code: 'device-FAKE',
               user_code: 'CODE-FAKE',
               verification_uri: 'https://idp.example.test/verify',
-              expires_in: 30,
+              expires_in: options.pending ? 3 : 30,
               interval: 0,
             };
           } else if (options.denied) {
             status = 400;
             response = { error: 'access_denied', error_description: fake };
-          } else if (mode === 'device' && polls++ === 0) {
+          } else if (mode === 'device' && (options.pending || polls++ === 0)) {
             status = 400;
             response = { error: 'authorization_pending' };
           } else {
@@ -112,18 +119,23 @@ async function seven(mode, options = {}) {
     `${pkg}/kernel-process.mjs`,
     readFileSync(new URL('../../npm/kernel-process.mjs', import.meta.url))
   );
-  if (options.cli) {
+  if (options.cli || options.providerCli) {
+    const command = options.providerCli ?? 'fake-minter';
     const minter = '/node_modules/fake-minter';
     await kernel.writeFile(
       `${minter}/package.json`,
       JSON.stringify({
         name: 'fake-minter',
-        slicc: { abi: 'js', commands: { 'fake-minter': { module: 'minter.mjs' } } },
+        slicc: { abi: 'js', commands: { [command]: { module: 'minter.mjs' } } },
       })
     );
     await kernel.writeFile(
       `${minter}/minter.mjs`,
-      `export default async function(ctx) { await ctx.fs.writeFile('/tmp/minter-call', 'called'); await ctx.write(1, '${fake}'); return 0; }`
+      `export default async function(ctx) {
+        await ctx.fs.writeFile('/tmp/minter-call', 'called');
+        const out = ctx.argv.includes('--version') ? '4.100.0' : ${options.providerCli ? `JSON.stringify({ token: '${fake}' })` : `'${fake}'`};
+        await ctx.write(1, out); return 0;
+      }`
     );
   }
   await kernel.writeFile(
@@ -230,9 +242,119 @@ for (const provider of ['aem', 'linkedin']) {
   }
 }
 
+for (const [provider, name] of [
+  ['gcloud', 'CLOUDSDK_AUTH_ACCESS_TOKEN'],
+  ['linkedin', 'LINKEDIN_ACCESS_TOKEN'],
+  ['cloudflare', 'CLOUDFLARE_API_TOKEN'],
+  ['adobe-aio', 'AEM_EDGE_FUNCTIONS_TOKEN'],
+  ['firefly', 'ADOBE_IMS_TOKEN'],
+  ['aem', 'AEM_API_KEY'],
+]) {
+  test(`kernel ${provider} get uses its named vault record before CLI or OAuth config`, {
+    skip,
+  }, async () => {
+    const { kernel, run, requests, posts } = await seven('device', {
+      provider,
+      records: { [name]: { placeholder, state: 'active' } },
+      env: { [name]: '' },
+      refused: true,
+      providerCli: provider === 'cloudflare' ? 'wrangler' : undefined,
+    });
+    try {
+      const res = await run('get', '--json', '--reveal');
+      assert.equal(res.status, 0, res.stderr);
+      assert.deepEqual(JSON.parse(res.stdout), { provider, source: 'sealed', placeholder });
+      assert.ok(requests.some((req) => req.op === 'placeholder' && req.name === name));
+      assert.equal(
+        requests.some((req) => req.op === 'seal' || req.jop === 'status'),
+        false
+      );
+      assert.equal(posts.length, 0);
+      await assert.rejects(kernel.readFile('/tmp/minter-call'), { code: 'ENOENT' });
+    } finally {
+      kernel.terminate();
+    }
+  });
+}
+
+test('kernel OAuth get skips removed named records', { skip }, async () => {
+  const { kernel, run, requests } = await seven('device', {
+    records: { DEMO_TOKEN: { placeholder, state: 'removed' } },
+  });
+  try {
+    const res = await run('get');
+    assert.equal(res.status, 3, res.stderr);
+    assert.equal(res.stdout, '');
+    assert.ok(requests.some((req) => req.jop === 'status'));
+  } finally {
+    kernel.terminate();
+  }
+});
+
+test('kernel OAuth nonempty env still beats a named vault record', { skip }, async () => {
+  const envPlaceholder = 'fnox_proxy_999999999999999999999999';
+  const { kernel, run, requests } = await seven('device', {
+    env: { DEMO_TOKEN: envPlaceholder },
+    records: { DEMO_TOKEN: { placeholder, state: 'active' } },
+  });
+  try {
+    const res = await run('get');
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout, envPlaceholder + '\n');
+    assert.equal(requests.length, 0);
+  } finally {
+    kernel.terminate();
+  }
+});
+
+test('kernel device interval zero still expires a pending authorization', { skip }, async () => {
+  const { kernel, run, posts } = await seven('device', { pending: true });
+  const start = performance.now();
+  try {
+    const res = await run('create');
+    assert.equal(res.status, 1, res.stderr);
+    assert.match(res.stderr, /device code expired/);
+    assert.equal(posts.length, 3);
+    assert.ok(performance.now() - start >= 2000);
+  } finally {
+    kernel.terminate();
+  }
+});
+
+for (const error of ['invalid_scope', 'fake-sensitive-error-code']) {
+  test(`kernel capture keeps only a recognized IdP error code: ${error}`, { skip }, async () => {
+    const browser = await stubCdp({
+      paused: [
+        {
+          request: {
+            url: callback + '?error=' + error + '&error_description=' + fake,
+            method: 'GET',
+            headers: {},
+          },
+        },
+      ],
+    });
+    const { kernel, run, seals } = await seven('intercept', { browser });
+    try {
+      const res = await run('create');
+      assert.equal(res.status, 1, res.stderr);
+      assert.match(
+        res.stderr,
+        error === 'invalid_scope' ? /IdP error: invalid_scope/ : /IdP denied sign-in/
+      );
+      assert.doesNotMatch(res.stderr, /access-FAKE|fake-sensitive-error-code/);
+      assert.equal(seals.length, 0);
+    } finally {
+      kernel.terminate();
+      await browser.close();
+    }
+  });
+}
+
 test('kernel OAuth get preserves pre-existing vault-backed sign-ins', { skip }, async () => {
   const { kernel, run, requests, posts } = await seven('device', {
     sealed: (req) => {
+      if (req.op === 'placeholder') return { v: 1, error: { code: 'ENOENT' } };
       assert.equal(req.jop, 'status');
       return { v: 1, exit: 0, placeholder };
     },
@@ -241,7 +363,7 @@ test('kernel OAuth get preserves pre-existing vault-backed sign-ins', { skip }, 
     const res = await run('get', '--json', '--reveal');
     assert.equal(res.status, 0, res.stderr);
     assert.deepEqual(JSON.parse(res.stdout), { provider: 'demo', source: 'sealed', placeholder });
-    assert.equal(requests.length, 1);
+    assert.equal(requests.filter((req) => req.jop === 'status').length, 1);
     assert.equal(posts.length, 0);
   } finally {
     kernel.terminate();

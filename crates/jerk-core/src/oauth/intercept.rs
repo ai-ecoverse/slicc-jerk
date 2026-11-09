@@ -166,6 +166,27 @@ pub fn run(
         .map_err(|e| OAuthError {
             exit: Exit::Error,
             message: match e {
+                capture::CaptureError::IdpError { error, .. }
+                    if matches!(
+                        error.as_str(),
+                        "access_denied"
+                            | "invalid_request"
+                            | "invalid_scope"
+                            | "unauthorized_client"
+                            | "unsupported_response_type"
+                            | "server_error"
+                            | "temporarily_unavailable"
+                            | "login_required"
+                            | "interaction_required"
+                            | "consent_required"
+                            | "account_selection_required"
+                            | "invalid_client"
+                            | "invalid_grant"
+                            | "unsupported_grant_type"
+                    ) =>
+                {
+                    format!("IdP error: {error}")
+                }
                 capture::CaptureError::IdpError { .. } => "IdP denied sign-in".into(),
                 other => other.to_string(),
             },
