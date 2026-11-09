@@ -6,7 +6,7 @@ import { stubCdp } from './cdp-stub.mjs';
 import { wasm } from './helpers.mjs';
 
 const skip = !existsSync(wasm) && 'run npm run build:wasm first';
-const code = 'fake-captured-code';
+const code = 'sealed:fake-captured-code';
 const token = 'fake-exchanged-token';
 const placeholder = 'fnox_proxy_444444444444444444444444';
 const callback = 'http://127.0.0.1:43991/callback';

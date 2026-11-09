@@ -98,7 +98,6 @@ pub fn is_placeholder(value: &str) -> bool {
     value
         .strip_prefix("fnox_proxy_")
         .is_some_and(|suffix| suffix.len() == 24 && suffix.bytes().all(|b| b.is_ascii_hexdigit()))
-        || value.starts_with("sealed:")
 }
 
 pub fn seal_value(sealed: &dyn Sealed, name: &str, value: &str) -> Result<String, SealedError> {
