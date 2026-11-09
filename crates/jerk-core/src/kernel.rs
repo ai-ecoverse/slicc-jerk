@@ -1,4 +1,4 @@
-use crate::cli::Io;
+use crate::cli::{Ctx, Io};
 use crate::config::{Config, Entry};
 use crate::exit::Exit;
 use crate::sealed::{PollResult, Sealed, SealedError};
@@ -6,7 +6,13 @@ use serde_json::{json, Value};
 
 pub mod listing;
 
-pub fn list(config: &Config, args: &[String], sealed: &dyn Sealed, io: &mut Io<'_>) -> Exit {
+pub fn list(
+    config: &Config,
+    args: &[String],
+    ctx: &Ctx<'_>,
+    sealed: &dyn Sealed,
+    io: &mut Io<'_>,
+) -> Exit {
     let json = match args.first().map(String::as_str) {
         Some("--json") if args.len() == 1 => true,
         None => false,
@@ -30,7 +36,18 @@ pub fn list(config: &Config, args: &[String], sealed: &dyn Sealed, io: &mut Io<'
                 .clone()
                 .unwrap_or_else(|| entry.id.clone()),
             source: "seven".to_string(),
-            cli: "-".to_string(),
+            cli: entry
+                .provider
+                .requires
+                .as_deref()
+                .map(|command| {
+                    if crate::which::find(command, ctx.env, ctx.exists).is_some() {
+                        command.to_string()
+                    } else {
+                        "missing".to_string()
+                    }
+                })
+                .unwrap_or_else(|| "-".to_string()),
             env: entry.provider.env.clone(),
         })
         .collect();
@@ -206,6 +223,123 @@ pub fn get(
             let _ = writeln!(io.err, "jerk: {}: {e}", entry.id);
             hint_create(&entry.id, io);
             Exit::SignIn
+        }
+    }
+}
+
+pub fn local_get(
+    entry: &Entry,
+    args: &[String],
+    ctx: &Ctx<'_>,
+    sealed: &dyn Sealed,
+    io: &mut Io<'_>,
+) -> Exit {
+    let flags = match crate::dispatch::parse_flags(args, &[], &["--json", "--reveal"], 0) {
+        Ok(flags) => flags,
+        Err(e) => return crate::cli::usage(&format!("{} get: {e}", entry.id), io),
+    };
+    let vars = match crate::dispatch::vars(entry, &flags) {
+        Ok(vars) => vars,
+        Err(e) => return crate::cli::usage(&e, io),
+    };
+    let show = |value: &str, source: &str, io: &mut Io<'_>| {
+        if flags.has("--json") {
+            let _ = writeln!(
+                io.out,
+                "{}",
+                json!({"provider": entry.id, "source": source, "placeholder": value})
+            );
+        } else {
+            let _ = writeln!(io.out, "{value}");
+        }
+    };
+    for name in &entry.provider.env {
+        if let Some(value) = ctx.env.var(name).filter(|v| !v.is_empty()) {
+            return match crate::sealed::seal_value(sealed, name, value) {
+                Ok(placeholder) => {
+                    show(&placeholder, "env", io);
+                    Exit::Ok
+                }
+                Err(e) => {
+                    let _ = writeln!(io.err, "jerk: {}: {e}", entry.id);
+                    Exit::Error
+                }
+            };
+        }
+    }
+    for name in &entry.provider.env {
+        if let Ok(reply) = sealed.request(&json!({"v": 1, "op": "placeholder", "name": name})) {
+            if let Some(value) = reply
+                .get("placeholder")
+                .and_then(Value::as_str)
+                .filter(|v| crate::sealed::is_placeholder(v))
+            {
+                show(value, "sealed", io);
+                return Exit::Ok;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let vault_args: Vec<String> = flags.bools.clone();
+    let status = get(
+        entry,
+        &vault_args,
+        None,
+        sealed,
+        &mut Io {
+            out: &mut out,
+            err: &mut err,
+        },
+    );
+    if status == Exit::Ok {
+        let _ = io.out.write_all(&out);
+        return status;
+    }
+    let local = entry.provider.get.as_ref().is_some_and(|chain| {
+        chain.iter().any(|verb| {
+            verb.run.is_some()
+                && verb
+                    .requires
+                    .as_deref()
+                    .or(entry.provider.requires.as_deref())
+                    .is_some_and(|name| crate::which::find(name, ctx.env, ctx.exists).is_some())
+        })
+    });
+    if !local || status != Exit::SignIn {
+        let _ = io.err.write_all(&err);
+        return status;
+    }
+    let mut token = match crate::dispatch::fetch_from(entry, &vars, false, ctx, io) {
+        Ok(token) => token,
+        Err(code) => return code,
+    };
+    let Some(name) = entry.provider.env.first() else {
+        let _ = writeln!(
+            io.err,
+            "jerk: {}: no environment name for sealing",
+            entry.id
+        );
+        return Exit::Unsupported;
+    };
+    let result = token
+        .fields
+        .iter()
+        .try_for_each(|(name, value)| crate::sealed::seal_value(sealed, name, value).map(|_| ()))
+        .and_then(|_| crate::sealed::seal_value(sealed, name, &token.value));
+    use zeroize::Zeroize;
+    token.value.zeroize();
+    for value in token.fields.values_mut() {
+        value.zeroize();
+    }
+    match result {
+        Ok(placeholder) => {
+            show(&placeholder, token.source, io);
+            Exit::Ok
+        }
+        Err(e) => {
+            let _ = writeln!(io.err, "jerk: {}: {e}", entry.id);
+            Exit::Error
         }
     }
 }

@@ -43,12 +43,12 @@ test('the kernel build prints its version', {
   assert.equal(res.text, `jerk ${expectedVersion}\n`);
 });
 
-test('the kernel build has no CLI-dispatch providers', {
+test('the kernel build ships CLI-dispatch providers', {
   skip: !existsSync(wasm) && 'run npm run build:wasm first',
 }, () => {
   const res = runWasm(['list']);
   assert.equal(res.code, 0);
-  assert.match(res.text, /^PROVIDER\s+NAME\s+SOURCE\s+CLI\n$/);
+  assert.match(res.text, /github\s+GitHub \(gh\)\s+seven\s+missing/);
 });
 
 test('the kernel build keeps the exit codes', {
@@ -64,7 +64,7 @@ test('the kernel build keeps the exit codes', {
       `jerk ${command}: not available in the kernel build; seven updates it\n`
     );
   }
-  assert.equal(runWasm(['github', 'get']).code, 2);
+  assert.equal(runWasm(['github', 'get']).code, 3);
 });
 
 test('the kernel get accepts --reveal and still prints only the placeholder', {
@@ -95,7 +95,7 @@ test('the kernel get accepts --reveal and still prints only the placeholder', {
     });
     const bogus = runWasm(['demo', 'get', '--bogus'], opts);
     assert.equal(bogus.code, 2);
-    assert.match(bogus.text, /unexpected --bogus/);
+    assert.match(bogus.text, /unknown option --bogus/);
   } finally {
     rmSync(cfg, { recursive: true, force: true });
   }
