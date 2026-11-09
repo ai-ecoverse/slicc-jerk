@@ -304,7 +304,16 @@ pub fn oauth_create_with_vars(
             #[cfg(target_os = "wasi")]
             {
                 capture_in_browser(
-                    config, scope, now_secs, &r32, &r16, &post, err, cdp, extra_vars,
+                    config,
+                    scope,
+                    now_secs,
+                    &r32,
+                    &r16,
+                    &post,
+                    err,
+                    cdp,
+                    extra_vars,
+                    cors_origins,
                 )
             }
         }
@@ -343,18 +352,37 @@ pub fn oauth_create_with_vars(
                     &r16,
                     &post,
                     err,
+                    cors_origins,
                 )
             }
             #[cfg(target_os = "wasi")]
             {
                 capture_in_browser(
-                    config, scope, now_secs, &r32, &r16, &post, err, cdp, extra_vars,
+                    config,
+                    scope,
+                    now_secs,
+                    &r32,
+                    &r16,
+                    &post,
+                    err,
+                    cdp,
+                    extra_vars,
+                    cors_origins,
                 )
             }
         }
         InteractiveMode::Device => oauth_device_create(config, scope, host, now_secs, err),
         InteractiveMode::Intercept => capture_in_browser(
-            config, scope, now_secs, &r32, &r16, &post, err, cdp, extra_vars,
+            config,
+            scope,
+            now_secs,
+            &r32,
+            &r16,
+            &post,
+            err,
+            cdp,
+            extra_vars,
+            cors_origins,
         ),
         InteractiveMode::Popup => Err(OAuthError {
             exit: Exit::Unsupported,
@@ -374,6 +402,7 @@ fn capture_in_browser(
     err: &mut dyn std::io::Write,
     cdp: Option<&dyn CdpOpener>,
     extra_vars: &[(&str, &str)],
+    cors_origins: &[String],
 ) -> Result<Token, OAuthError> {
     let config = with_extra_placeholders(config, extra_vars)?;
     let opener = cdp.ok_or(OAuthError {
@@ -381,7 +410,17 @@ fn capture_in_browser(
         message: "intercept mode needs a CDP browser; pass --cdp or run slicc launch".into(),
     })?;
     let CdpResult(mut cdp_conn) = opener.open()?;
-    intercept::run(&mut cdp_conn, &config, scope, now_secs, r32, r16, post, err)
+    intercept::run(
+        &mut cdp_conn,
+        &config,
+        scope,
+        now_secs,
+        r32,
+        r16,
+        post,
+        err,
+        cors_origins,
+    )
 }
 
 pub(crate) fn with_extra_placeholders(

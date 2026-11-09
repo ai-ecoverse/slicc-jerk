@@ -148,10 +148,12 @@ function wsFrame(text) {
   if (payload.length < 126) {
     return Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
   }
-  const header = Buffer.alloc(4);
+  const large = payload.length > 65535;
+  const header = Buffer.alloc(large ? 10 : 4);
   header[0] = 0x81;
-  header[1] = 126;
-  header.writeUInt16BE(payload.length, 2);
+  header[1] = large ? 127 : 126;
+  if (large) header.writeBigUInt64BE(BigInt(payload.length), 2);
+  else header.writeUInt16BE(payload.length, 2);
   return Buffer.concat([header, payload]);
 }
 

@@ -668,6 +668,10 @@ fn kernel_verb(
         }
         "create" => crate::kernel::create(entry, args, sealed, ctx.sleep, io),
         "drop" => {
+            #[cfg(target_os = "wasi")]
+            if entry.oauth_config.is_some() && !entry.id.starts_with("mcp:") {
+                return crate::oauth::kernel_host::drop(entry, args, ctx, io);
+            }
             let stdin_terminal = ctx.stdin_terminal;
             let input = &mut *ctx.input;
             let mut confirm = || {

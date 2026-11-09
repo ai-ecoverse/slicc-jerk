@@ -373,7 +373,7 @@ fn env_fields(entry: &Entry, ctx: &Ctx<'_>) -> BTreeMap<String, String> {
     fields
 }
 
-fn grant_user(vars: &Vars) -> &str {
+pub(crate) fn grant_user(vars: &Vars) -> &str {
     if let Some(user) = vars.get("user").map(String::as_str) {
         if !user.is_empty() {
             return user;
@@ -972,6 +972,11 @@ fn remint_client_credentials(
             return Err(e.exit);
         }
     };
+    #[cfg(target_os = "wasi")]
+    let token = oauth::kernel_host::seal_token(entry, token).map_err(|e| {
+        let _ = writeln!(io.err, "jerk: {}: {e}", entry.id);
+        Exit::Error
+    })?;
     let grants = ctx.oauth.grants(entry.provider.store.as_deref());
     let updated = crate::grants::Grant {
         provider: entry.id.clone(),
@@ -1339,7 +1344,7 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         Ok(vars) => vars,
         Err(e) => return usage(&e, io),
     };
-    if entry.provider.create.is_none() && entry.oauth_config.is_some() {
+    if entry.oauth_config.is_some() && (entry.provider.create.is_none() || ctx.sealed.is_some()) {
         return oauth_create_cmd(entry, &vars, &flags, ctx, io);
     }
     let mut held = Vec::new();

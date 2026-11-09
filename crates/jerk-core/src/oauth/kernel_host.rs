@@ -99,6 +99,11 @@ pub fn seal(name: &str, value: &str) -> Result<String, String> {
     if placeholder(value) {
         return Ok(value.to_string());
     }
+    if let Ok(record) = DevSealed.request(&json!({"v": 1, "op": "placeholder", "name": name})) {
+        if record["state"] != "removed" && record["placeholder"].as_str() == Some(value) {
+            return Ok(value.to_string());
+        }
+    }
     let reply = DevSealed
         .request(&json!({"v": 1, "op": "seal", "name": name, "value": value}))
         .map_err(|_| "cannot seal OAuth token".to_string())?;
@@ -131,6 +136,45 @@ pub fn get(
         Ok(vars) => vars,
         Err(e) => return crate::cli::usage(&e, io),
     };
+    let user = crate::dispatch::grant_user(&vars);
+    let has_env = entry
+        .provider
+        .env
+        .iter()
+        .any(|name| ctx.env.var(name).is_some());
+    if !has_env
+        && ctx
+            .oauth
+            .grants(entry.provider.store.as_deref())
+            .get(&entry.id, user)
+            .is_none()
+    {
+        let waiting = crate::sealed::Waiting {
+            inner: &DevSealed,
+            sleep: ctx.sleep,
+            limit: 30,
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let status = crate::kernel::get(
+            entry,
+            &flags.bools,
+            None,
+            &waiting,
+            &mut crate::cli::Io {
+                out: &mut out,
+                err: &mut err,
+            },
+        );
+        if status == Exit::Ok {
+            let _ = io.out.write_all(&out);
+            return status;
+        }
+        if !matches!(status, Exit::SignIn | Exit::Unavailable) {
+            let _ = io.err.write_all(&err);
+            return status;
+        }
+    }
     let mut token = match crate::dispatch::fetch(entry, &vars, ctx, io) {
         Ok(token) => token,
         Err(code) => return code,
@@ -162,6 +206,58 @@ pub fn get(
     }
 }
 
+pub fn drop(
+    entry: &crate::config::Entry,
+    args: &[String],
+    ctx: &mut crate::cli::Ctx<'_>,
+    io: &mut crate::cli::Io<'_>,
+) -> crate::exit::Exit {
+    use crate::exit::Exit;
+    let flags = match crate::dispatch::parse_flags(args, &[], &["--yes"], 0) {
+        Ok(flags) => flags,
+        Err(e) => return crate::cli::usage(&format!("{} drop: {e}", entry.id), io),
+    };
+    let vars = match crate::dispatch::vars(entry, &flags) {
+        Ok(vars) => vars,
+        Err(e) => return crate::cli::usage(&e, io),
+    };
+    let mut confirm = || {
+        let mut answer = String::new();
+        let _ = ctx.input.read_line(&mut answer);
+        matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+    };
+    let waiting = crate::sealed::Waiting {
+        inner: &DevSealed,
+        sleep: ctx.sleep,
+        limit: 120,
+    };
+    let mut out = Vec::new();
+    let status = crate::kernel::drop_cmd(
+        entry,
+        &flags.bools,
+        ctx.stdin_terminal,
+        &waiting,
+        &mut confirm,
+        &mut crate::cli::Io {
+            out: &mut out,
+            err: io.err,
+        },
+    );
+    if status != Exit::Ok {
+        return status;
+    }
+    if let Err(e) = ctx
+        .oauth
+        .grants(entry.provider.store.as_deref())
+        .remove(&entry.id, crate::dispatch::grant_user(&vars))
+    {
+        let _ = writeln!(io.err, "jerk: {}: cannot remove grant: {e}", entry.id);
+        return Exit::Error;
+    }
+    let _ = io.out.write_all(&out);
+    Exit::Ok
+}
+
 pub fn seal_token(entry: &crate::config::Entry, mut token: Token) -> Result<Token, String> {
     let result = (|| {
         let name = entry
@@ -179,10 +275,13 @@ pub fn seal_token(entry: &crate::config::Entry, mut token: Token) -> Result<Toke
             access_token,
             refresh_token: None,
             expires_at: token.expires_at,
-            scope: token
-                .scope
-                .as_ref()
-                .map(|s| s.replace(&token.access_token, "[redacted]")),
+            scope: token.scope.as_ref().map(|scope| {
+                let mut scope = scope.replace(&token.access_token, "[redacted]");
+                if let Some(refresh) = token.refresh_token.as_ref().filter(|r| !r.is_empty()) {
+                    scope = scope.replace(refresh, "[redacted]");
+                }
+                scope
+            }),
             token_type: None,
             fields,
         })
