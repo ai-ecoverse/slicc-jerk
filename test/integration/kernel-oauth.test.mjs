@@ -169,59 +169,65 @@ test('kernel OAuth create bypasses unsealed CLI minting even with --reveal', { s
 });
 
 for (const provider of ['aem', 'linkedin']) {
-  test(`kernel OAuth runs the native ${provider} configuration with parameters`, {
-    skip,
-  }, async () => {
-    const sb = sandbox();
-    const shown = sb.jerk(['config', 'show', provider]);
-    assert.equal(shown.status, 0, shown.stderr);
-    const browser = await stubCdp({
-      paused: (authorize) => {
-        const url = new URL(authorize);
-        const redirect = url.searchParams.get('redirect_uri');
-        const state = url.searchParams.get('state');
-        return [
-          {
-            request:
-              provider === 'aem'
-                ? {
-                    url: redirect,
-                    method: 'POST',
-                    headers: { Origin: url.origin },
-                    postData: JSON.stringify({ authToken: fake, state }),
-                  }
-                : { url: redirect + '?code=fake-code&state=' + state, method: 'GET', headers: {} },
-          },
-        ];
-      },
+  for (const configured of [false, true]) {
+    test(`kernel OAuth runs ${configured ? 'configured' : 'built-in'} ${provider} locally with parameters`, {
+      skip,
+    }, async () => {
+      const sb = sandbox();
+      const shown = sb.jerk(['config', 'show', provider]);
+      assert.equal(shown.status, 0, shown.stderr);
+      const browser = await stubCdp({
+        paused: (authorize) => {
+          const url = new URL(authorize);
+          const redirect = url.searchParams.get('redirect_uri');
+          const state = url.searchParams.get('state');
+          return [
+            {
+              request:
+                provider === 'aem'
+                  ? {
+                      url: redirect,
+                      method: 'POST',
+                      headers: { Origin: url.origin },
+                      postData: JSON.stringify({ authToken: fake, state }),
+                    }
+                  : {
+                      url: redirect + '?code=fake-code&state=' + state,
+                      method: 'GET',
+                      headers: {},
+                    },
+            },
+          ];
+        },
+      });
+      const { kernel, run, posts, requests } = await seven('intercept', {
+        provider,
+        browser,
+        config: configured ? shown.stdout : undefined,
+      });
+      try {
+        const params =
+          provider === 'aem'
+            ? ['-p', 'org=fake-org', '-p', 'site=fake-site']
+            : ['-p', 'client_id=fake-client', '-p', 'client_secret=fake-secret'];
+        const res = await run('create', ...params);
+        assert.equal(res.status, 0, res.stderr);
+        assert.equal(res.stdout, provider + ': signed in\n');
+        assert.equal(
+          requests.some((req) => req.kind === 'oauth' || req.jop === 'create'),
+          false
+        );
+        if (provider === 'linkedin') {
+          const form = new URLSearchParams(posts[0].body);
+          assert.equal(form.get('client_id'), 'fake-client');
+          assert.equal(form.get('client_secret'), 'fake-secret');
+        } else assert.match(browser.log(), /fake-org\/fake-site/);
+      } finally {
+        kernel.terminate();
+        await browser.close();
+      }
     });
-    const { kernel, run, posts, requests } = await seven('intercept', {
-      provider,
-      browser,
-      config: shown.stdout,
-    });
-    try {
-      const params =
-        provider === 'aem'
-          ? ['-p', 'org=fake-org', '-p', 'site=fake-site']
-          : ['-p', 'client_id=fake-client', '-p', 'client_secret=fake-secret'];
-      const res = await run('create', ...params);
-      assert.equal(res.status, 0, res.stderr);
-      assert.equal(res.stdout, provider + ': signed in\n');
-      assert.equal(
-        requests.some((req) => req.kind === 'oauth' || req.jop === 'create'),
-        false
-      );
-      if (provider === 'linkedin') {
-        const form = new URLSearchParams(posts[0].body);
-        assert.equal(form.get('client_id'), 'fake-client');
-        assert.equal(form.get('client_secret'), 'fake-secret');
-      } else assert.match(browser.log(), /fake-org\/fake-site/);
-    } finally {
-      kernel.terminate();
-      await browser.close();
-    }
-  });
+  }
 }
 
 test('kernel OAuth get preserves pre-existing vault-backed sign-ins', { skip }, async () => {
