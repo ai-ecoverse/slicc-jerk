@@ -133,7 +133,7 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                     sleep: ctx.sleep,
                     limit: 30,
                 };
-                return crate::kernel::list(&config, &rest[1..], &waiting, io);
+                return crate::kernel::list(&config, &rest[1..], ctx, &waiting, io);
             }
             list(&rest[1..], env, explicit.as_deref(), io, exists)
         }
@@ -653,7 +653,11 @@ fn kernel_verb(
                 sleep: ctx.sleep,
                 limit: 30,
             };
-            crate::kernel::get(entry, args, env_val.as_deref(), &waiting, io)
+            if entry.id.starts_with("mcp:") {
+                crate::kernel::get(entry, args, env_val.as_deref(), &waiting, io)
+            } else {
+                crate::kernel::local_get(entry, args, ctx, &waiting, io)
+            }
         }
         "create" => crate::kernel::create(entry, args, sealed, ctx.sleep, io),
         "drop" => {

@@ -1,4 +1,3 @@
-#[cfg(not(target_os = "wasi"))]
 pub const BUILTIN: &str = r#"
 [providers.github]
 name = "GitHub (gh)"
@@ -509,6 +508,3 @@ format = "json"
 token_field = "key"
 body = { code = "{value}", code_verifier = "{code_verifier}", code_challenge_method = "S256" }
 "#;
-
-#[cfg(target_os = "wasi")]
-pub const BUILTIN: &str = "";
