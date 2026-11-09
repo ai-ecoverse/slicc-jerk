@@ -7,7 +7,6 @@ pub mod device;
 #[cfg(not(target_os = "wasi"))]
 pub mod http_client;
 
-#[cfg(not(target_os = "wasi"))]
 pub mod intercept;
 
 use crate::browser::Browser;
@@ -18,14 +17,23 @@ use std::collections::BTreeMap;
 #[allow(unused_imports)]
 use std::io::Write;
 
-#[cfg(not(target_os = "wasi"))]
 pub struct CdpResult(pub(crate) cdp_client::cdp::Cdp);
-
-#[cfg(target_os = "wasi")]
-pub enum CdpResult {}
 
 pub trait CdpOpener {
     fn open(&self) -> Result<CdpResult, OAuthError>;
+}
+
+#[cfg(target_os = "wasi")]
+pub struct KernelBrowser<'a> {
+    pub explicit: Option<&'a str>,
+    pub env: &'a crate::paths::Env,
+}
+
+#[cfg(target_os = "wasi")]
+impl CdpOpener for KernelBrowser<'_> {
+    fn open(&self) -> Result<CdpResult, OAuthError> {
+        crate::tab::kernel_browser(self.explicit, self.env).map(CdpResult)
+    }
 }
 
 pub struct HttpPost<'a> {

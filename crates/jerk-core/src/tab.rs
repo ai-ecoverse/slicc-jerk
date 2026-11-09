@@ -93,6 +93,25 @@ fn locate(
 }
 
 #[cfg(target_os = "wasi")]
+pub(crate) fn kernel_browser(
+    explicit: Option<&str>,
+    env: &crate::paths::Env,
+) -> Result<Cdp, crate::oauth::OAuthError> {
+    let unavailable = |message: String| crate::oauth::OAuthError {
+        exit: Exit::Unavailable,
+        message: message.trim_end().to_string(),
+    };
+    let url = explicit
+        .map(endpoint)
+        .or_else(|| env.var("SLICC_CDP_URL").map(str::to_string))
+        .ok_or_else(|| {
+            unavailable("this kernel offers no browser: SLICC_CDP_URL is not set".to_string())
+        })?;
+    let start = cdp_client::connect::choose_start(Some(&url), None).map_err(unavailable)?;
+    cdp::open(start, None).map_err(unavailable)
+}
+
+#[cfg(target_os = "wasi")]
 fn locate(
     wanted: Option<String>,
     env: &crate::paths::Env,
