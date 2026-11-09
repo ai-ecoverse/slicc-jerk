@@ -8,12 +8,13 @@ const skip = !existsSync(wasm) && 'run npm run build:wasm first';
 const placeholder = 'fnox_proxy_111111111111111111111111';
 const fake = 'fake-gh-token-never-print-me';
 
-async function seven({ stored = false, refused = false } = {}) {
+async function seven({ stored = false, refused = false, removed = false } = {}) {
   const seen = [];
   const kernel = await createNodeKernel({
     sealed: async (req) => {
       seen.push(req);
-      if (req.op === 'placeholder' && stored) return { v: 1, placeholder, state: 'ready' };
+      if (req.op === 'placeholder' && stored)
+        return { v: 1, placeholder, state: removed ? 'removed' : 'active' };
       if (req.op === 'seal') {
         if (refused) return { v: 1, error: { code: 'EEXIST', message: fake } };
         assert.equal(req.value, fake);
@@ -104,6 +105,18 @@ test('kernel get gives env precedence over vault and vault precedence over CLI',
       placeholder,
     });
     assert.equal(seen.at(-1).name, 'GITHUB_TOKEN');
+  } finally {
+    kernel.terminate();
+  }
+});
+
+test('kernel get does not reuse a removed vault record', { skip }, async () => {
+  const { kernel, seen } = await seven({ stored: true, removed: true });
+  try {
+    const res = await kernel.run(['jerk', 'github', 'get']);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout, `${placeholder}\n`);
+    assert.ok(seen.some((req) => req.op === 'seal'));
   } finally {
     kernel.terminate();
   }

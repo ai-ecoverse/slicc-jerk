@@ -167,7 +167,20 @@ pub fn get(
         }
     }
 
-    if let Some(placeholder) = env_val {
+    if let Some(value) = env_val {
+        let name = entry
+            .provider
+            .env
+            .first()
+            .map(String::as_str)
+            .unwrap_or("JERK_TOKEN");
+        let placeholder = match crate::sealed::seal_value(sealed, name, value) {
+            Ok(value) => value,
+            Err(e) => {
+                let _ = writeln!(io.err, "jerk: {}: {e}", entry.id);
+                return Exit::Error;
+            }
+        };
         if json {
             let doc = json!({
                 "provider": entry.id,
@@ -202,7 +215,11 @@ pub fn get(
                     return exit_from(exit);
                 }
             }
-            if let Some(placeholder) = reply.get("placeholder").and_then(Value::as_str) {
+            if let Some(placeholder) = reply
+                .get("placeholder")
+                .and_then(Value::as_str)
+                .filter(|v| crate::sealed::is_placeholder(v))
+            {
                 if json {
                     let doc = json!({
                         "provider": entry.id,
@@ -269,6 +286,9 @@ pub fn local_get(
     }
     for name in &entry.provider.env {
         if let Ok(reply) = sealed.request(&json!({"v": 1, "op": "placeholder", "name": name})) {
+            if reply["state"] == "removed" {
+                continue;
+            }
             if let Some(value) = reply
                 .get("placeholder")
                 .and_then(Value::as_str)

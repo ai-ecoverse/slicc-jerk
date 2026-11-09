@@ -76,13 +76,16 @@ test('the kernel get accepts --reveal and still prints only the placeholder', {
     '[providers.demo]\nname = "Demo"\nenv = ["DEMO_TOKEN"]\nrequires = "demo"\nget = { run = ["demo", "token"] }\n'
   );
   const opts = {
-    env: { SLICC_JERK_CONFIG: '/cfg/providers.toml', DEMO_TOKEN: 'sealed:demo:placeholder' },
+    env: {
+      SLICC_JERK_CONFIG: '/cfg/providers.toml',
+      DEMO_TOKEN: 'fnox_proxy_000000000000000000000000',
+    },
     preopens: { '/cfg': cfg },
   };
   try {
     const plain = runWasm(['demo', 'get', '--reveal'], opts);
     assert.equal(plain.code, 0);
-    assert.equal(plain.text, 'sealed:demo:placeholder\n');
+    assert.equal(plain.text, 'fnox_proxy_000000000000000000000000\n');
     const json = runWasm(['demo', 'get', '--json'], opts);
     assert.equal(json.code, 0);
     const both = runWasm(['demo', 'get', '--json', '--reveal'], opts);
@@ -91,7 +94,7 @@ test('the kernel get accepts --reveal and still prints only the placeholder', {
     assert.deepEqual(JSON.parse(both.text), {
       provider: 'demo',
       source: 'env',
-      placeholder: 'sealed:demo:placeholder',
+      placeholder: 'fnox_proxy_000000000000000000000000',
     });
     const bogus = runWasm(['demo', 'get', '--bogus'], opts);
     assert.equal(bogus.code, 2);
