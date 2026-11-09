@@ -325,7 +325,6 @@ pub fn oauth_create_with_vars(
         message: msg.into(),
     })?;
 
-    #[cfg(not(target_os = "wasi"))]
     let post = HttpPost {
         form: &|url, body| host.http_post(url, body),
         json: &|url, body| host.http_post_json(url, body),
@@ -417,34 +416,23 @@ pub fn oauth_create_with_vars(
             }
         }
         InteractiveMode::Intercept => {
-            #[cfg(not(target_os = "wasi"))]
-            {
-                let config = with_extra_placeholders(config, extra_vars)?;
-                let opener = cdp.ok_or(OAuthError {
-                    exit: Exit::Unavailable,
-                    message: "intercept mode needs a CDP browser; pass --cdp or run slicc launch"
-                        .into(),
-                })?;
-                let CdpResult(mut cdp_conn) = opener.open()?;
-                intercept::run(
-                    &mut cdp_conn,
-                    &config,
-                    scope,
-                    now_secs,
-                    &r32,
-                    &r16,
-                    &post,
-                    err,
-                )
-            }
-            #[cfg(target_os = "wasi")]
-            {
-                let _ = (scope, err, r32, r16);
-                Err(OAuthError {
-                    exit: Exit::Unsupported,
-                    message: "intercept mode is not available in this environment".into(),
-                })
-            }
+            let config = with_extra_placeholders(config, extra_vars)?;
+            let opener = cdp.ok_or(OAuthError {
+                exit: Exit::Unavailable,
+                message: "intercept mode needs a CDP browser; pass --cdp or run slicc launch"
+                    .into(),
+            })?;
+            let CdpResult(mut cdp_conn) = opener.open()?;
+            intercept::run(
+                &mut cdp_conn,
+                &config,
+                scope,
+                now_secs,
+                &r32,
+                &r16,
+                &post,
+                err,
+            )
         }
         InteractiveMode::Popup => Err(OAuthError {
             exit: Exit::Unsupported,

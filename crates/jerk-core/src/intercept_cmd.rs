@@ -7,20 +7,19 @@ use jerk_oauth::config::{Capture, CaptureAt, CaptureFrom, Flow, Mode, OAuthConfi
 pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     let rewrites = parse_rewrites(args);
     let filtered: Vec<String> = filter_rewrites(args);
-    let flags = match parse_flags(
-        &filtered,
-        &[
-            "--authorize-url",
-            "--redirect",
-            "--token-url",
-            "--client-id",
-            "--cdp",
-            "--from-file",
-            "--state",
-        ],
-        &["--pkce", "--exchange"],
-        0,
-    ) {
+    let mut values = vec![
+        "--authorize-url",
+        "--redirect",
+        "--token-url",
+        "--client-id",
+        "--cdp",
+        "--from-file",
+        "--state",
+    ];
+    if ctx.sealed.is_some() {
+        values.push("--name");
+    }
+    let flags = match parse_flags(&filtered, &values, &["--pkce", "--exchange"], 0) {
         Ok(flags) => flags,
         Err(e) => return usage(&format!("intercept: {e}"), io),
     };
@@ -94,13 +93,16 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
 
     let cdp_url = flags.value("--cdp");
     let host = ctx.oauth;
+    let name = flags.value("--name").unwrap_or("JERK_INTERCEPT");
 
+    #[cfg(not(target_os = "wasi"))]
     struct Opener<'a> {
         cdp_url: Option<&'a str>,
         env: &'a crate::paths::Env,
         runner: &'a dyn crate::run::Runner,
         exists: &'a dyn Fn(&std::path::Path) -> bool,
     }
+    #[cfg(not(target_os = "wasi"))]
     impl oauth::CdpOpener for Opener<'_> {
         fn open(&self) -> Result<oauth::CdpResult, oauth::OAuthError> {
             let ws_url = crate::browser_select::resolve_cdp_url(
@@ -119,11 +121,17 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
             Ok(oauth::CdpResult(cdp))
         }
     }
+    #[cfg(not(target_os = "wasi"))]
     let opener = Opener {
         cdp_url,
         env: ctx.env,
         runner: ctx.runner,
         exists: ctx.exists,
+    };
+    #[cfg(target_os = "wasi")]
+    let opener = oauth::KernelBrowser {
+        explicit: cdp_url,
+        env: ctx.env,
     };
 
     let exchange = flags.has("--exchange");
@@ -150,7 +158,7 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                 return e.exit;
             }
         };
-        let _ = writeln!(io.out, "{}", token.access_token);
+        return emit(&token.access_token, name, ctx, io);
     } else {
         let mut r32 = [0u8; 32];
         let mut r16 = [0u8; 16];
@@ -182,11 +190,15 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
             io.err,
         ) {
             Ok(token) => {
-                let _ = writeln!(
-                    io.err,
-                    "jerk intercept: captured (not exchanged, not stored)"
-                );
-                let _ = writeln!(io.out, "{}", token.access_token);
+                let note = match ctx.sealed {
+                    Some(_) => "captured (not exchanged), sealed in seven's vault",
+                    None => "captured (not exchanged, not stored)",
+                };
+                let _ = writeln!(io.err, "jerk intercept: {note}");
+                let code = emit(&token.access_token, name, ctx, io);
+                if code != Exit::Ok {
+                    return code;
+                }
             }
             Err(e) => {
                 let _ = writeln!(io.err, "jerk intercept: {e}");
@@ -195,6 +207,20 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
         }
     };
     Exit::Ok
+}
+
+fn emit(value: &str, name: &str, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit {
+    let Some(sealed) = ctx.sealed else {
+        let _ = writeln!(io.out, "{value}");
+        return Exit::Ok;
+    };
+    match crate::kernel::place("intercept", name, value, sealed, io) {
+        Ok(placed) => {
+            let _ = writeln!(io.out, "{}", placed.placeholder);
+            Exit::Ok
+        }
+        Err(code) => code,
+    }
 }
 
 fn filter_rewrites(args: &[String]) -> Vec<String> {
