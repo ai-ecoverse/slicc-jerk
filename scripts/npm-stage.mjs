@@ -75,6 +75,7 @@ function stageMain(platforms) {
   copyFileSync(join(root, 'npm', 'jerk.js'), join(dir, 'bin', 'jerk.js'));
   chmodSync(join(dir, 'bin', 'jerk.js'), 0o755);
   copyFileSync(need(join(values.from, 'jerk.wasm')), join(dir, 'bin', 'jerk.wasm'));
+  copyFileSync(join(root, 'npm', 'kernel-process.mjs'), join(dir, 'bin', 'kernel-process.mjs'));
   copyFileSync(join(root, 'LICENSE'), join(dir, 'LICENSE'));
   copyFileSync(join(root, 'README.md'), join(dir, 'README.md'));
   write(dir, 'package.json', {
@@ -84,9 +85,12 @@ function stageMain(platforms) {
       "Get, list, create and drop OAuth tokens across operating systems and inside SLICC, by dispatching to each provider's own CLI",
     ...common,
     bin: { jerk: 'bin/jerk.js' },
-    files: ['bin/jerk.js', 'bin/jerk.wasm'],
+    files: ['bin/jerk.js', 'bin/jerk.wasm', 'bin/kernel-process.mjs'],
     engines: { node: '>=18' },
-    slicc: { abi: 'wasi', commands: { jerk: { wasm: 'bin/jerk.wasm' } } },
+    slicc: {
+      abi: 'wasi',
+      commands: { jerk: { wasm: 'bin/jerk.wasm', imports: 'bin/kernel-process.mjs' } },
+    },
     optionalDependencies: Object.fromEntries(platforms.map((name) => [name, version])),
   });
 }

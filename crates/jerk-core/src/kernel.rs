@@ -4,6 +4,8 @@ use crate::exit::Exit;
 use crate::sealed::{PollResult, Sealed, SealedError};
 use serde_json::{json, Value};
 
+pub mod listing;
+
 pub fn list(config: &Config, args: &[String], sealed: &dyn Sealed, io: &mut Io<'_>) -> Exit {
     let json = match args.first().map(String::as_str) {
         Some("--json") if args.len() == 1 => true,

@@ -51,7 +51,10 @@ test('the main package carries the launcher, the wasm and the kernel command', (
   assert.equal(pkg.name, '@ai-ecoverse/slicc-jerk');
   assert.equal(pkg.version, '1.2.3');
   assert.deepEqual(pkg.bin, { jerk: 'bin/jerk.js' });
-  assert.deepEqual(pkg.slicc, { abi: 'wasi', commands: { jerk: { wasm: 'bin/jerk.wasm' } } });
+  assert.deepEqual(pkg.slicc, {
+    abi: 'wasi',
+    commands: { jerk: { wasm: 'bin/jerk.wasm', imports: 'bin/kernel-process.mjs' } },
+  });
   assert.deepEqual(pkg.optionalDependencies, { [`@ai-ecoverse/slicc-jerk-${target}`]: '1.2.3' });
 });
 

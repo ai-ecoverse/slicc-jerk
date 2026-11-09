@@ -23,7 +23,7 @@ function runWasm(args, { env, preopens } = {}) {
   const module = new WebAssembly.Module(readFileSync(wasm));
   const imports = wasi.getImportObject();
   for (const { module: from, name } of WebAssembly.Module.imports(module)) {
-    if (from !== 'wasix_32v1') continue;
+    if (from === 'wasi_snapshot_preview1') continue;
     imports[from] ??= {};
     imports[from][name] = () => 52;
   }
