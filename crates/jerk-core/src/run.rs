@@ -1,8 +1,14 @@
 use crate::paths::Os;
+#[cfg(not(target_os = "wasi"))]
 use std::io::{BufRead, Read, Write};
 use std::path::Path;
+#[cfg(not(target_os = "wasi"))]
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_os = "wasi"))]
+use std::time::Instant;
+#[cfg(target_os = "wasi")]
+mod kernel_process;
 
 const LAUNCHER_REFUSED: &[char] = &['%', '&', '|', '<', '>', '^', '"', '!', '(', ')'];
 const PATH_REFUSED: &[char] = &['%', '"', '!', '^'];
@@ -70,6 +76,7 @@ pub fn launcher_refuses(os: Os, program: &Path, args: &[String]) -> bool {
             || args.iter().any(|arg| unsafe_text(arg)))
 }
 
+#[cfg(not(target_os = "wasi"))]
 fn drain_lines(
     pipe: impl Read + Send + 'static,
     lines: std::sync::mpsc::Sender<String>,
@@ -87,6 +94,7 @@ fn drain_lines(
     })
 }
 
+#[cfg(not(target_os = "wasi"))]
 fn drain(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<String> {
     std::thread::spawn(move || {
         let mut text = String::new();
@@ -95,6 +103,7 @@ fn drain(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<String
     })
 }
 
+#[cfg(not(target_os = "wasi"))]
 fn drain_echo(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<String> {
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -112,6 +121,7 @@ fn drain_echo(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<S
     })
 }
 
+#[cfg(not(target_os = "wasi"))]
 impl Runner for Process {
     fn run(&self, program: &Path, args: &[String], opts: &Opts<'_>) -> Outcome {
         if launcher_refuses(self.os, program, args) {

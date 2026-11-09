@@ -694,14 +694,7 @@ fn kernel_verb(
             );
             Exit::Unsupported
         }
-        "list" => {
-            let _ = writeln!(
-                io.err,
-                "jerk {}: per-provider list is not supported in the kernel",
-                entry.id
-            );
-            Exit::Unsupported
-        }
+        "list" => crate::kernel::listing::run(entry, args, ctx, sealed, io),
         _ => usage(&format!("unknown command {verb}"), io),
     }
 }
