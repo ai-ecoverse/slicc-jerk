@@ -557,13 +557,12 @@ fn config_show(id: &str, env: &Env, explicit: Option<&str>, io: &mut Io<'_>) -> 
     Exit::Ok
 }
 
-#[cfg(not(target_os = "wasi"))]
 fn intercept_command(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     if ctx.via_link {
         let _ = writeln!(io.err, "jerk intercept: not available over the link");
         return Exit::Unsupported;
     }
-    if !ctx.stdin_terminal || !ctx.stdout_terminal {
+    if ctx.sealed.is_none() && (!ctx.stdin_terminal || !ctx.stdout_terminal) {
         let _ = writeln!(
             io.err,
             "jerk intercept: stdin and stdout must both be terminals"
@@ -571,12 +570,6 @@ fn intercept_command(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exi
         return Exit::Usage;
     }
     crate::intercept_cmd::run(args, ctx, io)
-}
-
-#[cfg(target_os = "wasi")]
-fn intercept_command(_args: &[String], _ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
-    let _ = writeln!(io.err, "jerk intercept: not available in this environment");
-    Exit::Unsupported
 }
 
 fn tab_command(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {

@@ -103,19 +103,30 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     }
     impl oauth::CdpOpener for Opener<'_> {
         fn open(&self) -> Result<oauth::CdpResult, oauth::OAuthError> {
+            let explicit = self.cdp_url.map(crate::tab::endpoint);
             let ws_url = crate::browser_select::resolve_cdp_url(
-                self.cdp_url,
+                explicit.as_deref(),
                 None,
                 self.env,
                 self.runner,
                 self.exists,
                 &mut std::io::sink(),
             )?;
+            #[cfg(target_os = "wasi")]
+            if ws_url.starts_with("wss://") || ws_url.starts_with("https://") {
+                return Err(oauth::OAuthError {
+                    exit: Exit::Unavailable,
+                    message: "wss and https are not available for kernel CDP; use SLICC_CDP_URL"
+                        .into(),
+                });
+            }
             let unavailable = |message| oauth::OAuthError {
                 exit: Exit::Unavailable,
                 message,
             };
-            let cdp = cdp_client::cdp::Cdp::connect(&ws_url).map_err(unavailable)?;
+            let start =
+                cdp_client::connect::choose_start(Some(&ws_url), None).map_err(unavailable)?;
+            let cdp = cdp_client::cdp::open(start, None).map_err(unavailable)?;
             Ok(oauth::CdpResult(cdp))
         }
     }
@@ -150,7 +161,7 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                 return e.exit;
             }
         };
-        let _ = writeln!(io.out, "{}", token.access_token);
+        show_token(token.access_token, ctx, io)
     } else {
         let mut r32 = [0u8; 32];
         let mut r16 = [0u8; 16];
@@ -184,16 +195,40 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
             Ok(token) => {
                 let _ = writeln!(
                     io.err,
-                    "jerk intercept: captured (not exchanged, not stored)"
+                    "jerk intercept: captured (not exchanged{})",
+                    if ctx.sealed.is_some() {
+                        ""
+                    } else {
+                        ", not stored"
+                    }
                 );
-                let _ = writeln!(io.out, "{}", token.access_token);
+                show_token(token.access_token, ctx, io)
             }
             Err(e) => {
                 let _ = writeln!(io.err, "jerk intercept: {e}");
-                return e.exit;
+                e.exit
             }
         }
-    };
+    }
+}
+
+fn show_token(mut value: String, ctx: &Ctx<'_>, io: &mut Io<'_>) -> Exit {
+    if let Some(sealed) = ctx.sealed {
+        let result = crate::sealed::seal_value(sealed, "JERK_INTERCEPT_TOKEN", &value);
+        use zeroize::Zeroize;
+        value.zeroize();
+        return match result {
+            Ok(placeholder) => {
+                let _ = writeln!(io.out, "{placeholder}");
+                Exit::Ok
+            }
+            Err(e) => {
+                let _ = writeln!(io.err, "jerk intercept: {e}");
+                Exit::Error
+            }
+        };
+    }
+    let _ = writeln!(io.out, "{value}");
     Exit::Ok
 }
 
