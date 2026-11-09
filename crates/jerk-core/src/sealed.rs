@@ -94,6 +94,38 @@ impl Sealed for DevSealed {
     }
 }
 
+pub fn is_placeholder(value: &str) -> bool {
+    value
+        .strip_prefix("fnox_proxy_")
+        .is_some_and(|suffix| suffix.len() == 24 && suffix.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+pub fn seal_value(sealed: &dyn Sealed, name: &str, value: &str) -> Result<String, SealedError> {
+    if is_placeholder(value) {
+        return Ok(value.to_string());
+    }
+    let reply = sealed.request(&serde_json::json!({
+        "v": 1, "op": "seal", "name": name, "value": value,
+    }))?;
+    if reply.get("error").is_some() {
+        let code = reply["error"]["code"]
+            .as_str()
+            .filter(|code| code.bytes().all(|b| b.is_ascii_uppercase()))
+            .unwrap_or("EIO");
+        return Err(SealedError {
+            message: format!("seven refused sealing: {code}"),
+        });
+    }
+    reply
+        .get("placeholder")
+        .and_then(Value::as_str)
+        .filter(|v| is_placeholder(v))
+        .map(String::from)
+        .ok_or_else(|| SealedError {
+            message: "sealing returned no placeholder".into(),
+        })
+}
+
 pub struct FakeSealed {
     handler: Box<dyn Fn(&Value) -> Value + Send + Sync>,
 }

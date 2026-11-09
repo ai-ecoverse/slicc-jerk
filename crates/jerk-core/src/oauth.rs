@@ -7,8 +7,9 @@ pub mod device;
 #[cfg(not(target_os = "wasi"))]
 pub mod http_client;
 
-#[cfg(not(target_os = "wasi"))]
 pub mod intercept;
+#[cfg(target_os = "wasi")]
+pub mod kernel_http;
 
 use crate::browser::Browser;
 use crate::exit::Exit;
@@ -18,11 +19,7 @@ use std::collections::BTreeMap;
 #[allow(unused_imports)]
 use std::io::Write;
 
-#[cfg(not(target_os = "wasi"))]
 pub struct CdpResult(pub(crate) cdp_client::cdp::Cdp);
-
-#[cfg(target_os = "wasi")]
-pub enum CdpResult {}
 
 pub trait CdpOpener {
     fn open(&self) -> Result<CdpResult, OAuthError>;
@@ -100,14 +97,14 @@ impl OAuthHost for NoOAuthHost {
     fn grants(&self, _: Option<&str>) -> Box<dyn Grants> {
         Box::new(crate::grants::MemoryStore::new())
     }
-    fn http_post(&self, _: &str, _: &str) -> Result<String, String> {
-        Err("not available".into())
+    fn http_post(&self, url: &str, body: &str) -> Result<String, String> {
+        kernel_http::request("POST", url, body, "application/x-www-form-urlencoded").map(|r| r.body)
     }
     fn http_get(&self, _: &str) -> Result<String, String> {
         Err("not available".into())
     }
-    fn http_post_json(&self, _: &str, _: &str) -> Result<String, String> {
-        Err("not available".into())
+    fn http_post_json(&self, url: &str, body: &str) -> Result<String, String> {
+        kernel_http::request("POST", url, body, "application/json").map(|r| r.body)
     }
     fn mcp_probe(&self, _: &str, _: &str) -> McpProbeResult {
         McpProbeResult {
@@ -317,7 +314,6 @@ pub fn oauth_create_with_vars(
         message: msg.into(),
     })?;
 
-    #[cfg(not(target_os = "wasi"))]
     let post = HttpPost {
         form: &|url, body| host.http_post(url, body),
         json: &|url, body| host.http_post_json(url, body),
@@ -409,34 +405,23 @@ pub fn oauth_create_with_vars(
             }
         }
         InteractiveMode::Intercept => {
-            #[cfg(not(target_os = "wasi"))]
-            {
-                let config = with_extra_placeholders(config, extra_vars)?;
-                let opener = cdp.ok_or(OAuthError {
-                    exit: Exit::Unavailable,
-                    message: "intercept mode needs a CDP browser; pass --cdp or run slicc launch"
-                        .into(),
-                })?;
-                let CdpResult(mut cdp_conn) = opener.open()?;
-                intercept::run(
-                    &mut cdp_conn,
-                    &config,
-                    scope,
-                    now_secs,
-                    &r32,
-                    &r16,
-                    &post,
-                    err,
-                )
-            }
-            #[cfg(target_os = "wasi")]
-            {
-                let _ = (scope, err, r32, r16);
-                Err(OAuthError {
-                    exit: Exit::Unsupported,
-                    message: "intercept mode is not available in this environment".into(),
-                })
-            }
+            let config = with_extra_placeholders(config, extra_vars)?;
+            let opener = cdp.ok_or(OAuthError {
+                exit: Exit::Unavailable,
+                message: "intercept mode needs a CDP browser; pass --cdp or run slicc launch"
+                    .into(),
+            })?;
+            let CdpResult(mut cdp_conn) = opener.open()?;
+            intercept::run(
+                &mut cdp_conn,
+                &config,
+                scope,
+                now_secs,
+                &r32,
+                &r16,
+                &post,
+                err,
+            )
         }
         InteractiveMode::Popup => Err(OAuthError {
             exit: Exit::Unsupported,

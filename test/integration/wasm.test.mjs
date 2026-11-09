@@ -55,7 +55,7 @@ test('the kernel build keeps the exit codes', {
   skip: !existsSync(wasm) && 'run npm run build:wasm first',
 }, () => {
   assert.equal(runWasm(['--nope']).code, 2);
-  assert.equal(runWasm(['intercept']).code, 5);
+  assert.equal(runWasm(['intercept']).code, 2);
   for (const command of ['upgrade', 'update']) {
     const res = runWasm([command, '--check']);
     assert.equal(res.code, 5);
