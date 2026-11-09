@@ -77,7 +77,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
     #[cfg(not(target_os = "wasi"))]
     let oauth_host = crate::oauth::DefaultOAuthHost::default();
     #[cfg(target_os = "wasi")]
-    let oauth_host = crate::oauth::NoOAuthHost;
+    let oauth_host = crate::oauth::kernel_host::KernelOAuthHost::default();
     #[cfg(target_os = "wasi")]
     let dev_sealed = crate::sealed::DevSealed;
     let mut ctx = Ctx {
@@ -642,6 +642,10 @@ fn kernel_verb(
 ) -> Exit {
     match verb {
         "get" => {
+            #[cfg(target_os = "wasi")]
+            if entry.oauth_config.is_some() && !entry.id.starts_with("mcp:") {
+                return crate::oauth::kernel_host::get(entry, args, ctx, io);
+            }
             let env_val = entry
                 .provider
                 .env
@@ -658,6 +662,9 @@ fn kernel_verb(
             } else {
                 crate::kernel::local_get(entry, args, ctx, &waiting, io)
             }
+        }
+        "create" if entry.oauth_config.is_some() && !entry.id.starts_with("mcp:") => {
+            dispatch::create(entry, args, ctx, io)
         }
         "create" => crate::kernel::create(entry, args, sealed, ctx.sleep, io),
         "drop" => {

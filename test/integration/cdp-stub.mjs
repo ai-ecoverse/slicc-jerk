@@ -39,8 +39,9 @@ export function stubCdp({ paused }) {
         log(`<< ${JSON.stringify(obj)}`);
         socket.write(wsFrame(JSON.stringify(obj)));
       };
-      const onPaused = (sessionId) => {
-        paused.forEach((params, i) => {
+      const onPaused = (sessionId, url) => {
+        const events = typeof paused === 'function' ? paused(url) : paused;
+        events.forEach((params, i) => {
           send({
             method: 'Fetch.requestPaused',
             sessionId,
@@ -88,7 +89,7 @@ export function stubCdp({ paused }) {
           } else if (method === 'Page.navigate') {
             send({ id, result: { frameId: 'F1' }, sessionId });
             navigateSession = sessionId;
-            setTimeout(() => onPaused(navigateSession), 20);
+            setTimeout(() => onPaused(navigateSession, msg.params.url), 20);
           } else if (
             method === 'Fetch.failRequest' ||
             method === 'Fetch.continueRequest' ||
