@@ -1,7 +1,6 @@
 #[cfg(not(target_os = "wasi"))]
 pub mod loopback;
 
-#[cfg(not(target_os = "wasi"))]
 pub mod device;
 
 #[cfg(not(target_os = "wasi"))]
@@ -87,40 +86,7 @@ pub mod default_host;
 pub use default_host::DefaultOAuthHost;
 
 #[cfg(target_os = "wasi")]
-pub struct NoOAuthHost;
-
-#[cfg(target_os = "wasi")]
-impl OAuthHost for NoOAuthHost {
-    fn browser(&self) -> &dyn Browser {
-        &crate::browser::NoBrowser
-    }
-    fn grants(&self, _: Option<&str>) -> Box<dyn Grants> {
-        Box::new(crate::grants::MemoryStore::new())
-    }
-    fn http_post(&self, url: &str, body: &str) -> Result<String, String> {
-        kernel_http::request("POST", url, body, "application/x-www-form-urlencoded").map(|r| r.body)
-    }
-    fn http_get(&self, _: &str) -> Result<String, String> {
-        Err("not available".into())
-    }
-    fn http_post_json(&self, url: &str, body: &str) -> Result<String, String> {
-        kernel_http::request("POST", url, body, "application/json").map(|r| r.body)
-    }
-    fn mcp_probe(&self, _: &str, _: &str) -> McpProbeResult {
-        McpProbeResult {
-            status: 0,
-            www_authenticate: None,
-            body: String::new(),
-        }
-    }
-    fn sleep(&self, _: u64) {}
-    fn confine(&self, _: crate::reach::Reach) -> Box<dyn OAuthHost> {
-        Box::new(NoOAuthHost)
-    }
-    fn reachable(&self, _: &str) -> Result<(), String> {
-        Ok(())
-    }
-}
+pub mod kernel_host;
 
 pub(crate) fn accept_blocking(listener: &std::net::TcpListener) -> Option<std::net::TcpStream> {
     let (stream, _) = listener.accept().ok()?;
@@ -337,11 +303,18 @@ pub fn oauth_create_with_vars(
             }
             #[cfg(target_os = "wasi")]
             {
-                let _ = (scope, err, r32, r16, extra_vars, cors_origins);
-                Err(OAuthError {
-                    exit: Exit::Unsupported,
-                    message: "loopback is not available in this environment".into(),
-                })
+                capture_in_browser(
+                    config,
+                    scope,
+                    now_secs,
+                    &r32,
+                    &r16,
+                    &post,
+                    err,
+                    cdp,
+                    extra_vars,
+                    cors_origins,
+                )
             }
         }
         InteractiveMode::Auto => {
@@ -379,55 +352,75 @@ pub fn oauth_create_with_vars(
                     &r16,
                     &post,
                     err,
+                    cors_origins,
                 )
             }
             #[cfg(target_os = "wasi")]
             {
-                let _ = (scope, err, r32, r16, extra_vars, cors_origins);
-                Err(OAuthError {
-                    exit: Exit::Unsupported,
-                    message: "auto mode is not available in this environment".into(),
-                })
+                capture_in_browser(
+                    config,
+                    scope,
+                    now_secs,
+                    &r32,
+                    &r16,
+                    &post,
+                    err,
+                    cdp,
+                    extra_vars,
+                    cors_origins,
+                )
             }
         }
-        InteractiveMode::Device => {
-            #[cfg(not(target_os = "wasi"))]
-            {
-                oauth_device_create(config, scope, host, now_secs, err)
-            }
-            #[cfg(target_os = "wasi")]
-            {
-                let _ = (scope, err);
-                Err(OAuthError {
-                    exit: Exit::Unsupported,
-                    message: "device flow is not available in this environment".into(),
-                })
-            }
-        }
-        InteractiveMode::Intercept => {
-            let config = with_extra_placeholders(config, extra_vars)?;
-            let opener = cdp.ok_or(OAuthError {
-                exit: Exit::Unavailable,
-                message: "intercept mode needs a CDP browser; pass --cdp or run slicc launch"
-                    .into(),
-            })?;
-            let CdpResult(mut cdp_conn) = opener.open()?;
-            intercept::run(
-                &mut cdp_conn,
-                &config,
-                scope,
-                now_secs,
-                &r32,
-                &r16,
-                &post,
-                err,
-            )
-        }
+        InteractiveMode::Device => oauth_device_create(config, scope, host, now_secs, err),
+        InteractiveMode::Intercept => capture_in_browser(
+            config,
+            scope,
+            now_secs,
+            &r32,
+            &r16,
+            &post,
+            err,
+            cdp,
+            extra_vars,
+            cors_origins,
+        ),
         InteractiveMode::Popup => Err(OAuthError {
             exit: Exit::Unsupported,
             message: "popup mode is not implemented yet".into(),
         }),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_in_browser(
+    config: &OAuthConfig,
+    scope: Option<&str>,
+    now_secs: u64,
+    r32: &[u8; 32],
+    r16: &[u8; 16],
+    post: &HttpPost<'_>,
+    err: &mut dyn std::io::Write,
+    cdp: Option<&dyn CdpOpener>,
+    extra_vars: &[(&str, &str)],
+    cors_origins: &[String],
+) -> Result<Token, OAuthError> {
+    let config = with_extra_placeholders(config, extra_vars)?;
+    let opener = cdp.ok_or(OAuthError {
+        exit: Exit::Unavailable,
+        message: "intercept mode needs a CDP browser; pass --cdp or run slicc launch".into(),
+    })?;
+    let CdpResult(mut cdp_conn) = opener.open()?;
+    intercept::run(
+        &mut cdp_conn,
+        &config,
+        scope,
+        now_secs,
+        r32,
+        r16,
+        post,
+        err,
+        cors_origins,
+    )
 }
 
 pub(crate) fn with_extra_placeholders(
@@ -534,7 +527,6 @@ pub fn oauth_client_credentials(
     })
 }
 
-#[cfg(not(target_os = "wasi"))]
 fn oauth_device_create(
     config: &OAuthConfig,
     scope: Option<&str>,

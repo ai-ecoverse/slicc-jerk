@@ -373,7 +373,7 @@ fn env_fields(entry: &Entry, ctx: &Ctx<'_>) -> BTreeMap<String, String> {
     fields
 }
 
-fn grant_user(vars: &Vars) -> &str {
+pub(crate) fn grant_user(vars: &Vars) -> &str {
     if let Some(user) = vars.get("user").map(String::as_str) {
         if !user.is_empty() {
             return user;
@@ -972,6 +972,11 @@ fn remint_client_credentials(
             return Err(e.exit);
         }
     };
+    #[cfg(target_os = "wasi")]
+    let token = oauth::kernel_host::seal_token(entry, token).map_err(|e| {
+        let _ = writeln!(io.err, "jerk: {}: {e}", entry.id);
+        Exit::Error
+    })?;
     let grants = ctx.oauth.grants(entry.provider.store.as_deref());
     let updated = crate::grants::Grant {
         provider: entry.id.clone(),
@@ -1339,7 +1344,7 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         Ok(vars) => vars,
         Err(e) => return usage(&e, io),
     };
-    if entry.provider.create.is_none() && entry.oauth_config.is_some() {
+    if entry.oauth_config.is_some() && (entry.provider.create.is_none() || ctx.sealed.is_some()) {
         return oauth_create_cmd(entry, &vars, &flags, ctx, io);
     }
     let mut held = Vec::new();
@@ -1491,7 +1496,6 @@ fn oauth_create_cmd(
         }
     }
 
-    #[cfg(not(target_os = "wasi"))]
     let cdp_opener = {
         let cdp_url = flags.value("--cdp");
         let seven_origin = flags
@@ -1501,7 +1505,7 @@ fn oauth_create_cmd(
             config.mode,
             jerk_oauth::config::Mode::Intercept | jerk_oauth::config::Mode::Auto
         );
-        if needs_cdp {
+        if needs_cdp || cfg!(target_os = "wasi") {
             struct Opener<'a> {
                 cdp_url: Option<&'a str>,
                 seven_origin: Option<&'a str>,
@@ -1540,11 +1544,8 @@ fn oauth_create_cmd(
             None
         }
     };
-    #[cfg(not(target_os = "wasi"))]
     let cdp_ref: Option<&dyn oauth::CdpOpener> =
         cdp_opener.as_ref().map(|o| o as &dyn oauth::CdpOpener);
-    #[cfg(target_os = "wasi")]
-    let cdp_ref: Option<&dyn oauth::CdpOpener> = None;
 
     let scope = widened.as_deref().or(scope);
     let config = resolve_oauth(&config, ctx.env);
@@ -1567,6 +1568,14 @@ fn oauth_create_cmd(
         }
     };
 
+    #[cfg(target_os = "wasi")]
+    let token = match oauth::kernel_host::seal_token(entry, token) {
+        Ok(token) => token,
+        Err(e) => {
+            let _ = writeln!(io.err, "jerk: {}: {e}", entry.id);
+            return Exit::Error;
+        }
+    };
     let recorded = token.scope.clone().or(scope.map(String::from));
     let grants = host.grants(entry.provider.store.as_deref());
     let grant = if token.refresh_token.is_some() {

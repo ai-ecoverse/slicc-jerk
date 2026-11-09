@@ -96,23 +96,15 @@ test('kernel builtins use the kernel gh and seal its output, also with --reveal'
   }
 });
 
-test('builtin OAuth create preserves linked-host routing and params', { skip }, async () => {
+test('builtin non-OAuth create preserves linked-host routing and params', { skip }, async () => {
   const { kernel, seen } = await seven({ host: true });
   try {
-    const res = await kernel.run([
-      'jerk',
-      'linkedin',
-      'create',
-      '-p',
-      'client_id=fake-client',
-      '-p',
-      'client_secret=fake-secret',
-    ]);
+    const res = await kernel.run(['jerk', 'github', 'create', '-p', 'host=github.example.test']);
     assert.equal(res.status, 4, res.stderr);
     const request = seen.find((req) => req.jop === 'create');
     assert.equal(request.kind, 'jerk');
-    assert.equal(request.provider, 'linkedin');
-    assert.deepEqual(request.params, { client_id: 'fake-client', client_secret: 'fake-secret' });
+    assert.equal(request.provider, 'github');
+    assert.deepEqual(request.params, { host: 'github.example.test' });
     assert.equal(
       seen.some((req) => req.kind === 'oauth'),
       false

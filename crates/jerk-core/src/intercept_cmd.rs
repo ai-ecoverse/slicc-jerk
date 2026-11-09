@@ -191,6 +191,7 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
                 json: &no_exchange,
             },
             io.err,
+            &[],
         ) {
             Ok(token) => {
                 let _ = writeln!(

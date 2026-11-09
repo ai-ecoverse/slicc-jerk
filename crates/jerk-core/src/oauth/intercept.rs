@@ -28,6 +28,7 @@ pub fn run(
     random_16: &[u8; 16],
     http_post: &oauth::HttpPost<'_>,
     err: &mut dyn Write,
+    cors_origins: &[String],
 ) -> Result<Token, OAuthError> {
     let timeout_ms = jerk_oauth::config::timeout_ms(config);
 
@@ -105,6 +106,7 @@ pub fn run(
         random_16,
         timeout_ms,
         err,
+        cors_origins,
     );
 
     let _ = cdp.call("Target.closeTarget", json!({ "targetId": target_id }), None);
@@ -144,22 +146,51 @@ pub fn run(
     } else {
         None
     };
-    let result = capture::parse_redirect(
-        &captured.value,
-        &config.capture.from,
-        &config.capture.param,
-        expected_state,
-        if config.capture.at == CaptureAt::Network {
-            None
+    let result =
+        if config.capture.at == CaptureAt::Callback && config.capture.from == CaptureFrom::Body {
+            capture::parse_json_body(&captured.value, &config.capture.param, expected_state)
         } else {
-            redirect_target.as_deref()
-        },
-        None,
-    )
-    .map_err(|e| OAuthError {
-        exit: Exit::Error,
-        message: e.to_string(),
-    })?;
+            capture::parse_redirect(
+                &captured.value,
+                &config.capture.from,
+                &config.capture.param,
+                expected_state,
+                if config.capture.at == CaptureAt::Network {
+                    None
+                } else {
+                    redirect_target.as_deref()
+                },
+                None,
+            )
+        }
+        .map_err(|e| OAuthError {
+            exit: Exit::Error,
+            message: match e {
+                capture::CaptureError::IdpError { error, .. }
+                    if matches!(
+                        error.as_str(),
+                        "access_denied"
+                            | "invalid_request"
+                            | "invalid_scope"
+                            | "unauthorized_client"
+                            | "unsupported_response_type"
+                            | "server_error"
+                            | "temporarily_unavailable"
+                            | "login_required"
+                            | "interaction_required"
+                            | "consent_required"
+                            | "account_selection_required"
+                            | "invalid_client"
+                            | "invalid_grant"
+                            | "unsupported_grant_type"
+                    ) =>
+                {
+                    format!("IdP error: {error}")
+                }
+                capture::CaptureError::IdpError { .. } => "IdP denied sign-in".into(),
+                other => other.to_string(),
+            },
+        })?;
 
     if config.relay.is_some() {
         if let Some(received_nonce) = result.params.get("nonce") {
@@ -191,6 +222,7 @@ fn run_in_target(
     nonce_bytes: &[u8; 16],
     timeout_ms: u64,
     err: &mut dyn Write,
+    cors_origins: &[String],
 ) -> Result<Captured, OAuthError> {
     let mut patterns = build_patterns(config);
 
@@ -247,6 +279,7 @@ fn run_in_target(
             nonce_bytes,
             deadline,
             true,
+            cors_origins,
         ),
         _ => capture_fetch(
             &mut interception,
@@ -256,6 +289,7 @@ fn run_in_target(
             nonce_bytes,
             deadline,
             false,
+            cors_origins,
         ),
     }
 }
@@ -300,6 +334,7 @@ fn capture_navigation(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capture_fetch(
     interception: &mut Interception<'_>,
     config: &OAuthConfig,
@@ -308,6 +343,7 @@ fn capture_fetch(
     _nonce_bytes: &[u8; 16],
     deadline: Instant,
     is_network: bool,
+    cors_origins: &[String],
 ) -> Result<Captured, OAuthError> {
     loop {
         let remaining = remaining_timeout(deadline)?;
@@ -318,6 +354,21 @@ fn capture_fetch(
             Err(e) => return Err(e),
         };
 
+        if config.capture.at == CaptureAt::Callback {
+            let origin = paused.header("origin");
+            let allowed = origin.is_none_or(|o| cors_origins.iter().any(|allowed| allowed == o));
+            if capture::verify_redirect_uri(&paused.full_url(), redirect_base, None).is_err()
+                || !allowed
+            {
+                let _ = interception.decide(&paused, &Decision::Fail(fetch::ErrorReason::Aborted));
+                continue;
+            }
+            if paused.method == "OPTIONS" {
+                let _ = interception
+                    .decide(&paused, &Decision::Fulfill(callback_response(204, origin)));
+                continue;
+            }
+        }
         if is_network {
             if let Some(value) = try_capture_network(&paused, config) {
                 if let Some(fields) = capture_fields(interception, &paused, config) {
@@ -326,12 +377,16 @@ fn capture_fetch(
                 }
             }
         } else if let Some(captured) = try_capture(&paused, config, redirect_base) {
-            let fulfill = match config.on_capture.as_ref() {
-                Some(jerk_oauth::config::OnCapture::Close) => {
-                    Decision::Fail(cdp_client::fetch::ErrorReason::Aborted)
+            let fulfill = if config.capture.at == CaptureAt::Callback {
+                Decision::Fulfill(callback_response(200, paused.header("origin")))
+            } else {
+                match config.on_capture.as_ref() {
+                    Some(jerk_oauth::config::OnCapture::Close) => {
+                        Decision::Fail(cdp_client::fetch::ErrorReason::Aborted)
+                    }
+                    Some(jerk_oauth::config::OnCapture::Leave) => Decision::default(),
+                    _ => Decision::Fulfill(Fulfill::signed_in()),
                 }
-                Some(jerk_oauth::config::OnCapture::Leave) => Decision::default(),
-                _ => Decision::Fulfill(Fulfill::signed_in()),
             };
             let _ = interception.decide(&paused, &fulfill);
             return Ok(Captured {
@@ -340,8 +395,24 @@ fn capture_fetch(
             });
         }
 
-        let decision = rewrite_decision(&paused, config);
+        let decision = if config.capture.at == CaptureAt::Callback {
+            Decision::Fail(fetch::ErrorReason::Aborted)
+        } else {
+            rewrite_decision(&paused, config)
+        };
         let _ = interception.decide(&paused, &decision);
+    }
+}
+
+fn callback_response(status: u16, origin: Option<&str>) -> Fulfill {
+    let response = Fulfill::new(status)
+        .header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+        .header("Access-Control-Allow-Headers", "content-type")
+        .header("Access-Control-Allow-Private-Network", "true")
+        .header("Cache-Control", "no-store");
+    match origin {
+        Some(origin) => response.header("Access-Control-Allow-Origin", origin),
+        None => response,
     }
 }
 
@@ -351,6 +422,20 @@ fn try_capture(
     redirect_base: &str,
 ) -> Option<String> {
     match config.capture.at {
+        CaptureAt::Callback => {
+            if paused.is_response() {
+                return None;
+            }
+            if config.capture.from == CaptureFrom::Body {
+                let body = paused.post_data.as_deref()?;
+                if paused.method != "POST" || body.len() > 65536 {
+                    return None;
+                }
+                String::from_utf8(body.to_vec()).ok()
+            } else {
+                (paused.method == "GET").then(|| paused.full_url())
+            }
+        }
         CaptureAt::Request => {
             let url = paused.full_url();
             if url.starts_with(redirect_base) {
@@ -542,7 +627,7 @@ fn build_patterns(config: &OAuthConfig) -> Vec<Pattern> {
     }
 
     match config.capture.at {
-        CaptureAt::Request => {
+        CaptureAt::Request | CaptureAt::Callback => {
             let effective = match &config.relay {
                 Some(r) => relay::relay_redirect_target(r),
                 None => config.redirect_uri.clone(),
@@ -565,7 +650,7 @@ fn build_patterns(config: &OAuthConfig) -> Vec<Pattern> {
                 });
             }
         }
-        CaptureAt::Navigation | CaptureAt::Callback => {}
+        CaptureAt::Navigation => {}
     }
 
     patterns

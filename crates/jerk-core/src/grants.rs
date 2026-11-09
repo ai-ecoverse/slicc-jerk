@@ -79,5 +79,4 @@ impl Grants for MemoryStore {
 #[cfg(not(target_os = "wasi"))]
 pub mod keyring_store;
 
-#[cfg(not(target_os = "wasi"))]
 pub mod file_store;

@@ -39,8 +39,9 @@ export function stubCdp({ paused }) {
         log(`<< ${JSON.stringify(obj)}`);
         socket.write(wsFrame(JSON.stringify(obj)));
       };
-      const onPaused = (sessionId) => {
-        paused.forEach((params, i) => {
+      const onPaused = (sessionId, url) => {
+        const events = typeof paused === 'function' ? paused(url) : paused;
+        events.forEach((params, i) => {
           send({
             method: 'Fetch.requestPaused',
             sessionId,
@@ -88,7 +89,7 @@ export function stubCdp({ paused }) {
           } else if (method === 'Page.navigate') {
             send({ id, result: { frameId: 'F1' }, sessionId });
             navigateSession = sessionId;
-            setTimeout(() => onPaused(navigateSession), 20);
+            setTimeout(() => onPaused(navigateSession, msg.params.url), 20);
           } else if (
             method === 'Fetch.failRequest' ||
             method === 'Fetch.continueRequest' ||
@@ -147,10 +148,12 @@ function wsFrame(text) {
   if (payload.length < 126) {
     return Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
   }
-  const header = Buffer.alloc(4);
+  const large = payload.length > 65535;
+  const header = Buffer.alloc(large ? 10 : 4);
   header[0] = 0x81;
-  header[1] = 126;
-  header.writeUInt16BE(payload.length, 2);
+  header[1] = large ? 127 : 126;
+  if (large) header.writeBigUInt64BE(BigInt(payload.length), 2);
+  else header.writeUInt16BE(payload.length, 2);
   return Buffer.concat([header, payload]);
 }
 
