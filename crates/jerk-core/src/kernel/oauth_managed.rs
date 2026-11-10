@@ -84,9 +84,11 @@ pub fn locate(
         {
             return Ok(saved.map(|r| r.name));
         }
-        let record = sealed
-            .request(&json!({"v": 1, "op": "placeholder", "name": name}))
-            .map_err(|_| Error::new("ENOTCONN"))?;
+        let record = match sealed.request(&json!({"v": 1, "op": "placeholder", "name": name})) {
+            Ok(record) => record,
+            Err(_) if saved.is_none() => return Ok(None),
+            Err(error) => return Err(Error::new(error.code)),
+        };
         return Ok(
             (marked(&record)? && record["placeholder"].as_str() == Some(value))
                 .then(|| name.clone()),

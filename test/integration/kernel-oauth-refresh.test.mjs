@@ -328,6 +328,26 @@ for (const same of [true, false]) {
   });
 }
 
+test('confirmed managed env placeholders still fail closed while the vault is offline', {
+  skip,
+}, async () => {
+  const options = { env: {} };
+  const { kernel, run } = await seven('device', options);
+  try {
+    assert.equal((await run('create')).status, 0);
+    options.env.DEMO_TOKEN = placeholder;
+    options.reply = () => ({ v: 1, error: { code: 'ENOTCONN', message: 'offline' } });
+    for (const args of [['get'], ['get', '--refresh']]) {
+      const got = await run(...args);
+      assert.equal(got.status, 4, got.stderr);
+      assert.equal(got.stdout, '');
+      privateOutput(got);
+    }
+  } finally {
+    kernel.terminate();
+  }
+});
+
 test('confidential interactive creation keeps its legacy access-only path with a warning', {
   skip,
 }, async () => {
