@@ -452,7 +452,9 @@ for (const [provider, name] of [
       const dropped = await run('drop', '--yes');
       assert.equal(dropped.status, 0, dropped.stderr);
       assert.ok(requests.some((req) => req.op === 'oauthRemove' && req.name === name));
-      assert.equal((await run('get')).status, 3);
+      const after = await run('get');
+      assert.equal(after.status, provider === 'linkedin' ? 2 : 3, after.stderr);
+      assert.equal(after.stdout, '');
     } finally {
       kernel.terminate();
     }
