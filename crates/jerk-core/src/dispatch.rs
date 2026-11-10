@@ -858,6 +858,13 @@ fn fetch_oauth(
             return Err(Exit::Usage);
         }
     };
+    if ctx.sealed.is_some() && crate::kernel::oauth_managed::refresh_env(&config, ctx.env) {
+        let _ = writeln!(
+            io.err,
+            "jerk: kernel refresh_env is unsupported; use create to register a vault-managed grant"
+        );
+        return Err(Exit::Unsupported);
+    }
     let refresh_from_env = config
         .refresh_env
         .as_ref()
@@ -1461,7 +1468,24 @@ fn oauth_create_cmd(
     let host = ctx.oauth;
     let mut widened = None;
 
-    if !flags.has("--force") {
+    let mut managed_existing = false;
+    if let Some(sealed) = ctx.sealed.filter(|_| !flags.has("--force")) {
+        match crate::kernel::oauth_managed::lookup(entry, user, ctx.env, sealed, ctx.now, false) {
+            Ok(Some(_)) if requested.is_none() && !flags.params.contains_key("scope") => {
+                let _ = writeln!(
+                    io.out,
+                    "{}: already signed in; use --force to sign in again",
+                    entry.id
+                );
+                return Exit::Ok;
+            }
+            Ok(Some(_)) => managed_existing = true,
+            Err(error) if error.exit() == Exit::SignIn => managed_existing = true,
+            Err(error) => return crate::kernel::oauth_managed::report(entry, error, io),
+            Ok(None) => {}
+        }
+    }
+    if !flags.has("--force") && !managed_existing {
         let grants = host.grants(entry.provider.store.as_deref());
         if let Some(g) = grants.get(&entry.id, user) {
             let mut quiet = Io {
@@ -1549,6 +1573,26 @@ fn oauth_create_cmd(
 
     let scope = widened.as_deref().or(scope);
     let config = resolve_oauth(&config, ctx.env);
+    let managed = match ctx
+        .sealed
+        .map(|sealed| crate::kernel::oauth_managed::prepare(&config, sealed))
+        .transpose()
+    {
+        Ok(managed) => {
+            if ctx.sealed.is_some()
+                && config
+                    .client_secret
+                    .as_deref()
+                    .is_some_and(|secret| !secret.is_empty())
+                && config.mode != jerk_oauth::config::Mode::ClientCredentials
+                && config.flow != jerk_oauth::config::Flow::ClientCredentials
+            {
+                let _ = writeln!(io.err, "jerk: confidential OAuth refresh is unsupported in the kernel; this sign-in stores an access-only token and requires reauthentication after expiry");
+            }
+            managed.unwrap_or(false)
+        }
+        Err(error) => return crate::kernel::oauth_managed::report(entry, error, io),
+    };
     let extra: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let token = match oauth::oauth_create_with_vars(
         &config,
@@ -1568,6 +1612,23 @@ fn oauth_create_cmd(
         }
     };
 
+    if let Some(sealed) = ctx.sealed.filter(|_| managed) {
+        if let Err(error) =
+            crate::kernel::oauth_managed::adopt(entry, user, &config, scope, token, ctx.env, sealed)
+        {
+            return crate::kernel::oauth_managed::report(entry, error, io);
+        }
+        if host
+            .grants(entry.provider.store.as_deref())
+            .remove(&entry.id, user)
+            .is_err()
+        {
+            let _ = writeln!(io.err, "jerk: cannot remove obsolete local OAuth grant");
+            return Exit::Error;
+        }
+        let _ = writeln!(io.out, "{}: signed in", entry.id);
+        return Exit::Ok;
+    }
     #[cfg(target_os = "wasi")]
     let token = match oauth::kernel_host::seal_token(entry, token) {
         Ok(token) => token,

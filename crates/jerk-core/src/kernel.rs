@@ -5,6 +5,8 @@ use crate::sealed::{PollResult, Sealed, SealedError};
 use serde_json::{json, Value};
 
 pub mod listing;
+pub mod oauth_managed;
+pub mod oauth_protocol;
 
 pub fn list(
     config: &Config,
@@ -247,14 +249,30 @@ pub fn local_get(
     sealed: &dyn Sealed,
     io: &mut Io<'_>,
 ) -> Exit {
-    let flags = match crate::dispatch::parse_flags(args, &[], &["--json", "--reveal"], 0) {
-        Ok(flags) => flags,
-        Err(e) => return crate::cli::usage(&format!("{} get: {e}", entry.id), io),
-    };
+    let flags =
+        match crate::dispatch::parse_flags(args, &[], &["--json", "--reveal", "--refresh"], 0) {
+            Ok(flags) => flags,
+            Err(e) => return crate::cli::usage(&format!("{} get: {e}", entry.id), io),
+        };
     let vars = match crate::dispatch::vars(entry, &flags) {
         Ok(vars) => vars,
         Err(e) => return crate::cli::usage(&e, io),
     };
+    match oauth_managed::lookup(
+        entry,
+        crate::dispatch::grant_user(&vars),
+        ctx.env,
+        sealed,
+        ctx.now,
+        flags.has("--refresh"),
+    ) {
+        Ok(Some(status)) => {
+            oauth_managed::show(entry, &status, flags.has("--json"), io);
+            return Exit::Ok;
+        }
+        Err(error) => return oauth_managed::report(entry, error, io),
+        Ok(None) => {}
+    }
     let show = |value: &str, source: &str, io: &mut Io<'_>| {
         if flags.has("--json") {
             let _ = writeln!(

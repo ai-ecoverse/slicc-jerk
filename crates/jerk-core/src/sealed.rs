@@ -11,6 +11,30 @@ pub trait Sealed {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SealedError {
     pub message: String,
+    pub code: &'static str,
+}
+
+impl SealedError {
+    pub fn from_io(error: std::io::Error) -> Self {
+        use std::io::ErrorKind;
+        let code = match error.kind() {
+            ErrorKind::InvalidInput => "EINVAL",
+            ErrorKind::Unsupported => "ENOTSUP",
+            ErrorKind::TimedOut => "ETIMEDOUT",
+            ErrorKind::PermissionDenied => "EACCES",
+            ErrorKind::WouldBlock => "EAGAIN",
+            ErrorKind::NotFound
+            | ErrorKind::NotConnected
+            | ErrorKind::ConnectionReset
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::BrokenPipe => "ENOTCONN",
+            _ => "EIO",
+        };
+        Self {
+            message: "sealed transport failed".into(),
+            code,
+        }
+    }
 }
 
 impl std::fmt::Display for SealedError {
@@ -31,25 +55,22 @@ pub struct DevSealed;
 #[cfg(target_os = "wasi")]
 impl DevSealed {
     fn roundtrip(body: &Value) -> Result<Value, SealedError> {
-        let encoded = serde_json::to_vec(body).map_err(|e| SealedError {
-            message: format!("cannot encode request: {e}"),
-        })?;
+        let encoded =
+            zeroize::Zeroizing::new(serde_json::to_vec(body).map_err(|_| SealedError {
+                message: "cannot encode sealed request".into(),
+                code: "EIO",
+            })?);
         let mut file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open("/dev/sealed")
-            .map_err(|e| SealedError {
-                message: format!("cannot open /dev/sealed: {e}"),
-            })?;
-        file.write_all(&encoded).map_err(|e| SealedError {
-            message: format!("write to /dev/sealed failed: {e}"),
-        })?;
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf).map_err(|e| SealedError {
-            message: format!("read from /dev/sealed failed: {e}"),
-        })?;
-        serde_json::from_slice(&buf).map_err(|e| SealedError {
-            message: format!("invalid JSON from /dev/sealed: {e}"),
+            .map_err(SealedError::from_io)?;
+        file.write_all(&encoded).map_err(SealedError::from_io)?;
+        let mut buf = zeroize::Zeroizing::new(Vec::new());
+        file.read_to_end(&mut buf).map_err(SealedError::from_io)?;
+        serde_json::from_slice(&buf).map_err(|_| SealedError {
+            message: "invalid JSON from /dev/sealed".into(),
+            code: "EIO",
         })
     }
 }
@@ -79,6 +100,7 @@ impl Sealed for DevSealed {
                 Ok(PollResult::Pending { progress })
             }
             other => Err(SealedError {
+                code: "EIO",
                 message: format!(
                     "unexpected state from /dev/sealed: {}",
                     other.unwrap_or("(missing)")
@@ -113,6 +135,7 @@ pub fn seal_value(sealed: &dyn Sealed, name: &str, value: &str) -> Result<String
             .filter(|code| code.bytes().all(|b| b.is_ascii_uppercase()))
             .unwrap_or("EIO");
         return Err(SealedError {
+            code: "EIO",
             message: format!("seven refused sealing: {code}"),
         });
     }
@@ -122,6 +145,7 @@ pub fn seal_value(sealed: &dyn Sealed, name: &str, value: &str) -> Result<String
         .filter(|v| is_placeholder(v))
         .map(String::from)
         .ok_or_else(|| SealedError {
+            code: "EIO",
             message: "sealing returned no placeholder".into(),
         })
 }
@@ -162,6 +186,7 @@ impl Sealed for FakeSealed {
                 Ok(PollResult::Pending { progress })
             }
             _ => Err(SealedError {
+                code: "EIO",
                 message: "unexpected state".into(),
             }),
         }
@@ -204,6 +229,7 @@ impl Waiting<'_> {
         }
         let _ = self.inner.cancel(&id);
         Err(SealedError {
+            code: "ETIMEDOUT",
             message: "seven did not answer in time".to_string(),
         })
     }
