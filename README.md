@@ -349,7 +349,7 @@ Over the link, an `mcp:` lease is confined by address whenever it has to refresh
 
 ### Kernel OAuth protocol v1
 
-Managed sign-in requires end-to-end `{"v":1,"op":"capabilities"}` support returning `{"v":1,"capabilities":{"kernelOAuth":1}}`. Deploy supporting vault and bios versions and install a supporting kernel before enabling this jerk build. An old kernel, bios or vault does not silently downgrade public sign-in to access-only sealing. Legacy named records and status lookup remain compatible; `oauthManaged: true` in a legacy placeholder/list reply requires authoritative managed support even when local reference files are absent.
+Managed sign-in requires end-to-end `{"v":1,"op":"capabilities"}` support returning `{"v":1,"capabilities":{"kernelOAuth":1}}`. Deploy supporting vault and bios versions and install kernel 1.178.0 or newer before enabling this jerk build. An old kernel, bios or vault does not silently downgrade public sign-in to access-only sealing. Legacy named records and status lookup remain compatible; `oauthManaged: true` in a legacy placeholder/list reply requires authoritative managed support even when local reference files are absent.
 
 | Device operation | Request fields after `v: 1` and `op` | Success |
 | --- | --- | --- |
