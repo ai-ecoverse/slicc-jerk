@@ -15,7 +15,7 @@ list = { run = ["fake-cli", "list"], parse = "json:" }
 `;
 const cliRows = [{ id: 'first', name: 'work', token: fake }];
 
-async function seven({ vault = true, cli = true, unavailable = false } = {}) {
+async function seven({ vault = true, cli = true, unavailable = false, cliExit = 0 } = {}) {
   const seen = [];
   const kernel = await createNodeKernel({
     sealed: async (req) => {
@@ -71,10 +71,15 @@ async function seven({ vault = true, cli = true, unavailable = false } = {}) {
     );
     await kernel.writeFile(
       `${path}/fake.mjs`,
-      `export default async function(ctx) {
+      cliExit === 0
+        ? `export default async function(ctx) {
       await ctx.write(2, '${fake}');
       await ctx.write(1, ${JSON.stringify(JSON.stringify(cliRows))});
       return 0;
+    }`
+        : `export default async function(ctx) {
+      await ctx.write(2, 'fake-cli list failed\\n');
+      return ${cliExit};
     }`
     );
   }
@@ -151,3 +156,27 @@ for (const options of [
     }
   });
 }
+
+test('kernel empty vault success keeps listing usable when the CLI fails', { skip }, async () => {
+  const { kernel, run } = await seven({ vault: false, cliExit: 1 });
+  try {
+    const res = await run('--json');
+    assert.equal(res.status, 0, res.stderr);
+    assert.deepEqual(JSON.parse(res.stdout), { items: [] });
+    assert.doesNotMatch(res.stdout + res.stderr, /fake-token-must-not-appear/);
+  } finally {
+    kernel.terminate();
+  }
+});
+
+test('kernel failed vault and failed CLI keep the CLI error', { skip }, async () => {
+  const { kernel, run } = await seven({ unavailable: true, cliExit: 1 });
+  try {
+    const res = await run('--json');
+    assert.equal(res.status, 1, res.stderr);
+    assert.equal(res.stdout, '');
+    assert.doesNotMatch(res.stdout + res.stderr, /fake-token-must-not-appear/);
+  } finally {
+    kernel.terminate();
+  }
+});
