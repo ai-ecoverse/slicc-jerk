@@ -449,6 +449,10 @@ for (const [provider, name] of [
         )
       );
       assert.equal(posts.length, 0);
+      const dropped = await run('drop', '--yes');
+      assert.equal(dropped.status, 0, dropped.stderr);
+      assert.ok(requests.some((req) => req.op === 'oauthRemove' && req.name === name));
+      assert.equal((await run('get')).status, 3);
     } finally {
       kernel.terminate();
     }
