@@ -7,8 +7,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const API_ENV: &str = "SLICC_UPDATE_API_BASE";
+pub const WEB_ENV: &str = "SLICC_UPDATE_WEB_BASE";
 const REPO: &str = "ai-ecoverse/slicc-jerk";
 const DEFAULT_API: &str = "https://api.github.com";
+const DEFAULT_WEB: &str = "https://github.com";
+const TAG_PATH: &str = "/releases/tag/";
 const SUMS: &str = "SHA256SUMS";
 const MAX_JSON: u64 = 4 << 20;
 const MAX_SUMS: u64 = 1 << 20;
@@ -69,6 +72,13 @@ fn native(command: &str, check: bool, force: bool, env: &Env, io: &mut Io<'_>) -
         let _ = writeln!(
             io.err,
             "jerk {command}: {API_ENV} overrides the GitHub API with {}",
+            shown(base)
+        );
+    }
+    if let Some(base) = env.var(WEB_ENV) {
+        let _ = writeln!(
+            io.err,
+            "jerk {command}: {WEB_ENV} overrides github.com with {}",
             shown(base)
         );
     }
@@ -270,6 +280,8 @@ pub(crate) struct Setup {
     pub asset: Option<String>,
     pub platform: String,
     pub api: String,
+    pub web: Option<String>,
+    pub token: Option<String>,
     pub cargo_bins: Vec<PathBuf>,
     pub slicc_bins: Vec<PathBuf>,
     pub npm_launcher: bool,
@@ -401,6 +413,17 @@ mod native {
                     .unwrap_or(DEFAULT_API)
                     .trim_end_matches('/')
                     .to_string(),
+                web: match (env.var(WEB_ENV), env.var(API_ENV)) {
+                    (Some(web), _) => Some(web.trim_end_matches('/').to_string()),
+                    (None, Some(_)) => None,
+                    (None, None) => Some(DEFAULT_WEB.to_string()),
+                },
+                token: ["GH_TOKEN", "GITHUB_TOKEN"]
+                    .iter()
+                    .filter_map(|key| env.var(key))
+                    .map(str::trim)
+                    .find(|token| !token.is_empty())
+                    .map(str::to_string),
                 cargo_bins: cargo_bins(env),
                 slicc_bins: slicc_bins(env),
                 npm_launcher: env.var("JERK_LAUNCHER") == Some("npm"),
@@ -460,10 +483,16 @@ mod native {
     ) -> Result<Vec<u8>, String> {
         let agent = format!("jerk/{}", normalize(&setup.version));
         let mut current = allowed_url(url)?;
+        let api = format!("{}/repos/", setup.api);
         for _ in 0..=MAX_REDIRECTS {
             let mut headers = vec![("User-Agent", agent.as_str())];
             if !accept.is_empty() {
                 headers.push(("Accept", accept));
+            }
+            let to_api = current.as_str().starts_with(&api);
+            let bearer = setup.token.as_ref().map(|token| format!("Bearer {token}"));
+            if let (true, Some(bearer)) = (to_api, bearer.as_deref()) {
+                headers.push(("Authorization", bearer));
             }
             let response =
                 crate::oauth::http_client::fetch(current.as_str(), &headers, cap, total)?;
@@ -472,6 +501,16 @@ mod native {
                 301 | 302 | 303 | 307 | 308 => {
                     current = follow(&current, response.status, response.location)?
                 }
+                status @ (403 | 429) if to_api && response.rate_limited => {
+                    let hint = if setup.token.is_some() {
+                        ""
+                    } else {
+                        "; set GH_TOKEN or GITHUB_TOKEN for a higher one"
+                    };
+                    return Err(format!(
+                        "HTTP {status} (GitHub's API rate limit is used up{hint})"
+                    ));
+                }
                 status => return Err(format!("HTTP {status}")),
             }
         }
@@ -479,6 +518,62 @@ mod native {
     }
 
     pub(crate) fn latest(setup: &Setup) -> Result<Release, Fail> {
+        let Some(web) = setup.web.as_deref() else {
+            return Ok(from_api(setup)?);
+        };
+        let web_err = match from_web(setup, web) {
+            Ok(release) => return Ok(release),
+            Err(message) => message,
+        };
+        from_api(setup).map_err(|message| {
+            Fail::Error(format!(
+                "{message} (and {}/{REPO}/releases/latest: {web_err})",
+                shown(web)
+            ))
+        })
+    }
+
+    fn from_web(setup: &Setup, web: &str) -> Result<Release, String> {
+        let asset = setup
+            .asset
+            .clone()
+            .ok_or_else(|| format!("no release binary for {}", setup.platform))?;
+        let releases = format!("{web}/{REPO}/releases");
+        let url = allowed_url(&format!("{releases}/latest"))?;
+        let agent = format!("jerk/{}", normalize(&setup.version));
+        let response = crate::oauth::http_client::fetch(
+            url.as_str(),
+            &[("User-Agent", agent.as_str())],
+            MAX_JSON,
+            Duration::from_secs(60),
+        )?;
+        if !matches!(response.status, 301 | 302 | 303 | 307 | 308) {
+            return Err(format!("HTTP {}", response.status));
+        }
+        let next = follow(&url, response.status, response.location)?;
+        let tag = next
+            .path()
+            .rfind(TAG_PATH)
+            .map(|at| &next.path()[at + TAG_PATH.len()..])
+            .ok_or_else(|| {
+                format!(
+                    "redirected to {}, not to a release tag",
+                    shown(next.as_str())
+                )
+            })?;
+        if !is_release_version(tag) {
+            return Err("the latest release has an unexpected tag".to_string());
+        }
+        let download = format!("{releases}/download/{tag}");
+        Ok(Release {
+            version: normalize(tag).to_string(),
+            asset_url: format!("{download}/{asset}"),
+            sums_url: format!("{download}/{SUMS}"),
+            asset,
+        })
+    }
+
+    fn from_api(setup: &Setup) -> Result<Release, String> {
         let url = format!("{}/repos/{REPO}/releases/latest", setup.api);
         let body = get(
             setup,
@@ -492,9 +587,7 @@ mod native {
             .map_err(|_| "the latest release is not valid JSON".to_string())?;
         let tag = json.get("tag_name").and_then(|t| t.as_str()).unwrap_or("");
         if !is_release_version(tag) {
-            return Err(Fail::Error(
-                "the latest release has an unexpected tag".to_string(),
-            ));
+            return Err("the latest release has an unexpected tag".to_string());
         }
         let version = normalize(tag).to_string();
         let asset = setup
