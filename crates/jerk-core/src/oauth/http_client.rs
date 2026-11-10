@@ -52,6 +52,7 @@ fn agent(reach: Option<Reach>) -> &'static ureq::Agent {
 pub struct Fetched {
     pub status: u16,
     pub location: Option<String>,
+    pub rate_limited: bool,
     pub body: Vec<u8>,
 }
 
@@ -85,6 +86,11 @@ pub fn fetch(
         .get("location")
         .and_then(|v| v.to_str().ok())
         .map(String::from);
+    let rate_limited = response
+        .headers()
+        .get("x-ratelimit-remaining")
+        .and_then(|v| v.to_str().ok())
+        == Some("0");
     let body = response
         .into_body()
         .with_config()
@@ -94,6 +100,7 @@ pub fn fetch(
     Ok(Fetched {
         status,
         location,
+        rate_limited,
         body,
     })
 }
