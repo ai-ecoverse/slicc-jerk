@@ -75,7 +75,7 @@ pub fn run(
             let cli_items = doc["items"].as_array_mut().expect("list emits items");
             cli_items.append(&mut items);
             items = std::mem::take(cli_items);
-        } else if items.is_empty() {
+        } else if vault.is_err() {
             let _ = io.err.write_all(&err);
             return code;
         }
