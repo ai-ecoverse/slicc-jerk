@@ -13,7 +13,7 @@ impl FileStore {
         }
     }
 
-    fn path(&self, provider: &str, user: &str) -> PathBuf {
+    pub(crate) fn path(&self, provider: &str, user: &str) -> PathBuf {
         let key = format!("{provider}\0{user}");
         let hash = hex_encode(&simple_hash(key.as_bytes()));
         self.dir.join(format!("{hash}.json"))

@@ -128,15 +128,31 @@ pub fn get(
     io: &mut crate::cli::Io<'_>,
 ) -> crate::exit::Exit {
     use crate::exit::Exit;
-    let flags = match crate::dispatch::parse_flags(args, &[], &["--json", "--reveal"], 0) {
-        Ok(flags) => flags,
-        Err(e) => return crate::cli::usage(&format!("{} get: {e}", entry.id), io),
-    };
+    let flags =
+        match crate::dispatch::parse_flags(args, &[], &["--json", "--reveal", "--refresh"], 0) {
+            Ok(flags) => flags,
+            Err(e) => return crate::cli::usage(&format!("{} get: {e}", entry.id), io),
+        };
     let vars = match crate::dispatch::vars(entry, &flags) {
         Ok(vars) => vars,
         Err(e) => return crate::cli::usage(&e, io),
     };
     let user = crate::dispatch::grant_user(&vars);
+    match crate::kernel::oauth_managed::lookup(
+        entry,
+        user,
+        ctx.env,
+        &DevSealed,
+        ctx.now,
+        flags.has("--refresh"),
+    ) {
+        Ok(Some(status)) => {
+            crate::kernel::oauth_managed::show(entry, &status, flags.has("--json"), io);
+            return Exit::Ok;
+        }
+        Err(error) => return crate::kernel::oauth_managed::report(entry, error, io),
+        Ok(None) => {}
+    }
     let cached = ctx
         .oauth
         .grants(entry.provider.store.as_deref())
@@ -210,6 +226,18 @@ pub fn get(
             return status;
         }
     }
+    if !has_env
+        && entry
+            .oauth_config
+            .as_ref()
+            .is_some_and(|config| crate::kernel::oauth_managed::refresh_env(config, ctx.env))
+    {
+        let _ = writeln!(
+            io.err,
+            "jerk: kernel refresh_env is unsupported; use create to register a vault-managed grant"
+        );
+        return Exit::Unsupported;
+    }
     let mut token = match crate::dispatch::fetch(entry, &vars, ctx, io) {
         Ok(token) => token,
         Err(code) => return code,
@@ -256,6 +284,16 @@ pub fn drop(
         Ok(vars) => vars,
         Err(e) => return crate::cli::usage(&e, io),
     };
+    if let Some(exit) = crate::kernel::oauth_managed::drop_if_managed(
+        entry,
+        crate::dispatch::grant_user(&vars),
+        flags.has("--yes"),
+        ctx,
+        &DevSealed,
+        io,
+    ) {
+        return exit;
+    }
     let mut confirm = || {
         let mut answer = String::new();
         let _ = ctx.input.read_line(&mut answer);

@@ -104,6 +104,24 @@ test('the kernel get accepts --reveal and still prints only the placeholder', {
   }
 });
 
+for (const [provider, variable] of [
+  ['gcloud', 'CLOUDSDK_AUTH_ACCESS_TOKEN'],
+  ['github', 'GH_TOKEN'],
+]) {
+  test(`legacy ${provider} env placeholders work without a vault but cannot claim refresh`, {
+    skip: !existsSync(wasm) && 'run npm run build:wasm first',
+  }, () => {
+    const placeholder = 'fnox_proxy_000000000000000000000000';
+    const opts = { env: { [variable]: placeholder } };
+    const get = runWasm([provider, 'get', '--json', '--reveal'], opts);
+    assert.equal(get.code, 0, get.text);
+    assert.deepEqual(JSON.parse(get.text), { provider, source: 'env', placeholder });
+    const forced = runWasm([provider, 'get', '--refresh'], opts);
+    assert.equal(forced.code, 5, forced.text);
+    assert.doesNotMatch(forced.text, /fnox_proxy_/);
+  });
+}
+
 test('the kernel build needs the kernel browser for jerk tab', {
   skip: !existsSync(wasm) && 'run npm run build:wasm first',
 }, () => {

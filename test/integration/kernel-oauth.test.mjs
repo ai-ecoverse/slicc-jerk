@@ -1,170 +1,11 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { test } from 'node:test';
-import { createNodeKernel } from '@ai-ecoverse/slicc-kernel/node';
 import { stubCdp } from './cdp-stub.mjs';
 import { sandbox, wasm } from './helpers.mjs';
+import { callback, fake, placeholder, refresh, seven } from './kernel-oauth-harness.mjs';
 
 const skip = !existsSync(wasm) && 'run npm run build:wasm first';
-const placeholder = 'fnox_proxy_333333333333333333333333';
-const fake = 'access-FAKE-1234567890';
-const refresh = 'refresh-FAKE-1234567890';
-const callback = 'http://127.0.0.1:43819/callback';
-
-function bridge(wsUrl) {
-  return async () => {
-    const ws = new WebSocket(wsUrl);
-    await new Promise((resolve, reject) => {
-      ws.addEventListener('open', resolve, { once: true });
-      ws.addEventListener('error', reject, { once: true });
-    });
-    const conn = {
-      onmessage: null,
-      onclose: null,
-      send: (s) => ws.send(s),
-      close: () => ws.close(),
-    };
-    ws.addEventListener('message', (event) => conn.onmessage?.(String(event.data)));
-    ws.addEventListener('close', () => conn.onclose?.());
-    return conn;
-  };
-}
-
-async function seven(mode, options = {}) {
-  const posts = [];
-  const seals = [];
-  const requests = [];
-  const records = new Map(Object.entries(options.records ?? {}));
-  let polls = 0;
-  const kernel = await createNodeKernel({
-    ...(options.browser ? { cdp: bridge(options.browser.wsUrl) } : {}),
-    sealed: async (req) => {
-      requests.push(req);
-      if (options.sealed) return options.sealed(req);
-      if (req.kind === 'unseal') {
-        if (!options.dropDenied) records.clear();
-        return { v: 1, exit: options.dropDenied ? 1 : 0 };
-      }
-      if (req.jop === 'status') return { v: 1, exit: 3 };
-      if (req.op === 'placeholder')
-        return records.has(req.name)
-          ? { v: 1, ...records.get(req.name) }
-          : { v: 1, error: { code: 'ENOENT' } };
-      assert.equal(req.op, 'seal');
-      seals.push(req);
-      if (options.refused) return { v: 1, error: { code: 'EEXIST', message: fake } };
-      records.set(req.name, { placeholder, state: 'inert' });
-      return { v: 1, placeholder, state: 'inert' };
-    },
-    network: {
-      transport: {
-        traits: { manualRedirects: true, encodedBodies: false, maxRequestBody: 1024 * 1024 },
-        async fetch(req) {
-          posts.push({
-            url: req.url,
-            method: req.method,
-            body: new TextDecoder().decode(req.body),
-          });
-          let response;
-          let status = 200;
-          if (req.url.endsWith('/device')) {
-            response = {
-              device_code: 'device-FAKE',
-              user_code: 'CODE-FAKE',
-              verification_uri: 'https://idp.example.test/verify',
-              expires_in: options.pending ? 3 : 30,
-              interval: 0,
-            };
-          } else if (options.denied) {
-            status = 400;
-            response = { error: 'access_denied', error_description: fake };
-          } else if (mode === 'device' && (options.pending || polls++ === 0)) {
-            status = 400;
-            response = { error: 'authorization_pending' };
-          } else {
-            response = {
-              access_token: fake,
-              refresh_token: refresh,
-              token_type: 'Bearer',
-              expires_in: options.expired ? 0 : 3600,
-              scope: options.secretScope ? refresh : undefined,
-            };
-          }
-          return {
-            status,
-            statusText: 'stub',
-            headers: [['content-type', 'application/json']],
-            body: (async function* () {
-              yield new TextEncoder().encode(JSON.stringify(response));
-            })(),
-            cancel: async () => {},
-          };
-        },
-      },
-    },
-  });
-  const pkg = '/node_modules/@ai-ecoverse/slicc-jerk';
-  await kernel.writeFile(
-    `${pkg}/package.json`,
-    JSON.stringify({
-      name: '@ai-ecoverse/slicc-jerk',
-      slicc: {
-        abi: 'wasi',
-        commands: { jerk: { wasm: 'jerk.wasm', imports: 'kernel-process.mjs' } },
-      },
-    })
-  );
-  await kernel.writeFile(`${pkg}/jerk.wasm`, readFileSync(wasm));
-  await kernel.writeFile(
-    `${pkg}/kernel-process.mjs`,
-    readFileSync(new URL('../../npm/kernel-process.mjs', import.meta.url))
-  );
-  if (options.cli || options.providerCli) {
-    const command = options.providerCli ?? 'fake-minter';
-    const minter = '/node_modules/fake-minter';
-    await kernel.writeFile(
-      `${minter}/package.json`,
-      JSON.stringify({
-        name: 'fake-minter',
-        slicc: { abi: 'js', commands: { [command]: { module: 'minter.mjs' } } },
-      })
-    );
-    await kernel.writeFile(
-      `${minter}/minter.mjs`,
-      `export default async function(ctx) {
-        await ctx.fs.writeFile('/tmp/minter-call', 'called');
-        const out = ctx.argv.includes('--version') ? '4.100.0' : ${options.providerCli ? `JSON.stringify({ token: '${fake}' })` : `'${fake}'`};
-        await ctx.write(1, out); return 0;
-      }`
-    );
-  }
-  await kernel.writeFile(
-    '/tmp/providers.toml',
-    options.config ??
-      `[providers.demo]
-env = ["DEMO_TOKEN"]
-${options.cli ? 'requires = "fake-minter"\ncreate = { run = ["fake-minter"], parse = "text" }' : ''}
-[providers.demo.oauth]
-mode = "${mode}"
-flow = "pkce"
-authorize_url = "https://idp.example.test/${mode === 'device' ? 'device' : 'authorize?redirect_uri={redirect_uri}&state={state}&code_challenge={code_challenge}'}"
-token_url = "https://idp.example.test/token"
-client_id = "fake-client"
-redirect_uri = "${callback}"
-capture = { at = "request", from = "query", param = "code" }
-timeout = "3s"
-`
-  );
-  const run = (...args) =>
-    kernel.run(['jerk', options.provider ?? 'demo', ...args], {
-      env: {
-        SLICC_JERK_CONFIG: '/tmp/providers.toml',
-        SLICC_JERK_STATE_DIR: '/tmp/oauth-state',
-        ...options.env,
-      },
-    });
-  return { kernel, posts, seals, run, requests };
-}
 
 test('kernel OAuth create bypasses unsealed CLI minting even with --reveal', { skip }, async () => {
   const { kernel, run, seals } = await seven('device', { cli: true });
@@ -301,7 +142,8 @@ test('kernel OAuth nonempty env still beats a named vault record', { skip }, asy
     const res = await run('get');
     assert.equal(res.status, 0, res.stderr);
     assert.equal(res.stdout, envPlaceholder + '\n');
-    assert.equal(requests.length, 0);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].op, 'placeholder');
   } finally {
     kernel.terminate();
   }
@@ -527,7 +369,7 @@ timeout = "3s"
 test('kernel device flow uses outbound HTTPS and persists only a sealed grant', {
   skip,
 }, async () => {
-  const { kernel, posts, seals, run } = await seven('device', { secretScope: true });
+  const { kernel, posts, seals, run } = await seven('device');
   try {
     const created = await run('create');
     assert.equal(created.status, 0, created.stderr);
@@ -536,10 +378,12 @@ test('kernel device flow uses outbound HTTPS and persists only a sealed grant', 
     assert.doesNotMatch(created.stdout + created.stderr, /access-FAKE|refresh-FAKE/);
     assert.equal(posts.length, 3);
     assert.equal(seals[0].name, 'DEMO_TOKEN');
-    assert.equal(seals[0].value, fake);
+    assert.equal(seals[0].accessToken, fake);
+    assert.equal(seals[0].refreshToken, refresh);
     const tmp = await kernel.root.getDirectoryHandle('tmp');
     const state = await tmp.getDirectoryHandle('oauth-state');
-    const grants = await state.getDirectoryHandle('grants');
+    const managed = await state.getDirectoryHandle('oauth-managed');
+    const grants = await managed.getDirectoryHandle('grants');
     for await (const handle of grants.values()) {
       const metadata = await (await handle.getFile()).text();
       assert.doesNotMatch(metadata, /access-FAKE|refresh-FAKE/);
@@ -547,7 +391,14 @@ test('kernel device flow uses outbound HTTPS and persists only a sealed grant', 
     }
     const get = await run('get', '--json', '--reveal');
     assert.equal(get.status, 0, get.stderr);
-    assert.deepEqual(JSON.parse(get.stdout), { provider: 'demo', source: 'oauth', placeholder });
+    assert.deepEqual(JSON.parse(get.stdout), {
+      provider: 'demo',
+      source: 'oauth',
+      placeholder,
+      expires_at: seals[0].expiresAt / 1000,
+      state: 'ready',
+      refreshable: true,
+    });
     assert.equal(
       (await run('create')).stdout,
       'demo: already signed in; use --force to sign in again\n'
