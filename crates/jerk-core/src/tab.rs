@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
-pub(crate) type Opener<'a> = &'a dyn Fn(Option<&str>) -> Result<Cdp, String>;
+pub(crate) type Opener<'a> =
+    &'a dyn Fn(Option<&str>, &mut dyn std::io::Write) -> Result<Cdp, Failure>;
 
 const KIND: &str = "jerk-tab";
 
@@ -20,8 +21,7 @@ const HELP: &str = "Usage:
 export writes a tab's cookies, localStorage and sessionStorage as one base64 line.
 import writes them into a tab, a new one when neither --tab nor --url is given,
 and opens the exported URL there. --tab takes an id or a unique id prefix; --url
-matches a substring, or the whole URL when the pattern has *. --cdp takes a port
-(9222), an http(s) DevTools URL or a ws(s) URL.
+matches a substring, or the whole URL when the pattern has *.
 ";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -66,42 +66,36 @@ fn cdp_error(message: String) -> Failure {
 
 pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     let (env, runner, exists) = (ctx.env, ctx.runner, ctx.exists);
-    let open = |explicit: Option<&str>| -> Result<Cdp, String> {
-        let url = locate(explicit.map(endpoint), env, runner, exists)?;
-        let start = cdp_client::connect::choose_start(Some(&url), None)?;
-        cdp::open(start, None)
+    let open = |flag: Option<&str>, err: &mut dyn std::io::Write| -> Result<Cdp, Failure> {
+        let found = locate(flag, env, runner, exists).map_err(|e| fail(e.exit, e.message))?;
+        let _ = writeln!(err, "{}", found.describe());
+        crate::browser::open_cdp(&found).map_err(|e| fail(Exit::Unavailable, e.trim_end()))
     };
     run_with(args, ctx, io, &open)
 }
 
 #[cfg(not(target_os = "wasi"))]
 fn locate(
-    wanted: Option<String>,
+    flag: Option<&str>,
     env: &crate::paths::Env,
     runner: &dyn crate::run::Runner,
     exists: &dyn Fn(&std::path::Path) -> bool,
-) -> Result<String, String> {
-    crate::browser_select::resolve_cdp_url(
-        wanted.as_deref(),
-        None,
-        env,
-        runner,
-        exists,
-        &mut std::io::sink(),
-    )
-    .map_err(|e| e.message)
+) -> Result<crate::browser_select::Found, crate::oauth::OAuthError> {
+    let lookup = crate::browser_select::Lookup::new(env, runner, exists);
+    crate::browser_select::resolve(flag, None, &lookup)
 }
 
 #[cfg(target_os = "wasi")]
 fn locate(
-    wanted: Option<String>,
+    flag: Option<&str>,
     env: &crate::paths::Env,
     _runner: &dyn crate::run::Runner,
     _exists: &dyn Fn(&std::path::Path) -> bool,
-) -> Result<String, String> {
-    wanted
-        .or_else(|| env.var("SLICC_CDP_URL").map(str::to_string))
-        .ok_or_else(|| "this kernel offers no browser: SLICC_CDP_URL is not set".to_string())
+) -> Result<crate::browser_select::Found, crate::oauth::OAuthError> {
+    crate::browser_select::explicit(flag, env)?.ok_or_else(|| crate::oauth::OAuthError {
+        exit: Exit::Unavailable,
+        message: "this kernel offers no browser: SLICC_CDP_URL is not set".to_string(),
+    })
 }
 
 pub(crate) fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>, open: Opener) -> Exit {
@@ -128,6 +122,7 @@ pub(crate) fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>, open
         Some("import") => import(&flags, ctx, open, io),
         Some("-h" | "--help") => {
             let _ = io.out.write_all(HELP.as_bytes());
+            let _ = io.out.write_all(crate::browser_select::help().as_bytes());
             return Exit::Ok;
         }
         Some(other) => return usage(&format!("tab: unknown command {other}"), io),
@@ -142,16 +137,8 @@ pub(crate) fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>, open
     }
 }
 
-pub(crate) fn endpoint(raw: &str) -> String {
-    let raw = raw.trim();
-    if !raw.is_empty() && raw.bytes().all(|b| b.is_ascii_digit()) {
-        return format!("http://127.0.0.1:{raw}");
-    }
-    raw.to_string()
-}
-
-fn connect(flags: &Flags, open: Opener) -> Result<Cdp, Failure> {
-    open(flags.value("--cdp")).map_err(|e| fail(Exit::Unavailable, e.trim_end()))
+fn connect(flags: &Flags, open: Opener, err: &mut dyn std::io::Write) -> Result<Cdp, Failure> {
+    open(flags.value("--cdp"), err)
 }
 
 pub(crate) fn pages(cdp: &mut Cdp) -> Result<Vec<Page>, Failure> {
@@ -262,7 +249,7 @@ pub(crate) fn pick(pages: &[Page], selector: Selector<'_>) -> Result<Page, Failu
 }
 
 fn list(flags: &Flags, open: Opener, io: &mut Io<'_>) -> Result<(), Failure> {
-    let mut cdp = connect(flags, open)?;
+    let mut cdp = connect(flags, open, io.err)?;
     let pages = pages(&mut cdp)?;
     if flags.has("--json") {
         let items: Vec<Value> = pages
@@ -402,7 +389,7 @@ fn export(flags: &Flags, ctx: &mut Ctx<'_>, open: Opener, io: &mut Io<'_>) -> Re
             "export needs --tab <id> or --url <pattern>; jerk tab list shows the tabs",
         ));
     };
-    let mut cdp = connect(flags, open)?;
+    let mut cdp = connect(flags, open, io.err)?;
     let pages = pages(&mut cdp)?;
     let page = pick(&pages, wanted)?;
     let bundle = capture(&mut cdp, &page.id)?;
@@ -592,7 +579,7 @@ fn import(flags: &Flags, ctx: &mut Ctx<'_>, open: Opener, io: &mut Io<'_>) -> Re
         .read_to_string(&mut text)
         .map_err(|e| fail(Exit::Error, format!("cannot read stdin: {e}")))?;
     let bundle = decode(&text)?;
-    let mut cdp = connect(flags, open)?;
+    let mut cdp = connect(flags, open, io.err)?;
     let target = match selector(flags) {
         Some(wanted) => Some(pick(&pages(&mut cdp)?, wanted)?.id),
         None => None,

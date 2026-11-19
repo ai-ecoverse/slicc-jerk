@@ -107,7 +107,7 @@ test('jerk tab in a kernel without a browser is unavailable', { skip }, async ()
   try {
     const res = await kernel.run(['jerk', 'tab', 'list']);
     assert.equal(res.status, 4, res.stderr);
-    assert.match(res.stderr, /^jerk tab: /);
+    assert.match(res.stderr, /^\* CDP \S+ \(via SLICC_CDP_URL\)\njerk tab: /);
   } finally {
     kernel.terminate();
   }

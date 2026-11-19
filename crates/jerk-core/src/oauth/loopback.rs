@@ -38,6 +38,7 @@ pub fn run(
     random_32: &[u8; 32],
     random_16: &[u8; 16],
     http_post: &oauth::HttpPost<'_>,
+    err: &mut dyn Write,
     extra_vars: &[(&str, &str)],
     cors_origins: &[String],
 ) -> Result<Token, OAuthError> {
@@ -134,10 +135,20 @@ pub fn run(
         });
     }
 
-    browser.open_url(&authorize_url).map_err(|e| OAuthError {
-        exit: Exit::Unavailable,
-        message: e,
-    })?;
+    let target = browser.label();
+    if let Err(e) = browser.open_url(&authorize_url) {
+        let _ = writeln!(
+            err,
+            "jerk: could not open the sign-in page in {target}: {e}\njerk: open it yourself: {authorize_url}"
+        );
+    } else {
+        let _ = writeln!(err, "jerk: opened the sign-in page in {target}");
+    }
+    let _ = writeln!(
+        err,
+        "jerk: waiting up to {} for the sign-in to redirect to {redirect_uri}",
+        wait_label(timeout_ms)
+    );
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
 
@@ -471,4 +482,13 @@ fn read_body(reader: &mut BufReader<&std::net::TcpStream>, length: usize) -> Opt
 
 pub fn try_bind(port: u16) -> bool {
     TcpListener::bind(format!("127.0.0.1:{port}")).is_ok()
+}
+
+fn wait_label(ms: u64) -> String {
+    let secs = ms.div_ceil(1000);
+    if secs >= 60 && secs.is_multiple_of(60) {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
 }

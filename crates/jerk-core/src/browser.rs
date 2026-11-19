@@ -1,5 +1,8 @@
 pub trait Browser: Send + Sync {
     fn open_url(&self, url: &str) -> Result<(), String>;
+    fn label(&self) -> String {
+        "the system browser".to_string()
+    }
 }
 
 #[cfg(not(target_os = "wasi"))]
@@ -23,6 +26,17 @@ impl Browser for SystemBrowser {
             Err(e) => Err(format!("cannot open browser: {e}")),
         }
     }
+
+    fn label(&self) -> String {
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else if cfg!(target_os = "windows") {
+            "rundll32 url.dll"
+        } else {
+            "xdg-open"
+        };
+        format!("the system browser ({opener})")
+    }
 }
 
 pub struct NoBrowser;
@@ -30,5 +44,69 @@ pub struct NoBrowser;
 impl Browser for NoBrowser {
     fn open_url(&self, _url: &str) -> Result<(), String> {
         Err("no browser available".into())
+    }
+}
+
+pub fn open_cdp(found: &crate::browser_select::Found) -> Result<cdp_client::cdp::Cdp, String> {
+    cdp_client::cdp::open(found.start.clone(), None)
+}
+
+pub struct CdpOpener<'a> {
+    pub flag: Option<&'a str>,
+    pub seven_origin: Option<&'a str>,
+    pub lookup: crate::browser_select::Lookup<'a>,
+}
+
+impl crate::oauth::CdpOpener for CdpOpener<'_> {
+    fn open(
+        &self,
+        err: &mut dyn std::io::Write,
+    ) -> Result<crate::oauth::CdpResult, crate::oauth::OAuthError> {
+        let found = crate::browser_select::resolve(self.flag, self.seven_origin, &self.lookup)?;
+        if cfg!(target_os = "wasi")
+            && (found.endpoint().starts_with("wss://") || found.endpoint().starts_with("https://"))
+        {
+            return Err(crate::oauth::OAuthError {
+                exit: crate::exit::Exit::Unavailable,
+                message: "wss and https are not available for kernel CDP; use SLICC_CDP_URL".into(),
+            });
+        }
+        let _ = writeln!(err, "{}", found.describe());
+        let cdp = open_cdp(&found).map_err(|message| crate::oauth::OAuthError {
+            exit: crate::exit::Exit::Unavailable,
+            message: message.trim_end().to_string(),
+        })?;
+        Ok(crate::oauth::CdpResult(cdp))
+    }
+}
+
+pub struct CdpBrowser {
+    pub found: crate::browser_select::Found,
+}
+
+impl Browser for CdpBrowser {
+    fn open_url(&self, url: &str) -> Result<(), String> {
+        let failed = |e: String| {
+            format!(
+                "cannot open the sign-in page in the CDP browser: {}",
+                e.trim_end()
+            )
+        };
+        let mut cdp = open_cdp(&self.found).map_err(failed)?;
+        cdp.call(
+            "Target.createTarget",
+            serde_json::json!({ "url": url }),
+            None,
+        )
+        .map_err(failed)?;
+        Ok(())
+    }
+
+    fn label(&self) -> String {
+        format!(
+            "the CDP browser {} (via {})",
+            cdp_client::sanitize::redact_url(self.found.endpoint()),
+            self.found.rule.label()
+        )
     }
 }

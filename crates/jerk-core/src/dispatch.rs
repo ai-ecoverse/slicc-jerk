@@ -66,7 +66,11 @@ pub fn parse_flags(
         } else if bools.contains(&name) && inline.is_none() {
             flags.bools.push(name.to_string());
         } else if arg.starts_with('-') {
-            return Err(format!("unknown option {arg}"));
+            let known: Vec<&str> = values.iter().chain(bools).copied().collect();
+            return Err(match crate::browser_select::suggest(arg, &known) {
+                Some(hint) => format!("unknown option {arg}\nDid you mean {hint}?"),
+                None => format!("unknown option {arg}"),
+            });
         } else if flags.positionals.len() < positionals {
             flags.positionals.push(arg.clone());
         } else {
@@ -1435,6 +1439,13 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
     if verb.oauth {
         return oauth_create_cmd(entry, &vars, &flags, ctx, io);
     }
+    if flags.value("--cdp").is_some() {
+        let _ = writeln!(
+            io.err,
+            "jerk: {}: --cdp is ignored: this provider signs in through its own CLI",
+            entry.id
+        );
+    }
     match run_verb(entry, "create", &verb, &vars, verb.interactive, ctx, io) {
         Ok(_) => {
             let _ = writeln!(io.out, "{}: signed in", entry.id);
@@ -1442,6 +1453,70 @@ pub fn create(entry: &Entry, args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>
         }
         Err(code) => code,
     }
+}
+
+fn sign_in_browser(
+    entry: &Entry,
+    config: &jerk_oauth::config::OAuthConfig,
+    cdp_url: Option<&str>,
+    seven_origin: Option<&str>,
+    ctx: &Ctx<'_>,
+    io: &mut Io<'_>,
+) -> Result<Option<crate::browser::CdpBrowser>, Exit> {
+    use jerk_oauth::config::{Flow, Mode};
+    let browserless = matches!(config.mode, Mode::Device | Mode::ClientCredentials)
+        || config.flow == Flow::ClientCredentials;
+    if browserless {
+        if cdp_url.is_some() {
+            let _ = writeln!(
+                io.err,
+                "jerk: {}: --cdp is ignored: this provider signs in without a browser",
+                entry.id
+            );
+        }
+        return Ok(None);
+    }
+    if cfg!(target_os = "wasi") || !matches!(config.mode, Mode::Loopback | Mode::Auto) {
+        return Ok(None);
+    }
+    let chosen = match crate::browser_select::explicit(cdp_url, ctx.env) {
+        Err(e) => {
+            let _ = writeln!(io.err, "jerk: {}: {}", entry.id, e.message);
+            return Err(e.exit);
+        }
+        Ok(Some(found)) => Some(found),
+        Ok(None) if ctx.stdin_terminal => None,
+        Ok(None) => {
+            let lookup = crate::browser_select::Lookup::new(ctx.env, ctx.runner, ctx.exists);
+            match crate::browser_select::resolve(None, seven_origin, &lookup) {
+                Ok(found) => Some(found),
+                Err(e) if e.exit == Exit::Refused => {
+                    let _ = writeln!(io.err, "jerk: {}: {}", entry.id, e.message);
+                    return Err(e.exit);
+                }
+                Err(e) => {
+                    let _ = writeln!(io.err, "jerk: {}: {}", entry.id, e.message);
+                    None
+                }
+            }
+        }
+    };
+    let Some(found) = chosen else {
+        return Ok(None);
+    };
+    if !found.loopback() {
+        let _ = writeln!(
+            io.err,
+            "jerk: {}: not signing in with the CDP browser {} (via {}): it is not on this machine, so it cannot reach the sign-in callback at {}; using the system browser instead",
+            entry.id,
+            cdp_client::sanitize::redact_url(found.endpoint()),
+            found.rule.label(),
+            config.redirect_uri
+        );
+        return Ok(None);
+    }
+    let _ = writeln!(io.err, "{}", found.describe());
+    Ok(Some(crate::browser::CdpBrowser { found }))
 }
 
 fn oauth_create_cmd(
@@ -1520,56 +1595,26 @@ fn oauth_create_cmd(
         }
     }
 
-    let cdp_opener = {
-        let cdp_url = flags.value("--cdp");
-        let seven_origin = flags
-            .value("--seven-origin")
-            .or(ctx.seven_origin.as_deref());
-        let needs_cdp = matches!(
-            config.mode,
-            jerk_oauth::config::Mode::Intercept | jerk_oauth::config::Mode::Auto
-        );
-        if needs_cdp || cfg!(target_os = "wasi") {
-            struct Opener<'a> {
-                cdp_url: Option<&'a str>,
-                seven_origin: Option<&'a str>,
-                env: &'a crate::paths::Env,
-                runner: &'a dyn crate::run::Runner,
-                exists: &'a dyn Fn(&std::path::Path) -> bool,
-            }
-            impl oauth::CdpOpener for Opener<'_> {
-                fn open(&self) -> Result<oauth::CdpResult, oauth::OAuthError> {
-                    let ws_url = crate::browser_select::resolve_cdp_url(
-                        self.cdp_url,
-                        self.seven_origin,
-                        self.env,
-                        self.runner,
-                        self.exists,
-                        &mut std::io::sink(),
-                    )?;
-                    let cdp = cdp_client::cdp::Cdp::connect(&ws_url).map_err(|message| {
-                        oauth::OAuthError {
-                            exit: Exit::Unavailable,
-                            message,
-                        }
-                    })?;
-                    Ok(oauth::CdpResult(cdp))
-                }
-            }
-            let opener = Opener {
-                cdp_url,
-                seven_origin,
-                env: ctx.env,
-                runner: ctx.runner,
-                exists: ctx.exists,
-            };
-            Some(opener)
-        } else {
-            None
-        }
-    };
+    let cdp_url = flags.value("--cdp");
+    let seven_origin = flags
+        .value("--seven-origin")
+        .or(ctx.seven_origin.as_deref());
+    let needs_cdp = matches!(
+        config.mode,
+        jerk_oauth::config::Mode::Intercept | jerk_oauth::config::Mode::Auto
+    ) || cfg!(target_os = "wasi");
+    let cdp_opener = needs_cdp.then(|| crate::browser::CdpOpener {
+        flag: cdp_url,
+        seven_origin,
+        lookup: crate::browser_select::Lookup::new(ctx.env, ctx.runner, ctx.exists),
+    });
     let cdp_ref: Option<&dyn oauth::CdpOpener> =
         cdp_opener.as_ref().map(|o| o as &dyn oauth::CdpOpener);
+    let sign_in = match sign_in_browser(entry, &config, cdp_url, seven_origin, ctx, io) {
+        Ok(browser) => browser,
+        Err(code) => return code,
+    };
+    let sign_in_ref = sign_in.as_ref().map(|b| b as &dyn crate::browser::Browser);
 
     let scope = widened.as_deref().or(scope);
     let config = resolve_oauth(&config, ctx.env);
@@ -1602,6 +1647,7 @@ fn oauth_create_cmd(
         ctx.random,
         io.err,
         cdp_ref,
+        sign_in_ref,
         &extra,
         &entry.provider.cors_origins,
     ) {

@@ -111,11 +111,13 @@ pub fn run_with(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     };
     let Some(first) = rest.first().map(String::as_str) else {
         let _ = io.out.write_all(HELP.as_bytes());
+        let _ = io.out.write_all(crate::browser_select::help().as_bytes());
         return Exit::Ok;
     };
     match first {
         "-h" | "--help" | "help" => {
             let _ = io.out.write_all(HELP.as_bytes());
+            let _ = io.out.write_all(crate::browser_select::help().as_bytes());
             Exit::Ok
         }
         "-V" | "--version" => {
