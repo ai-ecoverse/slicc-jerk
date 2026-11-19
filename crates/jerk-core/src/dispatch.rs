@@ -1488,7 +1488,7 @@ fn sign_in_browser(
         Ok(None) if ctx.stdin_terminal => None,
         Ok(None) => {
             let lookup = crate::browser_select::Lookup::new(ctx.env, ctx.runner, ctx.exists);
-            match crate::browser_select::resolve(None, seven_origin, &lookup) {
+            match crate::browser_select::resolve(cdp_url, seven_origin, &lookup) {
                 Ok(found) => Some(found),
                 Err(e) if e.exit == Exit::Refused => {
                     let _ = writeln!(io.err, "jerk: {}: {}", entry.id, e.message);

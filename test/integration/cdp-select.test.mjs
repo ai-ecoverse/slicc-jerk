@@ -321,6 +321,26 @@ test('loopback create off a terminal signs in with the browser it finds', async 
   );
 });
 
+test('loopback create --cdp auto skips SLICC_CDP_URL', async () => {
+  const sb = sandbox();
+  await loopbackProvider(sb);
+  const b = await browsers('env', 'probe');
+  const env = {
+    SLICC_JERK_STORE: 'file',
+    SLICC_CDP_URL: String(b.env.port),
+    SLICC_CDP_PORTS: String(b.probe.port),
+  };
+  const running = sb.jerkAsync(['lb', 'create', '--cdp', 'auto'], env);
+  const authorize = await until(() =>
+    b.probe.state.navigations.find((u) => u.startsWith('https://idp.'))
+  );
+  await callback(authorize);
+  const created = await running;
+  assert.equal(created.status, 0, created.stderr);
+  assert.deepEqual(b.env.state.navigations, []);
+  assert.ok(created.stderr.startsWith(via(version(b.probe), 'port probe')), created.stderr);
+});
+
 test('loopback create with nothing found says where the page went', async () => {
   const sb = sandbox();
   await loopbackProvider(sb);
