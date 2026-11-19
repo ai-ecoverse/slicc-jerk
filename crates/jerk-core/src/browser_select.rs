@@ -1,4 +1,4 @@
-// Ported from slicc-cdp crates/cdp-client/src/resolve.rs (cdp_client::resolve); switch to it once published.
+// Ported from slicc-cdp 3935be9a (cdp_client::resolve, connect::checked_socket, ports::local_host); switch to them once published.
 use crate::exit::Exit;
 use crate::oauth::OAuthError;
 use crate::paths::{Env, Os};
@@ -13,9 +13,9 @@ pub const AUTO: &str = "auto";
 
 pub const CONNECT_ORDER: &str = "Browser, in order: --cdp wins; else SLICC_CDP_URL; else the slicc browsers JSON listing when slicc is on PATH (a seven tab on --seven-origin, then sevenOpen, then a slicc profile, then best tier; loopback ws only); else a live DevToolsActivePort under slicc seven-profiles, legacy profiles, and SLICC six profile dirs (loopback /json/version check, websocket pathname must match the file, newest live wins); else a loopback endpoint playwright-cli saved for this directory under the user config dir; else the first of 127.0.0.1:9222-9229 whose /json/version answers. Saved state never dials a non-loopback host. The kernel build uses SLICC_CDP_URL.";
 
-pub const CDP_FORMS: &str = "--cdp and SLICC_CDP_URL take a port, host[:port], [ipv6][:port], ws://, wss://, http://, or https://. A ws:// or wss:// URL with a path is dialed directly. An http:// URL, a path-less ws:// URL, a port, or host[:port] is /json/version discovery. The debugger path is opaque. \"auto\" (or an empty value) skips that step, so --cdp auto ignores SLICC_CDP_URL.";
+pub const CDP_FORMS: &str = "--cdp and SLICC_CDP_URL take a port, host[:port], [ipv6][:port], ws://, wss://, http://, or https://. A ws:// or wss:// URL with a path is dialed directly. An http:// URL, a path-less ws:// URL, a port, or host[:port] is /json/version discovery. The debugger path is opaque. A webSocketDebuggerUrl from discovery is dialed only when it is ws:// or wss:// on this machine (for discovery on this machine) or on the host asked; anything else is refused before dialing. \"auto\" (or an empty value) skips that step, so --cdp auto ignores SLICC_CDP_URL.";
 
-pub const CDP_REPORT: &str = "jerk prints \"* CDP <endpoint> (via <rule>)\" to stderr before connecting. When nothing is found, the error lists every step tried and why it was passed over.";
+pub const CDP_REPORT: &str = "jerk prints \"* CDP <endpoint> (via <rule>)\" to stderr before connecting. When nothing is found, the error lists every step tried and why it was passed over. When a saved endpoint does not answer, the error names it.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rule {
@@ -54,10 +54,7 @@ impl Found {
     }
 
     pub fn loopback(&self) -> bool {
-        url::Url::parse(self.endpoint())
-            .ok()
-            .and_then(|url| url.host_str().map(loopback_host))
-            .unwrap_or(false)
+        loopback_url(self.endpoint())
     }
 
     pub fn describe(&self) -> String {
@@ -405,10 +402,10 @@ fn known_provenance(text: &str) -> bool {
     matches!(text, "explicit" | "seven-profile" | "probe")
 }
 
-fn loopback_url(url: &str) -> bool {
-    url::Url::parse(url).is_ok_and(|parsed| {
-        matches!(parsed.scheme(), "http" | "https" | "ws" | "wss")
-            && parsed.host_str().is_some_and(loopback_host)
+pub fn loopback_url(url: &str) -> bool {
+    cdp_client::net::parse_endpoint(url).is_ok_and(|endpoint| {
+        matches!(endpoint.scheme.as_str(), "http" | "https" | "ws" | "wss")
+            && local_host(&endpoint.host)
     })
 }
 
@@ -462,8 +459,7 @@ fn from_probe(lookup: &Lookup<'_>, trail: &mut Trail) -> Option<String> {
         .var(cdp_client::ports::OVERRIDE)
         .and_then(cdp_client::ports::parse)
         .unwrap_or_else(cdp_client::ports::catalog);
-    let mut probe = |url: &str| (lookup.probe)(url);
-    if let Some(url) = cdp_client::ports::first_live(&ports, &mut probe) {
+    if let Some(url) = first_live(&ports, lookup.probe) {
         return Some(url);
     }
     let first = ports.first().copied().unwrap_or_default();
@@ -480,20 +476,113 @@ fn from_probe(lookup: &Lookup<'_>, trail: &mut Trail) -> Option<String> {
     None
 }
 
-fn http_body(url: &str) -> Result<String, String> {
+pub fn http_body(url: &str) -> Result<String, String> {
     let response = cdp_client::net::http_get(url)?;
     Ok(String::from_utf8_lossy(&response.body).into_owned())
 }
 
-fn loopback_host(host: &str) -> bool {
-    let name = host
+pub fn local_host(host: &str) -> bool {
+    let host = host
         .trim_start_matches('[')
         .trim_end_matches(']')
         .to_ascii_lowercase();
-    name == "localhost"
-        || name
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
+    if host == "localhost" {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Ok(std::net::IpAddr::V6(ip)) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|v4| v4.is_loopback() || v4.is_unspecified())
+        }
+        Err(_) => false,
+    }
+}
+
+pub fn checked_socket(discovery: &str, socket: &str) -> Result<(), String> {
+    let refuse = |why: &str| {
+        Err(format!(
+            "CDP discovery at {} returned {}, {why}; refusing to dial it",
+            cdp_client::sanitize::redact_url(discovery),
+            cdp_client::sanitize::redact_url(socket)
+        ))
+    };
+    let found = match cdp_client::net::parse_endpoint(socket) {
+        Ok(found) if matches!(found.scheme.as_str(), "ws" | "wss") => found,
+        _ => return refuse("which is not a ws:// or wss:// URL"),
+    };
+    let Ok(asked) = cdp_client::net::parse_endpoint(discovery) else {
+        return refuse("and the discovery URL does not parse");
+    };
+    if local_host(&asked.host) {
+        if local_host(&found.host) {
+            return Ok(());
+        }
+        return refuse("a host other than this machine");
+    }
+    if found.host.eq_ignore_ascii_case(&asked.host) {
+        return Ok(());
+    }
+    refuse("a host other than the one asked")
+}
+
+fn unreachable(message: &str) -> bool {
+    !message.starts_with("HTTP ")
+        && (message.contains("CDP connection to ")
+            || message.contains("CDP discovery failed for ")
+            || message.contains("could not resolve "))
+}
+
+fn with_saved_hint(found: &Found, message: String) -> String {
+    if found.rule != Rule::Saved || !unreachable(&message) {
+        return message;
+    }
+    format!(
+        "{}\njerk: {} is the endpoint playwright-cli saved for this directory, and it did not answer. Pass --cdp <port|url> to choose another browser.",
+        message.trim_end(),
+        cdp_client::sanitize::redact_url(found.endpoint())
+    )
+}
+
+fn discovered_socket(
+    url: &str,
+    probe: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<String, String> {
+    let body = probe(url).map_err(|message| {
+        if message.starts_with("HTTP ") || message.contains("does not launch Chrome") {
+            message
+        } else {
+            format!("{message}This CLI does not launch Chrome. Pass --cdp or set SLICC_CDP_URL.\n")
+        }
+    })?;
+    let socket = connect::websocket_url_from_version(&body)?;
+    checked_socket(url, &socket)?;
+    Ok(socket)
+}
+
+pub fn connect_with<T>(
+    found: &Found,
+    probe: &dyn Fn(&str) -> Result<String, String>,
+    dial: &dyn Fn(Start) -> Result<T, String>,
+) -> Result<T, String> {
+    let start = match &found.start {
+        Start::Direct(url) => Ok(Start::Direct(url.clone())),
+        Start::Discover(url) => discovered_socket(url, probe).map(Start::Direct),
+    };
+    start
+        .and_then(dial)
+        .map_err(|message| with_saved_hint(found, message))
+}
+
+fn first_live(ports: &[u16], probe: &dyn Fn(&str) -> Result<String, String>) -> Option<String> {
+    ports.iter().find_map(|port| {
+        let url = discover::version_url(*port);
+        let socket = connect::websocket_url_from_version(&probe(&url).ok()?).ok()?;
+        checked_socket(&url, &socket).ok().map(|_| url)
+    })
 }
 
 pub fn suggest<'a>(token: &str, known: &[&'a str]) -> Option<&'a str> {

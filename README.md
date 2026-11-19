@@ -95,6 +95,8 @@ The kernel build stops after step 3 and needs `SLICC_CDP_URL` for `jerk tab`.
 
 Anything else, `0` included, exits 2 with `unsupported CDP URL "<value>" (expected a port, host:port, ws://, wss://, http://, or https://; use --cdp auto to search for a running browser)`. A misspelt option gets a hint, such as `Did you mean --cdp?`.
 
+A `webSocketDebuggerUrl` that `/json/version` reports is dialled only when it is `ws://` or `wss://` on this machine (when jerk asked on this machine) or on the host jerk asked; anything else is refused before dialling with `CDP discovery at <url> returned <socket>, a host other than this machine; refusing to dial it`, and the port probe skips such a port. This machine means the literal name `localhost`, `127.x.x.x`, `::1`, `0.0.0.0` and `::`, nothing that only looks like them (`evil.localhost`, `127.0.0.1.`, `0x7f.0.0.1`, `127.0.0.1@evil.example`). A saved endpoint that does not answer is named in the error instead of falling through to the port probe.
+
 Before it connects, jerk prints the endpoint and the step that picked it on stderr, never on stdout, where a token may go:
 
 ```
