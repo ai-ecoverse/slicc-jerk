@@ -95,46 +95,10 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
     let cdp_url = flags.value("--cdp");
     let host = ctx.oauth;
 
-    struct Opener<'a> {
-        cdp_url: Option<&'a str>,
-        env: &'a crate::paths::Env,
-        runner: &'a dyn crate::run::Runner,
-        exists: &'a dyn Fn(&std::path::Path) -> bool,
-    }
-    impl oauth::CdpOpener for Opener<'_> {
-        fn open(&self) -> Result<oauth::CdpResult, oauth::OAuthError> {
-            let explicit = self.cdp_url.map(crate::tab::endpoint);
-            let ws_url = crate::browser_select::resolve_cdp_url(
-                explicit.as_deref(),
-                None,
-                self.env,
-                self.runner,
-                self.exists,
-                &mut std::io::sink(),
-            )?;
-            #[cfg(target_os = "wasi")]
-            if ws_url.starts_with("wss://") || ws_url.starts_with("https://") {
-                return Err(oauth::OAuthError {
-                    exit: Exit::Unavailable,
-                    message: "wss and https are not available for kernel CDP; use SLICC_CDP_URL"
-                        .into(),
-                });
-            }
-            let unavailable = |message| oauth::OAuthError {
-                exit: Exit::Unavailable,
-                message,
-            };
-            let start =
-                cdp_client::connect::choose_start(Some(&ws_url), None).map_err(unavailable)?;
-            let cdp = cdp_client::cdp::open(start, None).map_err(unavailable)?;
-            Ok(oauth::CdpResult(cdp))
-        }
-    }
-    let opener = Opener {
-        cdp_url,
-        env: ctx.env,
-        runner: ctx.runner,
-        exists: ctx.exists,
+    let opener = crate::browser::CdpOpener {
+        flag: cdp_url,
+        seven_origin: None,
+        lookup: crate::browser_select::Lookup::new(ctx.env, ctx.runner, ctx.exists),
     };
 
     let exchange = flags.has("--exchange");
@@ -167,7 +131,7 @@ pub fn run(args: &[String], ctx: &mut Ctx<'_>, io: &mut Io<'_>) -> Exit {
         let mut r16 = [0u8; 16];
         (ctx.random)(&mut r32);
         (ctx.random)(&mut r16);
-        let cdp_result = opener.open();
+        let cdp_result = opener.open(io.err);
         let oauth::CdpResult(mut cdp) = match cdp_result {
             Ok(c) => c,
             Err(e) => {

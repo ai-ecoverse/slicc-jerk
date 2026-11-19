@@ -21,7 +21,7 @@ use std::io::Write;
 pub struct CdpResult(pub(crate) cdp_client::cdp::Cdp);
 
 pub trait CdpOpener {
-    fn open(&self) -> Result<CdpResult, OAuthError>;
+    fn open(&self, err: &mut dyn std::io::Write) -> Result<CdpResult, OAuthError>;
 }
 
 pub struct HttpPost<'a> {
@@ -224,7 +224,18 @@ pub fn oauth_create(
     err: &mut dyn std::io::Write,
     cdp: Option<&dyn CdpOpener>,
 ) -> Result<Token, OAuthError> {
-    oauth_create_with_vars(config, scope, host, now_secs, random, err, cdp, &[], &[])
+    oauth_create_with_vars(
+        config,
+        scope,
+        host,
+        now_secs,
+        random,
+        err,
+        cdp,
+        None,
+        &[],
+        &[],
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -236,10 +247,12 @@ pub fn oauth_create_with_vars(
     random: &dyn Fn(&mut [u8]),
     err: &mut dyn std::io::Write,
     cdp: Option<&dyn CdpOpener>,
+    sign_in: Option<&dyn Browser>,
     extra_vars: &[(&str, &str)],
     cors_origins: &[String],
 ) -> Result<Token, OAuthError> {
     use jerk_oauth::config::Mode;
+    let browser = sign_in.unwrap_or(host.browser());
 
     enum InteractiveMode {
         Loopback,
@@ -254,13 +267,13 @@ pub fn oauth_create_with_vars(
     if config.flow == jerk_oauth::config::Flow::ClientCredentials
         && config.mode != Mode::ClientCredentials
     {
-        let _ = (random, err, cdp, cors_origins);
+        let _ = (random, err, cdp, cors_origins, browser);
         return oauth_client_credentials(config, scope, host, now_secs, extra_vars);
     }
 
     let mode = match config.mode {
         Mode::ClientCredentials => {
-            let _ = (random, err, cdp, cors_origins);
+            let _ = (random, err, cdp, cors_origins, browser);
             return oauth_client_credentials(config, scope, host, now_secs, extra_vars);
         }
         Mode::Loopback => InteractiveMode::Loopback,
@@ -292,11 +305,12 @@ pub fn oauth_create_with_vars(
                 loopback::run(
                     config,
                     scope,
-                    host.browser(),
+                    browser,
                     now_secs,
                     &r32,
                     &r16,
                     &post,
+                    err,
                     extra_vars,
                     cors_origins,
                 )
@@ -327,11 +341,12 @@ pub fn oauth_create_with_vars(
                         return loopback::run(
                             config,
                             scope,
-                            host.browser(),
+                            browser,
                             now_secs,
                             &r32,
                             &r16,
                             &post,
+                            err,
                             extra_vars,
                             cors_origins,
                         );
@@ -342,7 +357,7 @@ pub fn oauth_create_with_vars(
                     exit: Exit::Unavailable,
                     message: "cannot bind the loopback port and no CDP browser available; pass --cdp or run slicc launch".into(),
                 })?;
-                let CdpResult(mut cdp_conn) = opener.open()?;
+                let CdpResult(mut cdp_conn) = opener.open(err)?;
                 intercept::run(
                     &mut cdp_conn,
                     &config,
@@ -409,7 +424,7 @@ fn capture_in_browser(
         exit: Exit::Unavailable,
         message: "intercept mode needs a CDP browser; pass --cdp or run slicc launch".into(),
     })?;
-    let CdpResult(mut cdp_conn) = opener.open()?;
+    let CdpResult(mut cdp_conn) = opener.open(err)?;
     intercept::run(
         &mut cdp_conn,
         &config,

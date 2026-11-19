@@ -34,6 +34,7 @@ export function sandbox() {
     APPDATA: join(dir, 'config'),
     LOCALAPPDATA: join(dir, 'state'),
     SLICC_JERK_SYSTEM_DIR: join(dir, 'system'),
+    SLICC_CDP_PORTS: '1',
   };
   return {
     dir,

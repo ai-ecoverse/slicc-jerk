@@ -69,6 +69,53 @@ A token already in one of the provider's `env` variables (`GH_TOKEN`, `GITHUB_TO
 | 4 | not available here: the CLI is missing or too old, no browser, no linked slicc CLI |
 | 5 | unsupported for this provider or runtime |
 
+## Finding a browser
+
+`jerk tab`, `jerk intercept` and `jerk <provider> create` find a CDP browser the way `playwright-cli` and `curlwright` from [slicc-cdp](https://github.com/ai-ecoverse/slicc-cdp) do, in the same order and with the same messages. The first step that yields an endpoint wins:
+
+1. `--cdp <value>`.
+2. `SLICC_CDP_URL`.
+3. `slicc browsers --json`, when `slicc` is on `PATH`: a browser with a seven tab on `--seven-origin` (create only), then `sevenOpen`, then a slicc profile, then the best tier; loopback `ws://` only.
+4. A live `DevToolsActivePort` under slicc `seven-profiles`, legacy `profiles`, and SLICC six profile dirs: loopback `/json/version` check, the live websocket pathname must match the file, the newest live file wins.
+5. The loopback endpoint `playwright-cli` saved for the working directory under the user config dir (`slicc/playwright-cli/sessions/`). One that came from the port probe is reused only while it answers, and a non-loopback one is never dialled. jerk only reads this file.
+6. The first of `127.0.0.1:9222`-`9229` whose `/json/version` answers (`SLICC_CDP_PORTS` replaces the range in tests, which never dial 9222-9229).
+
+The kernel build stops after step 3 and needs `SLICC_CDP_URL` for `jerk tab`.
+
+`--cdp` and `SLICC_CDP_URL` take:
+
+| Form | Example | Means |
+| --- | --- | --- |
+| port | `9333` | `http://localhost:9333/json/version` |
+| host, host:port | `localhost`, `127.0.0.1:9333`, `[::1]:9333` | that host's `/json/version`, port 9222 when left out |
+| `http://`, `https://` | `http://127.0.0.1:9333` | `/json/version` discovery |
+| path-less `ws://`, `wss://` | `ws://127.0.0.1:9333` | `/json/version` discovery |
+| `ws://`, `wss://` with a path | `ws://127.0.0.1:9333/devtools/browser/<id>` | dialled as it is |
+| `auto` | `--cdp auto` | skip this step and `SLICC_CDP_URL` |
+
+Anything else, `0` included, exits 2 with `unsupported CDP URL "<value>" (expected a port, host:port, ws://, wss://, http://, or https://; use --cdp auto to search for a running browser)`. A misspelt option gets a hint, such as `Did you mean --cdp?`.
+
+Before it connects, jerk prints the endpoint and the step that picked it on stderr, never on stdout, where a token may go:
+
+```
+* CDP http://127.0.0.1:9222/json/version (via slicc browsers)
+```
+
+When nothing is found, it exits 4 and lists every step and why it was passed over:
+
+```
+jerk tab: no CDP browser found. Tried, in order:
+  --cdp               not given
+  SLICC_CDP_URL       not set
+  slicc browsers      slicc not on PATH, or it failed
+  DevToolsActivePort  no live file under slicc seven-profiles, profiles, or six profiles
+  saved endpoint      none for this directory
+  port probe          nothing answered on 127.0.0.1:9222-9229
+Pass --cdp <port|host:port|ws://...|http://...>, set SLICC_CDP_URL, or start a browser with --remote-debugging-port.
+```
+
+A `loopback` or `auto` sign-in opens its page in the CDP browser when `--cdp` or `SLICC_CDP_URL` is given, or when stdin is not a terminal and a browser is found; on a terminal without either, it uses the system browser. Either way jerk says on stderr where it opened the page and how long it waits for the redirect, and if the page can't be opened it prints the URL to open by hand. A CDP browser on another machine can't reach the `127.0.0.1` callback, so jerk says so and uses the system browser. For a device, client-credentials or CLI provider, jerk says that `--cdp` is ignored.
+
 ## Providers
 
 Built in: `github`, `npm`, `claude`, `openai`, `huggingface`, `cloudflare`, `aws`, `gcloud`, `microsoft-graph`, `adobe-aio`, `firefly`, `aem`, `fastly`, `xai`, `linkedin`, `printful`, `gmail`, `google`, `garmin`, `rescuetime`, `slack`, `kagi`, `elevenlabs` and `openrouter`. Every [MCP server](#mcp-servers) is one too. `jerk config show <provider>` prints the definition in effect.
@@ -219,7 +266,7 @@ capture = { at = "request", from = "query", param = "code" }
 
 Optional fields: `client_secret` (sent on code exchange and refresh), `revoke_url` (best-effort revoke on `drop`), and `refresh_env` (an env var holding a refresh token that `get` mints from before it looks at the stored grant). `client_id` and `client_secret` may use `${NAME:-default}` expansion from the environment.
 
-For `intercept`, the browser is the one in `--cdp`, otherwise `SLICC_CDP_URL`, otherwise a running browser from `slicc browsers --json` (the one with seven open first), otherwise exit 4. State is only checked when `authorize_url` contains `{state}`.
+For `intercept`, the browser is found as in [Finding a browser](#finding-a-browser); with none, jerk exits 4. State is only checked when `authorize_url` contains `{state}`.
 
 </details>
 
@@ -306,7 +353,7 @@ jerk tab export --tab 3F2A --cdp 9222 | jerk tab import --tab 9C1B --cdp 9222
 ```
 
 - **Picking the tab:** `--tab` takes a target id or a unique prefix of one. `--url` matches part of the URL, or the whole URL when the pattern contains `*`. If more than one tab matches, jerk lists them and exits 2.
-- **The browser:** `--cdp` takes a port (`9222` is `http://127.0.0.1:9222`), an `http(s)` DevTools URL or a `ws(s)` URL. Without it, jerk uses `SLICC_CDP_URL`, then `slicc browsers` ([slicc-browsers](https://github.com/ai-ecoverse/slicc-browsers)).
+- **The browser:** found as in [Finding a browser](#finding-a-browser).
 - **`export`** writes one base64 line: the cookies Chrome sends to the page and its frames (HttpOnly included), plus the top frame's storage. Base64 isn't encryption, so treat the bundle like a password. jerk won't print it to a terminal.
 - **`import`** opens a new tab, or uses the one `--tab` or `--url` picks, sets the cookies (host-only and `__Host-` cookies stay host-only), opens `/robots.txt` on the exported origin, so that the app's own scripts can't redirect the tab first, and writes the storage there once it has checked that the page really is on that origin. If `/robots.txt` doesn't stay on the origin, for example because Chrome shows its error page for an empty 404, jerk tries the origin's root instead. It then opens the exported URL and prints the tab id. jerk registers no script that would stay in the tab. If both redirect to another origin, such as a sign-in page, the storage can't be written there and jerk exits 1; if only the exported URL redirects away, the storage is already written and jerk says where the tab ended up.
 - **Not carried:** IndexedDB, Cache Storage, service workers, other sites' cookies (an identity provider's, say), and anything tied to the device, such as client certificates or device-bound session credentials. Some sites also tie a session to its IP address or user agent.
