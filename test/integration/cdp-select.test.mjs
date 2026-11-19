@@ -373,3 +373,140 @@ test('loopback create refuses a bad --cdp and explains a remote one', async () =
   );
   assert.notEqual(res.status, 0);
 });
+
+const answering = (socket) =>
+  new Promise((resolve) => {
+    const hits = [];
+    const server = createServer((req, res) => {
+      hits.push(req.url);
+      const { port } = server.address();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ webSocketDebuggerUrl: socket(port) }));
+    });
+    server.on('upgrade', (req, sock) => {
+      hits.push(`upgrade ${req.url}`);
+      sock.destroy();
+    });
+    server.listen(0, '127.0.0.1', () => {
+      after(() => new Promise((r) => server.close(r)));
+      resolve({ port: server.address().port, hits });
+    });
+  });
+
+const foreign = 'ws://203.0.113.9:9223/devtools/browser/x';
+const refusal = (port) =>
+  `CDP discovery at http://127.0.0.1:${port}/json/version returned ${foreign}, a host other than this machine; refusing to dial it`;
+
+test('every step refuses a debugger that reports a host other than this machine', async () => {
+  const sb = sandbox();
+  const cwd = join(sb.dir, 'work');
+  mkdirSync(cwd);
+  const stub = await answering(() => foreign);
+  const run = (args, extra = {}) => inDir(sb, cwd, args, extra);
+
+  const viaFlag = await run(['--cdp', `127.0.0.1:${stub.port}`]);
+  assert.equal(viaFlag.status, 4);
+  assert.equal(viaFlag.stderr, `${via(version(stub), '--cdp')}jerk tab: ${refusal(stub.port)}\n`);
+
+  const viaEnv = await run([], { SLICC_CDP_URL: `http://127.0.0.1:${stub.port}` });
+  assert.equal(viaEnv.status, 4);
+  assert.ok(viaEnv.stderr.endsWith(`jerk tab: ${refusal(stub.port)}\n`), viaEnv.stderr);
+
+  slicc(sb, [
+    entry(
+      { port: stub.port, wsUrl: `ws://127.0.0.1:${stub.port}/devtools/browser/x` },
+      { tier: 1, sevenOpen: true }
+    ),
+  ]);
+  const viaSlicc = await run([]);
+  assert.equal(viaSlicc.status, 4);
+  assert.equal(
+    viaSlicc.stderr,
+    `${via(version(stub), 'slicc browsers')}jerk tab: ${refusal(stub.port)}\n`
+  );
+  sb.script('slicc', 'process.exit(1);');
+
+  writeFileSync(
+    sessionFile(sb, cwd),
+    JSON.stringify({ endpoint: version(stub), provenance: 'explicit' })
+  );
+  const viaSaved = await run([]);
+  assert.equal(viaSaved.status, 4);
+  assert.equal(
+    viaSaved.stderr,
+    `${via(version(stub), 'saved endpoint')}jerk tab: ${refusal(stub.port)}\n`
+  );
+  writeFileSync(sessionFile(sb, cwd), '{}');
+
+  activePort(sb, { port: stub.port });
+  const passed = await run([], { SLICC_CDP_PORTS: String(stub.port) });
+  assert.equal(passed.status, 4);
+  assert.match(passed.stderr, /\n {2}DevToolsActivePort {2}no live file under/);
+  assert.match(
+    passed.stderr,
+    new RegExp(`\\n {2}port probe {10}nothing answered on 127\\.0\\.0\\.1:${stub.port}\\n`)
+  );
+
+  assert.ok(stub.hits.length > 0);
+  assert.deepEqual(
+    stub.hits.filter((h) => h !== '/json/version'),
+    []
+  );
+});
+
+test('only literal local names and addresses count as this machine', async () => {
+  const sb = sandbox();
+  const cwd = join(sb.dir, 'work');
+  mkdirSync(cwd);
+  const lookalikes = [
+    'evil.localhost',
+    'foo.localhost',
+    'localhost.',
+    '127.0.0.1.',
+    '0x7f.0.0.1',
+    '127.000.0.1',
+    '127.0.0.1.evil.example',
+    '127.0.0.1@evil.example',
+    'localhost@evil.example',
+    '[::1]@evil.example',
+  ];
+  for (const host of lookalikes) {
+    const stub = await answering((port) => `ws://${host}:${port}/devtools/browser/x`);
+    const res = await inDir(sb, cwd, ['--cdp', String(stub.port)]);
+    assert.equal(res.status, 4, host);
+    assert.match(res.stderr, /a host other than this machine; refusing to dial it\n$/, host);
+    assert.deepEqual(stub.hits, ['/json/version'], host);
+
+    writeFileSync(
+      sessionFile(sb, cwd),
+      JSON.stringify({ endpoint: `http://${host}:9300/json/version`, provenance: 'explicit' })
+    );
+    const saved = await inDir(sb, cwd, []);
+    assert.equal(saved.status, 4, host);
+    assert.match(
+      saved.stderr,
+      /\n {2}saved endpoint {6}saved endpoint is not loopback or has no known provenance\n/,
+      host
+    );
+  }
+});
+
+test('a saved endpoint that does not answer is named, with no fall-through to the probe', async () => {
+  const sb = sandbox();
+  const cwd = join(sb.dir, 'work');
+  mkdirSync(cwd);
+  const { probe } = await browsers('probe');
+  const dead = await freePort();
+  const endpoint = `http://127.0.0.1:${dead}/json/version`;
+  writeFileSync(sessionFile(sb, cwd), JSON.stringify({ endpoint, provenance: 'explicit' }));
+  const res = await inDir(sb, cwd, [], { SLICC_CDP_PORTS: String(probe.port) });
+  assert.equal(res.status, 4);
+  assert.ok(res.stderr.startsWith(via(endpoint, 'saved endpoint')), res.stderr);
+  assert.ok(
+    res.stderr.endsWith(
+      `jerk: ${endpoint} is the endpoint playwright-cli saved for this directory, and it did not answer. Pass --cdp <port|url> to choose another browser.\n`
+    ),
+    res.stderr
+  );
+  assert.deepEqual(probe.state.calls, []);
+});
