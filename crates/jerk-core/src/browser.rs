@@ -48,7 +48,9 @@ impl Browser for NoBrowser {
 }
 
 pub fn open_cdp(found: &crate::browser_select::Found) -> Result<cdp_client::cdp::Cdp, String> {
-    cdp_client::cdp::open(found.start.clone(), None)
+    crate::browser_select::connect_with(found, &crate::browser_select::http_body, &|start| {
+        cdp_client::cdp::open(start, None)
+    })
 }
 
 pub struct CdpOpener<'a> {
