@@ -205,33 +205,8 @@ fn from_slicc(
         ));
         Ok(None)
     };
-    let Some(slicc) = which::find("slicc", lookup.env, lookup.exists) else {
+    let Some(stdout) = slicc_listing("browsers", lookup)? else {
         return failed(trail);
-    };
-    let outcome = lookup.runner.run(
-        &slicc,
-        &["browsers".to_string(), "--json".to_string()],
-        &Opts {
-            interactive: false,
-            capture: true,
-            echo: false,
-            timeout: Some(discover::CLI_TIMEOUT),
-            remove_env: &[],
-            input: None,
-            on_stderr: None,
-        },
-    );
-    let stdout = match outcome {
-        Outcome::Refused => {
-            return Err(OAuthError {
-                exit: Exit::Refused,
-                message: REFUSED.into(),
-            })
-        }
-        Outcome::Exited {
-            code: 0, stdout, ..
-        } => stdout,
-        _ => return failed(trail),
     };
     let Some(entries) = listed_entries(&stdout) else {
         return failed(trail);
@@ -246,6 +221,56 @@ fn from_slicc(
             Ok(None)
         }
     }
+}
+
+fn slicc_listing(command: &str, lookup: &Lookup<'_>) -> Result<Option<String>, OAuthError> {
+    let Some(slicc) = which::find("slicc", lookup.env, lookup.exists) else {
+        return Ok(None);
+    };
+    match lookup.runner.run(
+        &slicc,
+        &[command.to_string(), "--json".to_string()],
+        &Opts {
+            interactive: false,
+            capture: true,
+            echo: false,
+            timeout: Some(discover::CLI_TIMEOUT),
+            remove_env: &[],
+            input: None,
+            on_stderr: None,
+        },
+    ) {
+        Outcome::Refused => Err(OAuthError {
+            exit: Exit::Refused,
+            message: REFUSED.into(),
+        }),
+        Outcome::Exited {
+            code: 0, stdout, ..
+        } => Ok(Some(stdout)),
+        _ => Ok(None),
+    }
+}
+
+pub(crate) fn remote_callback(
+    found: &Found,
+    lookup: &Lookup<'_>,
+) -> Result<Option<&'static str>, OAuthError> {
+    if !found.loopback() {
+        return Ok(Some("remote browser"));
+    }
+    let port = url::Url::parse(found.endpoint())
+        .ok()
+        .and_then(|url| url.port_or_known_default());
+    let relay = slicc_listing("tray", lookup)?
+        .and_then(|text| serde_json::from_str::<Vec<Value>>(&text).ok())
+        .is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row["mode"] == "cdp"
+                    && row["state"] == "connected"
+                    && port.is_some_and(|p| row["cdp"]["port"].as_u64() == Some(u64::from(p)))
+            })
+        });
+    Ok(relay.then_some("browser behind a SLICC relay"))
 }
 
 fn listed_entries(text: &str) -> Option<Vec<Value>> {
@@ -510,7 +535,7 @@ fn distance(left: &str, right: &str) -> usize {
     table[a.len()][b.len()]
 }
 
-pub const SIGN_IN: &str = "A loopback sign-in (create) opens its page in that browser when --cdp or SLICC_CDP_URL is given, or when stdin is not a terminal and a browser is found; otherwise in the system browser. jerk says on stderr where the page opened and how long it waits. A browser that is not on this machine cannot reach the loopback callback, so jerk says so and uses the system browser.";
+pub const SIGN_IN: &str = "A loopback sign-in (create) opens its page in that browser when --cdp or SLICC_CDP_URL is given, or when stdin is not a terminal and a browser is found; otherwise in the system browser. jerk says on stderr where the page opened and how long it waits. For a remote CDP browser or a connected slicc cdp relay, jerk intercepts the callback in the selected browser instead of listening locally.";
 
 pub fn help() -> String {
     let mut out = String::from("\nCDP browser (create, intercept, tab):\n");

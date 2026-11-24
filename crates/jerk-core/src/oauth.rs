@@ -254,34 +254,12 @@ pub fn oauth_create_with_vars(
     use jerk_oauth::config::Mode;
     let browser = sign_in.unwrap_or(host.browser());
 
-    enum InteractiveMode {
-        Loopback,
-        Auto,
-        Device,
-        Intercept,
-        Popup,
-    }
-
     validate_config(config)?;
-
     if config.flow == jerk_oauth::config::Flow::ClientCredentials
-        && config.mode != Mode::ClientCredentials
+        || config.mode == Mode::ClientCredentials
     {
-        let _ = (random, err, cdp, cors_origins, browser);
         return oauth_client_credentials(config, scope, host, now_secs, extra_vars);
     }
-
-    let mode = match config.mode {
-        Mode::ClientCredentials => {
-            let _ = (random, err, cdp, cors_origins, browser);
-            return oauth_client_credentials(config, scope, host, now_secs, extra_vars);
-        }
-        Mode::Loopback => InteractiveMode::Loopback,
-        Mode::Auto => InteractiveMode::Auto,
-        Mode::Device => InteractiveMode::Device,
-        Mode::Intercept => InteractiveMode::Intercept,
-        Mode::Popup => InteractiveMode::Popup,
-    };
 
     let mut r32 = [0u8; 32];
     let mut r16 = [0u8; 16];
@@ -298,11 +276,18 @@ pub fn oauth_create_with_vars(
         json: &|url, body| host.http_post_json(url, body),
     };
 
-    match mode {
-        InteractiveMode::Loopback => {
+    if matches!(config.mode, Mode::Loopback | Mode::Auto) {
+        if let Some(reason) = browser.remote_callback() {
+            let _ = writeln!(err, "jerk: callback via CDP: {reason}");
+        } else {
             #[cfg(not(target_os = "wasi"))]
+            if config.mode == Mode::Loopback
+                || url::Url::parse(&config.redirect_uri)
+                    .ok()
+                    .and_then(|url| url.port())
+                    .is_some_and(loopback::try_bind)
             {
-                loopback::run(
+                return loopback::run(
                     config,
                     scope,
                     browser,
@@ -313,97 +298,29 @@ pub fn oauth_create_with_vars(
                     err,
                     extra_vars,
                     cors_origins,
-                )
-            }
-            #[cfg(target_os = "wasi")]
-            {
-                capture_in_browser(
-                    config,
-                    scope,
-                    now_secs,
-                    &r32,
-                    &r16,
-                    &post,
-                    err,
-                    cdp,
-                    extra_vars,
-                    cors_origins,
-                )
+                );
             }
         }
-        InteractiveMode::Auto => {
-            #[cfg(not(target_os = "wasi"))]
-            {
-                let parsed = url::Url::parse(&config.redirect_uri).ok();
-                let port = parsed.as_ref().and_then(|u| u.port());
-                if let Some(p) = port {
-                    if loopback::try_bind(p) {
-                        return loopback::run(
-                            config,
-                            scope,
-                            browser,
-                            now_secs,
-                            &r32,
-                            &r16,
-                            &post,
-                            err,
-                            extra_vars,
-                            cors_origins,
-                        );
-                    }
-                }
-                let config = with_extra_placeholders(config, extra_vars)?;
-                let opener = cdp.ok_or(OAuthError {
-                    exit: Exit::Unavailable,
-                    message: "cannot bind the loopback port and no CDP browser available; pass --cdp or run slicc launch".into(),
-                })?;
-                let CdpResult(mut cdp_conn) = opener.open(err)?;
-                intercept::run(
-                    &mut cdp_conn,
-                    &config,
-                    scope,
-                    now_secs,
-                    &r32,
-                    &r16,
-                    &post,
-                    err,
-                    cors_origins,
-                )
-            }
-            #[cfg(target_os = "wasi")]
-            {
-                capture_in_browser(
-                    config,
-                    scope,
-                    now_secs,
-                    &r32,
-                    &r16,
-                    &post,
-                    err,
-                    cdp,
-                    extra_vars,
-                    cors_origins,
-                )
-            }
-        }
-        InteractiveMode::Device => oauth_device_create(config, scope, host, now_secs, err),
-        InteractiveMode::Intercept => capture_in_browser(
-            config,
-            scope,
-            now_secs,
-            &r32,
-            &r16,
-            &post,
-            err,
-            cdp,
-            extra_vars,
-            cors_origins,
-        ),
-        InteractiveMode::Popup => Err(OAuthError {
+    } else if config.mode == Mode::Device {
+        return oauth_device_create(config, scope, host, now_secs, err);
+    } else if config.mode == Mode::Popup {
+        return Err(OAuthError {
             exit: Exit::Unsupported,
             message: "popup mode is not implemented yet".into(),
-        }),
+        });
     }
+    capture_in_browser(
+        config,
+        scope,
+        now_secs,
+        &r32,
+        &r16,
+        &post,
+        err,
+        cdp,
+        extra_vars,
+        cors_origins,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

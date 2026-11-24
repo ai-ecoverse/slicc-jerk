@@ -102,8 +102,6 @@ pub fn run(
         &target_id,
         &config,
         &authorize_url,
-        &state,
-        random_16,
         timeout_ms,
         err,
         cors_origins,
@@ -218,8 +216,6 @@ fn run_in_target(
     target_id: &str,
     config: &OAuthConfig,
     authorize_url: &str,
-    state: &str,
-    nonce_bytes: &[u8; 16],
     timeout_ms: u64,
     err: &mut dyn Write,
     cors_origins: &[String],
@@ -245,6 +241,35 @@ fn run_in_target(
         .call("Page.enable", json!({}), Some(&session))
         .map_err(map_cdp_error)?;
 
+    let effective_redirect = config
+        .relay
+        .as_ref()
+        .map(relay::relay_redirect_target)
+        .unwrap_or_else(|| config.redirect_uri.clone());
+    let redirect_base = redirect_base_url(&effective_redirect);
+    let failed_get = matches!(
+        config.capture.at,
+        CaptureAt::Navigation | CaptureAt::Request | CaptureAt::Callback
+    ) && matches!(
+        config.capture.from,
+        CaptureFrom::Query | CaptureFrom::Fragment
+    ) && jerk_oauth::config::expects_state(&config.authorize_url)
+        && url::Url::parse(&effective_redirect)
+            .ok()
+            .is_some_and(|url| {
+                url.host_str()
+                    .is_some_and(jerk_oauth::config::is_loopback_host)
+            });
+    if failed_get {
+        interception
+            .call(
+                "Network.enable",
+                json!({"maxPostDataSize": 0}),
+                Some(&session),
+            )
+            .map_err(map_cdp_error)?;
+    }
+    let from = interception.events().len();
     let _ = writeln!(err, "jerk: sign-in opened in browser");
 
     interception
@@ -257,126 +282,60 @@ fn run_in_target(
 
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
-    let effective_redirect = match &config.relay {
-        Some(r) => relay::relay_redirect_target(r),
-        None => config.redirect_uri.clone(),
-    };
-    let redirect_base = redirect_base_url(&effective_redirect);
-
-    match config.capture.at {
-        CaptureAt::Navigation => capture_navigation(
-            &mut interception,
-            &session,
-            &redirect_base,
-            config,
-            deadline,
-        ),
-        CaptureAt::Network => capture_fetch(
-            &mut interception,
-            config,
-            &redirect_base,
-            state,
-            nonce_bytes,
-            deadline,
-            true,
-            cors_origins,
-        ),
-        _ => capture_fetch(
-            &mut interception,
-            config,
-            &redirect_base,
-            state,
-            nonce_bytes,
-            deadline,
-            false,
-            cors_origins,
-        ),
-    }
-}
-
-fn capture_navigation(
-    interception: &mut Interception<'_>,
-    _session: &str,
-    redirect_base: &str,
-    config: &OAuthConfig,
-    deadline: Instant,
-) -> Result<Captured, OAuthError> {
-    let redirect_check = redirect_base.to_string();
+    let mut seen = from;
     loop {
-        let remaining = remaining_timeout(deadline)?;
-
-        match interception.next(remaining.min(Duration::from_millis(200))) {
-            Ok(Some(paused)) => {
-                let decision = rewrite_decision(&paused, config);
-                let _ = interception.decide(&paused, &decision);
-            }
-            Ok(None) => {}
-            Err(_) => {}
-        }
-
-        let guard = interception.guard().clone();
-        let check = redirect_check.clone();
-        if let Ok(Some(event)) = interception.wait_event(0, Duration::from_millis(100), |event| {
-            fetch::navigation(&guard, event)
-                .is_some_and(|nav| nav.url.starts_with(&check) || nav.url.contains(&check))
-        }) {
-            if let Some(nav) = fetch::navigation(&guard, &event) {
+        remaining_timeout(deadline)?;
+        let Some(paused) = interception.next(Duration::ZERO).map_err(map_cdp_error)? else {
+            let events = interception.events();
+            if let Some(value) = (seen..events.len()).find_map(|i| {
+                navigation_callback(
+                    &interception,
+                    &events[from..=i],
+                    config.capture.at == CaptureAt::Navigation,
+                    failed_get,
+                    &redirect_base,
+                    cors_origins,
+                )
+            }) {
                 return Ok(Captured {
-                    value: nav.url,
+                    value,
                     fields: BTreeMap::new(),
                 });
             }
-        }
-
-        if Instant::now() >= deadline {
-            return Err(timeout_err());
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn capture_fetch(
-    interception: &mut Interception<'_>,
-    config: &OAuthConfig,
-    redirect_base: &str,
-    _state: &str,
-    _nonce_bytes: &[u8; 16],
-    deadline: Instant,
-    is_network: bool,
-    cors_origins: &[String],
-) -> Result<Captured, OAuthError> {
-    loop {
-        let remaining = remaining_timeout(deadline)?;
-
-        let paused = match interception.next(remaining).map_err(map_cdp_error) {
-            Ok(Some(p)) => p,
-            Ok(None) => return Err(timeout_err()),
-            Err(e) => return Err(e),
+            seen = events.len();
+            if !interception.pump(deadline).map_err(map_cdp_error)? {
+                return Err(timeout_err());
+            }
+            continue;
         };
-
         if config.capture.at == CaptureAt::Callback {
             let origin = paused.header("origin");
             let allowed = origin.is_none_or(|o| cors_origins.iter().any(|allowed| allowed == o));
-            if capture::verify_redirect_uri(&paused.full_url(), redirect_base, None).is_err()
+            if capture::verify_redirect_uri(&paused.full_url(), &redirect_base, None).is_err()
                 || !allowed
             {
-                let _ = interception.decide(&paused, &Decision::Fail(fetch::ErrorReason::Aborted));
+                interception
+                    .decide(&paused, &Decision::Fail(fetch::ErrorReason::Aborted))
+                    .map_err(map_cdp_error)?;
                 continue;
             }
             if paused.method == "OPTIONS" {
-                let _ = interception
-                    .decide(&paused, &Decision::Fulfill(callback_response(204, origin)));
+                interception
+                    .decide(&paused, &Decision::Fulfill(callback_response(204, origin)))
+                    .map_err(map_cdp_error)?;
                 continue;
             }
         }
-        if is_network {
+        if config.capture.at == CaptureAt::Network {
             if let Some(value) = try_capture_network(&paused, config) {
-                if let Some(fields) = capture_fields(interception, &paused, config) {
-                    let _ = interception.decide(&paused, &Decision::default());
+                if let Some(fields) = capture_fields(&mut interception, &paused, config) {
+                    interception
+                        .decide(&paused, &Decision::default())
+                        .map_err(map_cdp_error)?;
                     return Ok(Captured { value, fields });
                 }
             }
-        } else if let Some(captured) = try_capture(&paused, config, redirect_base) {
+        } else if let Some(captured) = try_capture(&paused, config, &redirect_base) {
             let fulfill = if config.capture.at == CaptureAt::Callback {
                 Decision::Fulfill(callback_response(200, paused.header("origin")))
             } else {
@@ -388,7 +347,9 @@ fn capture_fetch(
                     _ => Decision::Fulfill(Fulfill::signed_in()),
                 }
             };
-            let _ = interception.decide(&paused, &fulfill);
+            interception
+                .decide(&paused, &fulfill)
+                .map_err(map_cdp_error)?;
             return Ok(Captured {
                 value: captured,
                 fields: BTreeMap::new(),
@@ -400,8 +361,95 @@ fn capture_fetch(
         } else {
             rewrite_decision(&paused, config)
         };
-        let _ = interception.decide(&paused, &decision);
+        interception
+            .decide(&paused, &decision)
+            .map_err(map_cdp_error)?;
     }
+}
+
+fn navigation_callback(
+    interception: &Interception<'_>,
+    events: &[serde_json::Value],
+    navigation: bool,
+    failed_get: bool,
+    redirect: &str,
+    cors_origins: &[String],
+) -> Option<String> {
+    let (event, prior) = events.split_last()?;
+    let session = interception.session_id();
+    if event["sessionId"] != session || event["method"] != "Page.frameNavigated" {
+        return None;
+    }
+    let frame = &event["params"]["frame"];
+    if frame.get("parentId").is_some() {
+        return None;
+    }
+    let guard = interception.guard();
+    if guard.error_document(
+        frame["url"].as_str()?,
+        frame["securityOrigin"].as_str().unwrap_or(""),
+    ) {
+        return failed_get
+            .then(|| failed_callback(prior, session, frame, redirect, cors_origins))?
+            .filter(|url| !guard.url(url))
+            .map(str::to_string);
+    }
+    navigation
+        .then(|| fetch::navigation(guard, event))?
+        .map(|nav| nav.url)
+        .filter(|url| capture::verify_redirect_uri(url, redirect, None).is_ok())
+}
+
+fn failed_callback<'a>(
+    events: &[serde_json::Value],
+    session: &str,
+    frame: &'a serde_json::Value,
+    redirect: &str,
+    cors_origins: &[String],
+) -> Option<&'a str> {
+    let frame_id = frame["id"].as_str()?;
+    let url = frame["unreachableUrl"].as_str()?;
+    capture::verify_redirect_uri(url, redirect, None).ok()?;
+    let (i, request) = events.iter().enumerate().rev().find(|(_, e)| {
+        e["sessionId"] == session
+            && e["method"] == "Network.requestWillBeSent"
+            && e["params"]["type"] == "Document"
+            && e["params"]["frameId"] == frame_id
+    })?;
+    let params = &request["params"];
+    let req = &params["request"];
+    let target = req["url"].as_str()?;
+    if req["method"] != "GET"
+        || target.split('#').next() != url.split('#').next()
+        || req["headers"].as_object()?.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case("origin")
+                && !cors_origins
+                    .iter()
+                    .any(|allowed| v.as_str() == Some(allowed))
+        })
+    {
+        return None;
+    }
+    let id = params["requestId"].as_str()?;
+    events[i + 1..]
+        .iter()
+        .any(|e| {
+            let p = &e["params"];
+            e["sessionId"] == session
+                && e["method"] == "Network.loadingFailed"
+                && p["requestId"] == id
+                && p.get("blockedReason").is_none()
+                && p["canceled"] != true
+                && matches!(
+                    p["errorText"].as_str(),
+                    Some(
+                        "net::ERR_CONNECTION_REFUSED"
+                            | "net::ERR_NAME_NOT_RESOLVED"
+                            | "net::ERR_ADDRESS_UNREACHABLE"
+                    )
+                )
+        })
+        .then_some(url)
 }
 
 fn callback_response(status: u16, origin: Option<&str>) -> Fulfill {

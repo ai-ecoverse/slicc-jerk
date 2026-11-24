@@ -1,5 +1,8 @@
 pub trait Browser: Send + Sync {
     fn open_url(&self, url: &str) -> Result<(), String>;
+    fn remote_callback(&self) -> Option<&'static str> {
+        None
+    }
     fn label(&self) -> String {
         "the system browser".to_string()
     }
@@ -63,16 +66,25 @@ impl crate::oauth::CdpOpener for CdpOpener<'_> {
         err: &mut dyn std::io::Write,
     ) -> Result<crate::oauth::CdpResult, crate::oauth::OAuthError> {
         let found = crate::browser_select::resolve(self.flag, self.seven_origin, &self.lookup)?;
+        found.open(err)
+    }
+}
+
+impl crate::oauth::CdpOpener for crate::browser_select::Found {
+    fn open(
+        &self,
+        err: &mut dyn std::io::Write,
+    ) -> Result<crate::oauth::CdpResult, crate::oauth::OAuthError> {
         if cfg!(target_os = "wasi")
-            && (found.endpoint().starts_with("wss://") || found.endpoint().starts_with("https://"))
+            && (self.endpoint().starts_with("wss://") || self.endpoint().starts_with("https://"))
         {
             return Err(crate::oauth::OAuthError {
                 exit: crate::exit::Exit::Unavailable,
                 message: "wss and https are not available for kernel CDP; use SLICC_CDP_URL".into(),
             });
         }
-        let _ = writeln!(err, "{}", found.describe());
-        let cdp = open_cdp(&found).map_err(|message| crate::oauth::OAuthError {
+        let _ = writeln!(err, "{}", self.describe());
+        let cdp = open_cdp(self).map_err(|message| crate::oauth::OAuthError {
             exit: crate::exit::Exit::Unavailable,
             message: message.trim_end().to_string(),
         })?;
@@ -82,9 +94,13 @@ impl crate::oauth::CdpOpener for CdpOpener<'_> {
 
 pub struct CdpBrowser {
     pub found: crate::browser_select::Found,
+    pub remote_callback: Option<&'static str>,
 }
 
 impl Browser for CdpBrowser {
+    fn remote_callback(&self) -> Option<&'static str> {
+        self.remote_callback
+    }
     fn open_url(&self, url: &str) -> Result<(), String> {
         let failed = |e: String| {
             format!(
