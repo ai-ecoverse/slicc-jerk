@@ -16,7 +16,7 @@ export function listen(handler) {
   });
 }
 
-export function stubCdp({ paused }) {
+export function stubCdp({ paused = [], navigated = () => [] }) {
   return new Promise((resolve, reject) => {
     const sockets = new Set();
     const lines = [];
@@ -40,6 +40,7 @@ export function stubCdp({ paused }) {
         socket.write(wsFrame(JSON.stringify(obj)));
       };
       const onPaused = (sessionId, url) => {
+        for (const event of navigated(url, sessionId)) send({ sessionId, ...event });
         const events = typeof paused === 'function' ? paused(url) : paused;
         events.forEach((params, i) => {
           send({

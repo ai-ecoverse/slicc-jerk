@@ -114,7 +114,7 @@ jerk tab: no CDP browser found. Tried, in order:
 Pass --cdp <port|host:port|ws://...|http://...>, set SLICC_CDP_URL, or start a browser with --remote-debugging-port.
 ```
 
-A `loopback` or `auto` sign-in opens its page in the CDP browser when `--cdp` or `SLICC_CDP_URL` is given, or when stdin is not a terminal and a browser is found; on a terminal without either, it uses the system browser. Either way jerk says on stderr where it opened the page and how long it waits for the redirect, and if the page can't be opened it prints the URL to open by hand. A CDP browser on another machine can't reach the `127.0.0.1` callback, so jerk says so and uses the system browser. For a device, client-credentials or CLI provider, jerk says that `--cdp` is ignored.
+A `loopback` or `auto` sign-in opens its page in the CDP browser when `--cdp` or `SLICC_CDP_URL` is given, or when stdin is not a terminal and a browser is found; on a terminal without either, it uses the system browser. With a local browser, jerk says where it opened the page and how long it waits for the redirect; if the page can't be opened it prints the URL to open by hand. If the selected CDP endpoint is remote, or its local port belongs to a connected `slicc … cdp` relay in `slicc tray --json`, jerk captures the callback over CDP in that browser instead. This doesn't require a free callback port. A different tunnel that looks like a local browser isn't detectable this way; configure `mode = "intercept"` for that case. For a device, client-credentials or CLI provider, jerk says that `--cdp` is ignored.
 
 ## Providers
 
@@ -266,7 +266,7 @@ capture = { at = "request", from = "query", param = "code" }
 
 Optional fields: `client_secret` (sent on code exchange and refresh), `revoke_url` (best-effort revoke on `drop`), and `refresh_env` (an env var holding a refresh token that `get` mints from before it looks at the stored grant). `client_id` and `client_secret` may use `${NAME:-default}` expansion from the environment.
 
-For `intercept`, the browser is found as in [Finding a browser](#finding-a-browser); with none, jerk exits 4. State is only checked when `authorize_url` contains `{state}`.
+For `intercept`, the browser is found as in [Finding a browser](#finding-a-browser); with none, jerk exits 4. State is only checked when `authorize_url` contains `{state}`. For a state-bearing loopback GET, if Chrome commits an error page before jerk sees the callback pause, jerk can recover the reported `unreachableUrl` of its own sign-in tab. It requires a matching main-frame document GET, a connection or name-resolution failure, the registered callback and the expected state. POST bodies and browser policy refusals cannot be recovered this way. The registered URI stays unchanged: do not substitute `<port>.kernel.localhost`.
 
 </details>
 

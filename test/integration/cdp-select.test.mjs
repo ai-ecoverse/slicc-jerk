@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
-import { stubBrowser } from './cdp-stub.mjs';
+import { stubBrowser, stubCdp } from './cdp-stub.mjs';
 import { jerkAsync, sandbox } from './helpers.mjs';
 
 const browsers = async (...names) => {
@@ -231,12 +231,12 @@ const freePort = () =>
     });
   });
 
-const loopbackProvider = async (sb, timeout = '10s') => {
+const loopbackProvider = async (sb, timeout = '10s', mode = 'loopback') => {
   const port = await freePort();
   sb.writeUser(`[providers.lb]
 env = ["LB_TOKEN"]
 [providers.lb.oauth]
-mode = "loopback"
+mode = "${mode}"
 flow = "implicit"
 authorize_url = "https://idp.example.test/auth?redirect_uri={redirect_uri}&state={state}"
 client_id = "app-id"
@@ -380,16 +380,64 @@ test('loopback create refuses a bad --cdp and explains a remote one', async () =
 
   sb.script('open', 'process.exit(1);');
   sb.script('xdg-open', 'process.exit(1);');
-  res = await sb.jerkAsync(['lb', 'create', '--cdp', 'ws://192.0.2.1:9222/devtools/browser/x'], {
-    SLICC_JERK_STORE: 'file',
-  });
-  assert.match(
-    res.stderr,
-    /not signing in with the CDP browser ws:\/\/192\.0\.2\.1:9222\/devtools\/browser\/x \(via --cdp\): it is not on this machine, so it cannot reach the sign-in callback at http:\/\/127\.0\.0\.1:\d+\/cb; using the system browser instead\n/
+  const port = await freePort();
+  res = await sb.jerkAsync(
+    ['lb', 'create', '--cdp', `ws://remote.invalid:${port}/devtools/browser/x`],
+    {
+      SLICC_JERK_STORE: 'file',
+    }
   );
-  assert.match(
-    res.stderr,
-    /could not open the sign-in page in the system browser .*\njerk: open it yourself: https:\/\/idp\.example\.test\/auth\?/
-  );
-  assert.notEqual(res.status, 0);
+  assert.equal(res.status, 4, res.stderr);
+  assert.match(res.stderr, /callback via CDP: remote browser/);
+  assert.doesNotMatch(res.stderr, /system browser|open it yourself|waiting up to/);
 });
+
+for (const mode of ['auto', 'loopback']) {
+  test(`native ${mode} captures before a free callback port on a SLICC relay`, async () => {
+    const sb = sandbox();
+    const port = await loopbackProvider(sb, '1s', mode);
+    const redirect = `http://127.0.0.1:${port}/cb`;
+    let sent;
+    const cdp = await stubCdp({
+      paused: (authorize) => {
+        const auth = new URL(authorize);
+        sent = auth.searchParams.get('redirect_uri');
+        return [
+          {
+            request: {
+              url: sent + '?access_token=FAKE-relay&state=' + auth.searchParams.get('state'),
+              method: 'GET',
+              headers: {},
+            },
+          },
+        ];
+      },
+    });
+    after(() => cdp.close());
+    sb.script(
+      'slicc',
+      `if (args.join(' ') === 'tray --json') console.log(JSON.stringify([{mode:'cdp', state:'connected', cdp:{port:${new URL(cdp.wsUrl).port}}}]));`
+    );
+    const res = await sb.jerkAsync(['lb', 'create'], {
+      SLICC_JERK_STORE: 'file',
+      SLICC_CDP_URL: cdp.wsUrl,
+    });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(sent, redirect);
+    assert.match(res.stderr, /callback via CDP: browser behind a SLICC relay/);
+    assert.doesNotMatch(res.stdout + res.stderr, /FAKE-relay|waiting up to/);
+    const commands = cdp
+      .log()
+      .split('\n')
+      .filter((line) => line.startsWith('>> '))
+      .map((line) => JSON.parse(line.slice(3)));
+    assert.ok(
+      commands.findIndex((m) => m.method === 'Fetch.enable') <
+        commands.findIndex((m) => m.method === 'Page.navigate')
+    );
+    assert.deepEqual(
+      commands.filter((m) => m.method === 'Target.closeTarget').map((m) => m.params.targetId),
+      ['T1']
+    );
+  });
+}

@@ -1504,19 +1504,18 @@ fn sign_in_browser(
     let Some(found) = chosen else {
         return Ok(None);
     };
-    if !found.loopback() {
-        let _ = writeln!(
-            io.err,
-            "jerk: {}: not signing in with the CDP browser {} (via {}): it is not on this machine, so it cannot reach the sign-in callback at {}; using the system browser instead",
-            entry.id,
-            cdp_client::sanitize::redact_url(found.endpoint()),
-            found.rule.label(),
-            config.redirect_uri
-        );
-        return Ok(None);
+    let lookup = crate::browser_select::Lookup::new(ctx.env, ctx.runner, ctx.exists);
+    let remote_callback = crate::browser_select::remote_callback(&found, &lookup).map_err(|e| {
+        let _ = writeln!(io.err, "jerk: {}: {}", entry.id, e.message);
+        e.exit
+    })?;
+    if remote_callback.is_none() {
+        let _ = writeln!(io.err, "{}", found.describe());
     }
-    let _ = writeln!(io.err, "{}", found.describe());
-    Ok(Some(crate::browser::CdpBrowser { found }))
+    Ok(Some(crate::browser::CdpBrowser {
+        found,
+        remote_callback,
+    }))
 }
 
 fn oauth_create_cmd(
@@ -1608,12 +1607,14 @@ fn oauth_create_cmd(
         seven_origin,
         lookup: crate::browser_select::Lookup::new(ctx.env, ctx.runner, ctx.exists),
     });
-    let cdp_ref: Option<&dyn oauth::CdpOpener> =
-        cdp_opener.as_ref().map(|o| o as &dyn oauth::CdpOpener);
     let sign_in = match sign_in_browser(entry, &config, cdp_url, seven_origin, ctx, io) {
         Ok(browser) => browser,
         Err(code) => return code,
     };
+    let cdp_ref = sign_in
+        .as_ref()
+        .map(|b| &b.found as &dyn oauth::CdpOpener)
+        .or_else(|| cdp_opener.as_ref().map(|o| o as &dyn oauth::CdpOpener));
     let sign_in_ref = sign_in.as_ref().map(|b| b as &dyn crate::browser::Browser);
 
     let scope = widened.as_deref().or(scope);

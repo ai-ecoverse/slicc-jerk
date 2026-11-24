@@ -11,6 +11,9 @@ pub struct KernelOAuthHost {
 }
 
 impl Browser for KernelOAuthHost {
+    fn remote_callback(&self) -> Option<&'static str> {
+        Some("browser and kernel have separate loopback listeners")
+    }
     fn open_url(&self, url: &str) -> Result<(), String> {
         let endpoint =
             std::env::var("SLICC_CDP_URL").map_err(|_| "SLICC_CDP_URL is not set".to_string())?;
