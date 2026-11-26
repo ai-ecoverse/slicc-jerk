@@ -1,44 +1,15 @@
-// Ported from slicc-cdp 3935be9a (cdp_client::resolve, connect::checked_socket, ports::local_host); switch to them once published.
 use crate::exit::Exit;
 use crate::oauth::OAuthError;
 use crate::paths::{Env, Os};
 use crate::run::{Opts, Outcome, Runner, REFUSED};
 use crate::which;
-use cdp_client::connect::{self, Start};
+use cdp_client::connect::Start;
 use cdp_client::discover;
+use cdp_client::resolve::{self, Choice, Finder, Rule, Step};
 use serde_json::Value;
 use std::path::Path;
 
-pub const AUTO: &str = "auto";
-
-pub const CONNECT_ORDER: &str = "Browser, in order: --cdp wins; else SLICC_CDP_URL; else the slicc browsers JSON listing when slicc is on PATH (a seven tab on --seven-origin, then sevenOpen, then a slicc profile, then best tier; loopback ws only); else a live DevToolsActivePort under slicc seven-profiles, legacy profiles, and SLICC six profile dirs (loopback /json/version check, websocket pathname must match the file, newest live wins); else a loopback endpoint playwright-cli saved for this directory under the user config dir; else the first of 127.0.0.1:9222-9229 whose /json/version answers. Saved state never dials a non-loopback host. The kernel build uses SLICC_CDP_URL.";
-
-pub const CDP_FORMS: &str = "--cdp and SLICC_CDP_URL take a port, host[:port], [ipv6][:port], ws://, wss://, http://, or https://. A ws:// or wss:// URL with a path is dialed directly. An http:// URL, a path-less ws:// URL, a port, or host[:port] is /json/version discovery. The debugger path is opaque. A webSocketDebuggerUrl from discovery is dialed only when it is ws:// or wss:// on this machine (for discovery on this machine) or on the host asked; anything else is refused before dialing. \"auto\" (or an empty value) skips that step, so --cdp auto ignores SLICC_CDP_URL.";
-
-pub const CDP_REPORT: &str = "jerk prints \"* CDP <endpoint> (via <rule>)\" to stderr before connecting. When nothing is found, the error lists every step tried and why it was passed over. When a saved endpoint does not answer, the error names it.";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Rule {
-    Flag,
-    Env,
-    SliccBrowsers,
-    ActivePort,
-    Saved,
-    Probe,
-}
-
-impl Rule {
-    pub fn label(self) -> &'static str {
-        match self {
-            Rule::Flag => "--cdp",
-            Rule::Env => "SLICC_CDP_URL",
-            Rule::SliccBrowsers => "slicc browsers",
-            Rule::ActivePort => "DevToolsActivePort",
-            Rule::Saved => "saved endpoint",
-            Rule::Probe => "port probe",
-        }
-    }
-}
+pub const JERK_NOTES: &str = "In jerk, a seven tab on --seven-origin comes first in the slicc browsers listing. jerk always prints \"* CDP <endpoint> (via <rule>)\" to stderr as soon as the endpoint is chosen, with no --verbose needed. When nothing is found, the error lists every step tried and why it was passed over. When a saved endpoint does not answer, the error names it. jerk tab in the kernel needs SLICC_CDP_URL.";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Found {
@@ -48,21 +19,33 @@ pub struct Found {
 
 impl Found {
     pub fn endpoint(&self) -> &str {
-        match &self.start {
-            Start::Direct(url) | Start::Discover(url) => url,
-        }
+        resolve::endpoint(&self.start)
     }
 
     pub fn loopback(&self) -> bool {
-        loopback_url(self.endpoint())
+        resolve::loopback_url(self.endpoint())
     }
 
     pub fn describe(&self) -> String {
-        format!(
-            "* CDP {} (via {})",
-            cdp_client::sanitize::redact_url(self.endpoint()),
-            self.rule.label()
-        )
+        resolve::describe(&self.choice(), false)
+            .trim_end()
+            .to_string()
+    }
+
+    fn choice(&self) -> Choice {
+        Choice {
+            start: self.start.clone(),
+            rule: self.rule,
+        }
+    }
+}
+
+impl From<Choice> for Found {
+    fn from(choice: Choice) -> Found {
+        Found {
+            start: choice.start,
+            rule: choice.rule,
+        }
     }
 }
 
@@ -90,115 +73,93 @@ impl<'a> Lookup<'a> {
     }
 }
 
-fn given(value: Option<&str>) -> Option<&str> {
-    value
-        .map(str::trim)
-        .filter(|text| !text.is_empty() && !text.eq_ignore_ascii_case(AUTO))
-}
-
-fn skips_env(flag: Option<&str>) -> bool {
-    flag.map(str::trim)
-        .is_some_and(|text| text.eq_ignore_ascii_case(AUTO))
-}
-
-pub fn unsupported(raw: &str) -> String {
-    format!(
-        "unsupported CDP URL \"{raw}\" (expected a port, host:port, ws://, wss://, http://, or https://; use --cdp auto to search for a running browser)"
-    )
+fn usage(message: String) -> OAuthError {
+    OAuthError {
+        exit: Exit::Usage,
+        message: message.trim_end().to_string(),
+    }
 }
 
 pub fn explicit(flag: Option<&str>, env: &Env) -> Result<Option<Found>, OAuthError> {
-    let start = |raw: &str, rule: Rule| -> Result<Found, OAuthError> {
-        let start = connect::choose_start(Some(raw), None).map_err(|_| OAuthError {
-            exit: Exit::Usage,
-            message: unsupported(raw),
-        })?;
-        Ok(Found { start, rule })
-    };
-    if let Some(raw) = given(flag) {
-        return start(raw, Rule::Flag).map(Some);
-    }
-    if skips_env(flag) {
-        return Ok(None);
-    }
-    match given(env.var("SLICC_CDP_URL")) {
-        Some(raw) => start(raw, Rule::Env).map(Some),
-        None => Ok(None),
-    }
+    resolve::explicit_start(flag, env.var("SLICC_CDP_URL"))
+        .transpose()
+        .map(|choice| choice.map(Found::from))
+        .map_err(usage)
 }
 
-type Trail = Vec<(Rule, String)>;
+struct JerkFinder<'a, 'b> {
+    lookup: &'b Lookup<'a>,
+    seven_origin: Option<&'b str>,
+    refused: Option<OAuthError>,
+}
+
+impl Finder for JerkFinder<'_, '_> {
+    fn attached(&mut self, trail: &mut Vec<Step>) -> Result<Option<(Rule, String)>, String> {
+        match from_slicc(self.seven_origin, self.lookup, trail) {
+            Ok(Some(url)) => return Ok(Some((Rule::SliccBrowsers, url))),
+            Ok(None) => {}
+            Err(refused) => {
+                self.refused = Some(refused);
+                return Err(REFUSED.to_string());
+            }
+        }
+        Ok(from_active_port(self.lookup, trail).map(|url| (Rule::ActivePort, url)))
+    }
+
+    fn saved(&mut self, trail: &mut Vec<Step>) -> Option<String> {
+        let text = session_file(self.lookup).and_then(|file| std::fs::read_to_string(file).ok());
+        let mut probe = |url: &str| (self.lookup.probe)(url);
+        resolve::saved_from_json(text.as_deref(), &mut probe, trail)
+    }
+
+    fn probe(&mut self, trail: &mut Vec<Step>) -> Option<String> {
+        let ports = self
+            .lookup
+            .env
+            .var(cdp_client::ports::OVERRIDE)
+            .and_then(cdp_client::ports::parse)
+            .unwrap_or_else(cdp_client::ports::catalog);
+        let mut probe = |url: &str| (self.lookup.probe)(url);
+        resolve::probe_ports(&ports, &mut probe, trail)
+    }
+}
 
 pub fn resolve(
     flag: Option<&str>,
     seven_origin: Option<&str>,
     lookup: &Lookup<'_>,
 ) -> Result<Found, OAuthError> {
-    if let Some(found) = explicit(flag, lookup.env)? {
-        return Ok(found);
-    }
-    let flag_note = if skips_env(flag) { "auto" } else { "not given" };
-    let env_note = if skips_env(flag) && given(lookup.env.var("SLICC_CDP_URL")).is_some() {
-        "set, skipped by --cdp auto"
-    } else {
-        "not set"
+    let mut finder = JerkFinder {
+        lookup,
+        seven_origin,
+        refused: None,
     };
-    let mut trail: Trail = vec![
-        (Rule::Flag, flag_note.to_string()),
-        (Rule::Env, env_note.to_string()),
-    ];
-    if let Some(url) = from_slicc(seven_origin, lookup, &mut trail)? {
-        return Ok(discovered(url, Rule::SliccBrowsers));
+    let resolved = resolve::resolve(flag, lookup.env.var("SLICC_CDP_URL"), &mut finder);
+    if let Some(refused) = finder.refused {
+        return Err(refused);
     }
-    let host = (!cfg!(target_os = "wasi"))
-        .then(|| on_host(lookup, &mut trail))
-        .flatten();
-    host.ok_or_else(|| not_found(&trail))
-}
-
-fn on_host(lookup: &Lookup<'_>, trail: &mut Trail) -> Option<Found> {
-    if let Some(url) = from_active_port(lookup, trail) {
-        return Some(discovered(url, Rule::ActivePort));
-    }
-    if let Some(start) =
-        from_saved(lookup, trail).and_then(|url| connect::choose_start(Some(&url), None).ok())
-    {
-        return Some(Found {
-            start,
-            rule: Rule::Saved,
-        });
-    }
-    from_probe(lookup, trail).map(|url| discovered(url, Rule::Probe))
-}
-
-fn not_found(trail: &Trail) -> OAuthError {
-    let mut message = String::from("no CDP browser found. Tried, in order:\n");
-    for (rule, note) in trail {
-        message.push_str(&format!("  {:<19} {note}\n", rule.label()));
-    }
-    message.push_str("Pass --cdp <port|host:port|ws://...|http://...>, set SLICC_CDP_URL, or start a browser with --remote-debugging-port.");
-    OAuthError {
-        exit: Exit::Unavailable,
-        message,
-    }
-}
-
-fn discovered(url: String, rule: Rule) -> Found {
-    Found {
-        start: Start::Discover(url),
-        rule,
+    let resolved = resolved.map_err(usage)?;
+    match resolved.choice {
+        Some(choice) => Ok(choice.into()),
+        None => Err(OAuthError {
+            exit: Exit::Unavailable,
+            message: resolve::not_found("jerk", &resolved.trail)
+                .trim_start_matches("jerk: ")
+                .trim_end()
+                .to_string(),
+        }),
     }
 }
 
 fn from_slicc(
     seven_origin: Option<&str>,
     lookup: &Lookup<'_>,
-    trail: &mut Trail,
+    trail: &mut Vec<Step>,
 ) -> Result<Option<String>, OAuthError> {
-    let failed = |trail: &mut Trail| {
-        trail.push((
+    let failed = |trail: &mut Vec<Step>| {
+        trail.push(Step::new(
             Rule::SliccBrowsers,
-            "slicc not on PATH, or it failed".to_string(),
+            "slicc not on PATH, or it failed",
         ));
         Ok(None)
     };
@@ -211,9 +172,9 @@ fn from_slicc(
     match pick_listed(&entries, seven_origin) {
         Some(url) => Ok(Some(url)),
         None => {
-            trail.push((
+            trail.push(Step::new(
                 Rule::SliccBrowsers,
-                "no loopback CDP endpoint listed".to_string(),
+                "no loopback CDP endpoint listed",
             ));
             Ok(None)
         }
@@ -355,7 +316,7 @@ impl discover::ScanFs for DiskFs {
     }
 }
 
-fn from_active_port(lookup: &Lookup<'_>, trail: &mut Trail) -> Option<String> {
+fn from_active_port(lookup: &Lookup<'_>, trail: &mut Vec<Step>) -> Option<String> {
     let env = host_env(lookup.env);
     let roots = discover::slicc_profile_roots(&env);
     let mut probe = |url: &str| (lookup.probe)(url);
@@ -366,7 +327,7 @@ fn from_active_port(lookup: &Lookup<'_>, trail: &mut Trail) -> Option<String> {
         }
         Err(message) => message.trim_end().to_string(),
     };
-    trail.push((Rule::ActivePort, note));
+    trail.push(Step::new(Rule::ActivePort, note));
     None
 }
 
@@ -398,237 +359,31 @@ fn session_file(lookup: &Lookup<'_>) -> Option<std::path::PathBuf> {
     )
 }
 
-fn known_provenance(text: &str) -> bool {
-    matches!(text, "explicit" | "seven-profile" | "probe")
-}
-
-pub fn loopback_url(url: &str) -> bool {
-    cdp_client::net::parse_endpoint(url).is_ok_and(|endpoint| {
-        matches!(endpoint.scheme.as_str(), "http" | "https" | "ws" | "wss")
-            && local_host(&endpoint.host)
-    })
-}
-
-fn from_saved(lookup: &Lookup<'_>, trail: &mut Trail) -> Option<String> {
-    let text = session_file(lookup).and_then(|file| std::fs::read_to_string(file).ok());
-    let Some(text) = text else {
-        trail.push((Rule::Saved, "none for this directory".to_string()));
-        return None;
-    };
-    let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-    let endpoint = value
-        .get("endpoint")
-        .and_then(Value::as_str)
-        .filter(|text| !text.is_empty());
-    let provenance = value.get("provenance").and_then(Value::as_str);
-    let usable = endpoint
-        .filter(|url| loopback_url(url))
-        .filter(|_| provenance.is_some_and(known_provenance));
-    let Some(url) = usable else {
-        let note = if endpoint.is_some() {
-            "saved endpoint is not loopback or has no known provenance"
-        } else {
-            "none for this directory"
-        };
-        trail.push((Rule::Saved, note.to_string()));
-        return None;
-    };
-    if provenance == Some("probe") {
-        let lower = url.to_ascii_lowercase();
-        let live = (lower.starts_with("http://") || lower.starts_with("https://"))
-            && (lookup.probe)(url)
-                .ok()
-                .is_some_and(|body| connect::websocket_url_from_version(&body).is_ok());
-        if !live {
-            trail.push((
-                Rule::Saved,
-                format!(
-                    "{} no longer answers",
-                    cdp_client::sanitize::redact_url(url)
-                ),
-            ));
-            return None;
-        }
-    }
-    Some(url.to_string())
-}
-
-fn from_probe(lookup: &Lookup<'_>, trail: &mut Trail) -> Option<String> {
-    let ports = lookup
-        .env
-        .var(cdp_client::ports::OVERRIDE)
-        .and_then(cdp_client::ports::parse)
-        .unwrap_or_else(cdp_client::ports::catalog);
-    if let Some(url) = first_live(&ports, lookup.probe) {
-        return Some(url);
-    }
-    let first = ports.first().copied().unwrap_or_default();
-    let last = ports.last().copied().unwrap_or_default();
-    let range = if first == last {
-        first.to_string()
-    } else {
-        format!("{first}-{last}")
-    };
-    trail.push((
-        Rule::Probe,
-        format!("nothing answered on 127.0.0.1:{range}"),
-    ));
-    None
-}
-
 pub fn http_body(url: &str) -> Result<String, String> {
     let response = cdp_client::net::http_get(url)?;
     Ok(String::from_utf8_lossy(&response.body).into_owned())
 }
 
-pub fn local_host(host: &str) -> bool {
-    let host = host
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_ascii_lowercase();
-    if host == "localhost" {
-        return true;
-    }
-    match host.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(ip)) => ip.is_loopback() || ip.is_unspecified(),
-        Ok(std::net::IpAddr::V6(ip)) => {
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip
-                    .to_ipv4_mapped()
-                    .is_some_and(|v4| v4.is_loopback() || v4.is_unspecified())
-        }
-        Err(_) => false,
-    }
-}
-
-pub fn checked_socket(discovery: &str, socket: &str) -> Result<(), String> {
-    let refuse = |why: &str| {
-        Err(format!(
-            "CDP discovery at {} returned {}, {why}; refusing to dial it",
-            cdp_client::sanitize::redact_url(discovery),
-            cdp_client::sanitize::redact_url(socket)
-        ))
-    };
-    let found = match cdp_client::net::parse_endpoint(socket) {
-        Ok(found) if matches!(found.scheme.as_str(), "ws" | "wss") => found,
-        _ => return refuse("which is not a ws:// or wss:// URL"),
-    };
-    let Ok(asked) = cdp_client::net::parse_endpoint(discovery) else {
-        return refuse("and the discovery URL does not parse");
-    };
-    if local_host(&asked.host) {
-        if local_host(&found.host) {
-            return Ok(());
-        }
-        return refuse("a host other than this machine");
-    }
-    if found.host.eq_ignore_ascii_case(&asked.host) {
-        return Ok(());
-    }
-    refuse("a host other than the one asked")
-}
-
-fn unreachable(message: &str) -> bool {
-    !message.starts_with("HTTP ")
-        && (message.contains("CDP connection to ")
-            || message.contains("CDP discovery failed for ")
-            || message.contains("could not resolve "))
-}
-
-fn with_saved_hint(found: &Found, message: String) -> String {
-    if found.rule != Rule::Saved || !unreachable(&message) {
-        return message;
-    }
-    format!(
-        "{}\njerk: {} is the endpoint playwright-cli saved for this directory, and it did not answer. Pass --cdp <port|url> to choose another browser.",
-        message.trim_end(),
-        cdp_client::sanitize::redact_url(found.endpoint())
-    )
-}
-
-fn discovered_socket(
-    url: &str,
-    probe: &dyn Fn(&str) -> Result<String, String>,
-) -> Result<String, String> {
-    let body = probe(url).map_err(|message| {
-        if message.starts_with("HTTP ") || message.contains("does not launch Chrome") {
-            message
-        } else {
-            format!("{message}This CLI does not launch Chrome. Pass --cdp or set SLICC_CDP_URL.\n")
-        }
-    })?;
-    let socket = connect::websocket_url_from_version(&body)?;
-    checked_socket(url, &socket)?;
-    Ok(socket)
-}
-
 pub fn connect_with<T>(
     found: &Found,
-    probe: &dyn Fn(&str) -> Result<String, String>,
     dial: &dyn Fn(Start) -> Result<T, String>,
 ) -> Result<T, String> {
-    let start = match &found.start {
-        Start::Direct(url) => Ok(Start::Direct(url.clone())),
-        Start::Discover(url) => discovered_socket(url, probe).map(Start::Direct),
-    };
-    start
-        .and_then(dial)
-        .map_err(|message| with_saved_hint(found, message))
-}
-
-fn first_live(ports: &[u16], probe: &dyn Fn(&str) -> Result<String, String>) -> Option<String> {
-    ports.iter().find_map(|port| {
-        let url = discover::version_url(*port);
-        let socket = connect::websocket_url_from_version(&probe(&url).ok()?).ok()?;
-        checked_socket(&url, &socket).ok().map(|_| url)
-    })
-}
-
-pub fn suggest<'a>(token: &str, known: &[&'a str]) -> Option<&'a str> {
-    let (name, _) = token.split_once('=').unwrap_or((token, ""));
-    if name.len() < 3 {
-        return None;
-    }
-    known
-        .iter()
-        .filter(|candidate| **candidate != name)
-        .map(|candidate| (distance(name, candidate), *candidate))
-        .filter(|(score, candidate)| *score <= if candidate.len() > 5 { 2 } else { 1 })
-        .min_by_key(|(score, _)| *score)
-        .map(|(_, candidate)| candidate)
-}
-
-fn distance(left: &str, right: &str) -> usize {
-    let a: Vec<char> = left.chars().collect();
-    let b: Vec<char> = right.chars().collect();
-    let mut table = vec![vec![0usize; b.len() + 1]; a.len() + 1];
-    for (i, row) in table.iter_mut().enumerate() {
-        row[0] = i;
-    }
-    for (j, cell) in table[0].iter_mut().enumerate() {
-        *cell = j;
-    }
-    for i in 1..=a.len() {
-        for j in 1..=b.len() {
-            let cost = usize::from(a[i - 1] != b[j - 1]);
-            let mut best = (table[i - 1][j] + 1)
-                .min(table[i][j - 1] + 1)
-                .min(table[i - 1][j - 1] + cost);
-            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                best = best.min(table[i - 2][j - 2] + 1);
-            }
-            table[i][j] = best;
+    dial(found.start.clone()).map_err(|message| {
+        let hint = resolve::saved_hint("jerk", &found.choice(), &message);
+        if hint.is_empty() {
+            message
+        } else {
+            format!("{}\n{}", message.trim_end(), hint.trim_end())
         }
-    }
-    table[a.len()][b.len()]
+    })
 }
 
 pub const SIGN_IN: &str = "A loopback sign-in (create) opens its page in that browser when --cdp or SLICC_CDP_URL is given, or when stdin is not a terminal and a browser is found; otherwise in the system browser. jerk says on stderr where the page opened and how long it waits. For a remote CDP browser or a connected slicc cdp relay, jerk intercepts the callback in the selected browser instead of listening locally.";
 
 pub fn help() -> String {
     let mut out = String::from("\nCDP browser (create, intercept, tab):\n");
-    for text in [CONNECT_ORDER, CDP_FORMS, CDP_REPORT, SIGN_IN] {
+    let order = resolve::CONNECT_ORDER.replace("curlwright reads it", "jerk reads it");
+    for text in [order.as_str(), resolve::CDP_FORMS, JERK_NOTES, SIGN_IN] {
         let mut line = String::from(" ");
         for word in text.split(' ') {
             if line.len() + word.len() + 1 > 80 {

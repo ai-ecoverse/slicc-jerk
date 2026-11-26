@@ -80,7 +80,7 @@ A token already in one of the provider's `env` variables (`GH_TOKEN`, `GITHUB_TO
 5. The loopback endpoint `playwright-cli` saved for the working directory under the user config dir (`slicc/playwright-cli/sessions/`). One that came from the port probe is reused only while it answers, and a non-loopback one is never dialled. jerk only reads this file.
 6. The first of `127.0.0.1:9222`-`9229` whose `/json/version` answers (`SLICC_CDP_PORTS` replaces the range in tests, which never dial 9222-9229).
 
-The kernel build stops after step 3 and needs `SLICC_CDP_URL` for `jerk tab`.
+The kernel build stops after step 2 and uses `127.0.0.1:9222`, as the slicc-cdp wasm builds do; `jerk tab` there needs `SLICC_CDP_URL`. The order and the reply checks come from `cdp_client::resolve` in [slicc-cdp-client](https://crates.io/crates/slicc-cdp-client).
 
 `--cdp` and `SLICC_CDP_URL` take:
 

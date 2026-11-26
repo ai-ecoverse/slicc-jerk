@@ -128,6 +128,35 @@ test('kernel intercept fails closed when sealing is refused', { skip }, async ()
   }
 });
 
+test('kernel intercept falls back to 127.0.0.1:9222 without SLICC_CDP_URL or --cdp', {
+  skip,
+}, async () => {
+  for (const [extra, env] of [
+    [[], { SLICC_CDP_URL: '' }],
+    [['--cdp', 'auto'], {}],
+  ]) {
+    const browser = await stubCdp({
+      paused: [{ request: { url: `${callback}?code=${code}`, method: 'GET', headers: {} } }],
+    });
+    const { kernel, seals } = await seven(browser);
+    try {
+      const res = await kernel.run(['jerk', ...args, ...extra], { env });
+      assert.equal(res.status, 0, res.stderr);
+      assert.equal(res.stdout, `${placeholder}\n`);
+      assert.match(
+        res.stderr,
+        /^\* CDP http:\/\/127\.0\.0\.1:9222\/json\/version \(via wasm default\)\n/
+      );
+      assert.doesNotMatch(res.stderr, /slicc browsers|no CDP browser found/);
+      assert.equal(seals[0].value, code);
+      assert.match(browser.log(), /Target.closeTarget/);
+    } finally {
+      kernel.terminate();
+      await browser.close();
+    }
+  }
+});
+
 test('kernel intercept reports secure CDP URLs as unavailable rather than unsupported', {
   skip,
 }, async () => {

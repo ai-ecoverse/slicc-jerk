@@ -67,7 +67,7 @@ pub fn parse_flags(
             flags.bools.push(name.to_string());
         } else if arg.starts_with('-') {
             let known: Vec<&str> = values.iter().chain(bools).copied().collect();
-            return Err(match crate::browser_select::suggest(arg, &known) {
+            return Err(match cdp_client::resolve::suggest(arg, &known) {
                 Some(hint) => format!("unknown option {arg}\nDid you mean {hint}?"),
                 None => format!("unknown option {arg}"),
             });
