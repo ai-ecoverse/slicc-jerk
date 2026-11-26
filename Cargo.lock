@@ -167,7 +167,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -730,7 +730,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -889,9 +889,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slicc-browsers"
-version = "1.27.1"
+version = "1.27.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d6d30827df75b51076d7e294d173042552eba58bcc2fd8d521e070da8000c00"
+checksum = "7366711690335cea6294acf346b766df417f12aa5a9523c2a3b72abaf26b87b9"
 dependencies = [
  "serde",
  "serde_json",
@@ -899,9 +899,9 @@ dependencies = [
 
 [[package]]
 name = "slicc-cdp-client"
-version = "1.53.0"
+version = "1.54.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f96dfcea793d4774b0826c8da8a665e7f58f1af3582ede7398385e0dd509cf5"
+checksum = "996b545c4827fc970543d2c45dd39ec36d9311850ace17558ac274d6ff35fa4d"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
@@ -974,7 +974,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
