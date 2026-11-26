@@ -382,12 +382,8 @@ pub const SIGN_IN: &str = "A loopback sign-in (create) opens its page in that br
 
 pub fn help() -> String {
     let mut out = String::from("\nCDP browser (create, intercept, tab):\n");
-    for text in [
-        resolve::CONNECT_ORDER,
-        resolve::CDP_FORMS,
-        JERK_NOTES,
-        SIGN_IN,
-    ] {
+    let order = resolve::CONNECT_ORDER.replace("curlwright reads it", "jerk reads it");
+    for text in [order.as_str(), resolve::CDP_FORMS, JERK_NOTES, SIGN_IN] {
         let mut line = String::from(" ");
         for word in text.split(' ') {
             if line.len() + word.len() + 1 > 80 {
